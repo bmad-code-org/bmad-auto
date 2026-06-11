@@ -443,6 +443,22 @@ def cmd_attach(args: argparse.Namespace) -> int:
     return subprocess.call(runs.attach_argv(run_dir.name))
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    project = _project(args)
+    try:
+        from .tui.app import run_tui
+    except ModuleNotFoundError as e:
+        if (e.name or "").partition(".")[0] in ("textual", "tomlkit"):
+            print(
+                "error: the TUI requires optional dependencies — "
+                "pip install 'bmad-automator[tui]'",
+                file=sys.stderr,
+            )
+            return 1
+        raise
+    return run_tui(project)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     from .install import install_into
 
@@ -512,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
 
     attach_p = add("attach", cmd_attach, "tmux attach to a run's session")
     attach_p.add_argument("run_id", nargs="?")
+
+    add("tui", cmd_tui, "interactive dashboard (needs `pip install 'bmad-automator[tui]'`)")
 
     args = parser.parse_args(argv)
     try:
