@@ -30,15 +30,27 @@ def _policy_path(project: Path) -> Path:
     return project / POLICY_FILE
 
 
-def _make_adapter(name: str, project: Path, run_dir: Path, policy) -> CodingCLIAdapter:
+ROLES = ("dev", "review")
+
+
+def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIAdapter]:
     from .adapters.generic_tmux import GenericTmuxAdapter
     from .adapters.profile import ProfileError, get_profile
 
-    try:
-        profile = get_profile(name, project)
-    except ProfileError as e:
-        raise SystemExit(f"error: {e}") from e
-    return GenericTmuxAdapter(run_dir=run_dir, policy=policy, profile=profile)
+    adapters: dict[str, CodingCLIAdapter] = {}
+    by_cfg: dict = {}
+    for role in ROLES:
+        cfg = policy.adapter.resolved(role)
+        if cfg not in by_cfg:
+            try:
+                profile = get_profile(cfg.name, project)
+            except ProfileError as e:
+                raise SystemExit(f"error: {e}") from e
+            by_cfg[cfg] = GenericTmuxAdapter(
+                run_dir=run_dir, policy=policy, profile=profile, extra_args=cfg.extra_args
+            )
+        adapters[role] = by_cfg[cfg]
+    return adapters
 
 
 def _new_run_id() -> str:
@@ -82,14 +94,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     from .adapters.profile import ProfileError, get_profile
 
-    profile = None
+    profiles = []
     try:
         pol = policy_mod.load(_policy_path(project))
-        notes.append(f"policy OK: gates={pol.gates.mode}, adapter={pol.adapter.name}")
-        try:
-            profile = get_profile(pol.adapter.name, project)
-        except ProfileError as e:
-            problems.append(str(e))
+        role_names = {role: pol.adapter.resolved(role).name for role in ROLES}
+        notes.append(
+            f"policy OK: gates={pol.gates.mode}, "
+            f"adapter dev={role_names['dev']}, review={role_names['review']}"
+        )
+        for name in dict.fromkeys(role_names.values()):
+            try:
+                profiles.append(get_profile(name, project))
+            except ProfileError as e:
+                problems.append(str(e))
     except policy_mod.PolicyError as e:
         problems.append(str(e))
         pol = None
@@ -102,14 +119,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except verify.GitError as e:
         problems.append(f"git check failed: {e}")
 
-    tools = ("tmux", profile.binary) if profile else ("tmux",)
+    tools = ("tmux", *dict.fromkeys(p.binary for p in profiles))
     for tool in tools:
         if shutil.which(tool):
             notes.append(f"{tool} found")
         else:
             problems.append(f"{tool} not found on PATH")
 
-    if profile:
+    for profile in profiles:
         hook_config = project / profile.hooks.config_path
         hooks_ok = False
         if hook_config.is_file():
@@ -158,14 +175,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         policy_snapshot=pol.to_dict(),
     )
     save_state(run_dir, state)
-    adapter = _make_adapter(pol.adapter.name, project, run_dir, pol)
-    journal.append("run-start", run_id=run_id, adapter=pol.adapter.name)
+    adapters = _make_adapters(project, run_dir, pol)
+    journal.append(
+        "run-start",
+        run_id=run_id,
+        adapter_dev=pol.adapter.resolved("dev").name,
+        adapter_review=pol.adapter.resolved("review").name,
+    )
     print(f"run {run_id} starting (attach: bmad-auto attach)")
 
     engine = Engine(
         paths=paths,
         policy=pol,
-        adapter=adapter,
+        adapter=adapters["dev"],
+        review_adapter=adapters["review"],
         run_dir=run_dir,
         journal=journal,
         state=state,
@@ -181,13 +204,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> int:
     from .adapters.profile import get_profile
 
-    profile = get_profile(pol.adapter.name, paths.project)
-    extra = pol.adapter.extra_args if pol.adapter.extra_args is not None else profile.bypass_args
-
-    def render(prompt: str, model: str) -> str:
+    def render(role: str, prompt: str) -> str:
+        cfg = pol.adapter.resolved(role)
+        profile = get_profile(cfg.name, paths.project)
+        extra = cfg.extra_args if cfg.extra_args is not None else profile.bypass_args
         argv = [profile.binary, *profile.launch_args, f'"{profile.render_prompt(prompt)}"', *extra]
-        if model:
-            argv += [profile.model_flag, model]
+        if cfg.model:
+            argv += [profile.model_flag, cfg.model]
         return " ".join(argv)
 
     ss = sprintstatus.load(paths.sprint_status)
@@ -206,8 +229,8 @@ def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> i
     print(f"would process {len(queue)} stories (gates={pol.gates.mode}):")
     for story in queue:
         print(f"\n  {story.key} (epic {story.epic}, status {story.status})")
-        print(f"    dev:    {render(f'/bmad-quick-dev {story.key}', pol.adapter.model_dev)}")
-        print(f"    review: {render('/bmad-code-review <spec from dev>', pol.adapter.model_review)}")
+        print(f"    dev:    {render('dev', f'/bmad-quick-dev {story.key}')}")
+        print(f"    review: {render('review', '/bmad-code-review <spec from dev>')}")
         print(f"    env:    BMAD_AUTO_MODE=1 BMAD_AUTO_STORY_KEY={story.key}")
     return 0
 
@@ -227,9 +250,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
     journal = Journal(run_dir)
     journal.append("run-resume", was_paused=state.paused_reason)
     state.clear_pause()
-    adapter = _make_adapter(pol.adapter.name, project, run_dir, pol)
+    adapters = _make_adapters(project, run_dir, pol)
     engine = Engine(
-        paths=paths, policy=pol, adapter=adapter, run_dir=run_dir, journal=journal, state=state
+        paths=paths,
+        policy=pol,
+        adapter=adapters["dev"],
+        review_adapter=adapters["review"],
+        run_dir=run_dir,
+        journal=journal,
+        state=state,
     )
     summary = engine.run()
     print(summary.render())
@@ -290,7 +319,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     from .install import install_into
 
     project = _project(args)
-    return install_into(project, clis=tuple(args.cli) if args.cli else ("claude",))
+    if args.cli:
+        clis = tuple(args.cli)
+    else:
+        # missing policy file yields defaults -> ("claude",)
+        pol = policy_mod.load(_policy_path(project))
+        clis = tuple(dict.fromkeys(pol.adapter.resolved(role).name for role in ROLES))
+    return install_into(project, clis=clis)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -313,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="PROFILE",
         help="CLI profile(s) to register hooks for (claude | codex | gemini | custom; "
-        "repeatable; default: claude)",
+        "repeatable; default: profiles referenced by .automator/policy.toml, or claude)",
     )
     add("validate", cmd_validate, "preflight checks; exit non-zero on failure")
 

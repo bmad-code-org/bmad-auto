@@ -98,15 +98,27 @@ commands = ["pytest -q", "ruff check ."]
 
 [adapter]
 name = "claude"            # CLI profile: claude | codex | gemini | custom
-model_dev = ""             # empty = CLI default
-model_review = ""
+model = ""                 # empty = CLI default
 # extra_args replaces the profile's default bypass flags when set:
 # extra_args = ["--permission-mode", "bypassPermissions"]
+
+# Optional per-stage overrides — run the review pass on a different CLI/model
+# than the dev pass. Unset keys inherit from [adapter] when the stage runs the
+# same client; switching client falls back to that profile's defaults (model
+# and extra_args are client-specific).
+# [adapter.dev]
+# model = "opus"
+# [adapter.review]
+# name = "codex"
+# model = "gpt-5-codex"
 ```
 
 Gate modes: `none` runs everything unattended; `per-epic` (default) pauses at
 epic boundaries; `per-story-spec-approval` pauses after each spec is written so
 you approve it before implementation is reviewed.
+
+`bmad-auto init` (without `--cli`) registers hooks for every CLI profile the
+policy references, so a dual-client setup needs no extra flags.
 
 ## Run state
 

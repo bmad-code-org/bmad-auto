@@ -16,7 +16,7 @@ import pytest
 from automator.adapters.base import SessionSpec
 from automator.adapters.generic_tmux import GenericTmuxAdapter
 from automator.adapters.profile import get_profile
-from automator.policy import AdapterPolicy, LimitsPolicy, Policy
+from automator.policy import LimitsPolicy, Policy
 
 HAVE_TMUX = shutil.which("tmux") is not None
 
@@ -40,12 +40,11 @@ def make_adapter(
     tmp_path, profile_name="claude", binary=None, extra_args=None, **policy_kw
 ) -> GenericTmuxAdapter:
     run_dir = tmp_path / "run"
-    policy = Policy(
-        adapter=AdapterPolicy(extra_args=extra_args),
-        limits=LimitsPolicy(**policy_kw) if policy_kw else LimitsPolicy(),
-    )
+    policy = Policy(limits=LimitsPolicy(**policy_kw) if policy_kw else LimitsPolicy())
     profile = get_profile(profile_name)
-    return GenericTmuxAdapter(run_dir=run_dir, policy=policy, profile=profile, binary=binary)
+    return GenericTmuxAdapter(
+        run_dir=run_dir, policy=policy, profile=profile, binary=binary, extra_args=extra_args
+    )
 
 
 def make_spec(tmp_path, task_id="1-1-a-dev-1", timeout_s=30.0, model="sonnet") -> SessionSpec:
@@ -84,7 +83,7 @@ def test_build_command_gemini_uses_interactive_flag(tmp_path):
     assert cmd.endswith("--model sonnet")
 
 
-def test_policy_extra_args_replace_profile_bypass(tmp_path):
+def test_extra_args_replace_profile_bypass(tmp_path):
     adapter = make_adapter(tmp_path, extra_args=("--custom-flag",))
     cmd = adapter.build_command(make_spec(tmp_path))
     assert "--custom-flag" in cmd

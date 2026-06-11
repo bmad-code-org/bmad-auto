@@ -13,10 +13,12 @@ from automator.model import (
     TokenUsage,
 )
 from automator.policy import (
+    AdapterPolicy,
     GatesPolicy,
     LimitsPolicy,
     NotifyPolicy,
     Policy,
+    StageAdapterPolicy,
 )
 from automator.verify import rev_parse_head, worktree_clean
 from conftest import dev_effect, review_effect, write_sprint
@@ -136,6 +138,39 @@ def test_happy_path(project):
     assert [s.role for s in adapter.sessions] == ["dev", "review"]
     assert adapter.sessions[0].env["BMAD_AUTO_MODE"] == "1"
     assert adapter.sessions[1].prompt.startswith("/bmad-code-review ")
+
+
+def test_per_stage_adapter_and_model_dispatch(project):
+    """Dev and review sessions go to their own adapters with per-stage models."""
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    run_dir = project.project / ".automator" / "runs" / "test-run"
+    dev_mock = MockAdapter([dev_effect(project, "1-1-a")])
+    review_mock = MockAdapter([review_effect(project, "1-1-a", clean=True)])
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        adapter=AdapterPolicy(
+            name="claude",
+            model="opus",
+            review=StageAdapterPolicy(name="codex", model="gpt-5-codex"),
+        ),
+    )
+    engine = Engine(
+        paths=project,
+        policy=policy,
+        adapter=dev_mock,
+        review_adapter=review_mock,
+        run_dir=run_dir,
+        journal=Journal(run_dir),
+        state=RunState(run_id="test-run", project=str(project.project), started_at="now"),
+    )
+    summary = engine.run()
+
+    assert summary.done == 1
+    assert [s.role for s in dev_mock.sessions] == ["dev"]
+    assert [s.role for s in review_mock.sessions] == ["review"]
+    assert dev_mock.sessions[0].model == "opus"
+    assert review_mock.sessions[0].model == "gpt-5-codex"
 
 
 def test_review_loop_converges_within_budget(project):

@@ -92,3 +92,8 @@ def test_install_into_multiple_clis(tmp_path):
 def test_install_unknown_cli(tmp_path):
     assert install_into(tmp_path, clis=("acme-cli",)) == 1
     assert not (tmp_path / ".automator").exists()
+
+
+def test_install_resolves_legacy_alias(tmp_path):
+    assert install_into(tmp_path, clis=("claude-code-tmux",)) == 0
+    assert (tmp_path / ".claude" / "settings.json").is_file()

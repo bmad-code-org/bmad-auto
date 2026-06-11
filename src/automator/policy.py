@@ -45,12 +45,49 @@ class NotifyPolicy:
 
 
 @dataclass(frozen=True)
+class StageAdapterPolicy:
+    """Per-stage overrides; None = inherit from [adapter]."""
+
+    name: str | None = None
+    model: str | None = None
+    extra_args: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedAdapter:
+    name: str
+    model: str
+    # None = use the profile's default bypass flags; a list replaces them
+    extra_args: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
 class AdapterPolicy:
     name: str = "claude"  # CLI profile name; "claude-code-tmux" kept as legacy alias
-    model_dev: str = ""
-    model_review: str = ""
+    model: str = ""
     # None = use the profile's default bypass flags; a list replaces them
     extra_args: tuple[str, ...] | None = None
+    dev: StageAdapterPolicy = field(default_factory=StageAdapterPolicy)
+    review: StageAdapterPolicy = field(default_factory=StageAdapterPolicy)
+
+    def resolved(self, role: str) -> ResolvedAdapter:
+        stage = {"dev": self.dev, "review": self.review}.get(role)
+        if stage is None:
+            return ResolvedAdapter(self.name, self.model, self.extra_args)
+        name = stage.name if stage.name is not None else self.name
+        # model and extra_args are client-specific: inherit from the base only
+        # when the stage runs the same client; a client switch falls back to
+        # that profile's defaults (CLI default model, profile bypass flags).
+        same_client = name == self.name
+        return ResolvedAdapter(
+            name=name,
+            model=stage.model
+            if stage.model is not None
+            else (self.model if same_client else ""),
+            extra_args=stage.extra_args
+            if stage.extra_args is not None
+            else (self.extra_args if same_client else None),
+        )
 
 
 @dataclass(frozen=True)
@@ -70,6 +107,18 @@ def _section(doc: dict[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PolicyError(f"[{name}] must be a table")
     return value
+
+
+def _stage_adapter(adapter_d: dict[str, Any], key: str) -> StageAdapterPolicy:
+    raw = adapter_d.get(key, {})
+    if not isinstance(raw, dict):
+        raise PolicyError(f"[adapter.{key}] must be a table")
+    raw_extra = raw.get("extra_args")
+    return StageAdapterPolicy(
+        name=None if raw.get("name") is None else str(raw["name"]),
+        model=None if raw.get("model") is None else str(raw["model"]),
+        extra_args=None if raw_extra is None else tuple(str(a) for a in raw_extra),
+    )
 
 
 def load(path: Path | None) -> Policy:
@@ -127,12 +176,19 @@ def load(path: Path | None) -> Policy:
         desktop=bool(notify_d.get("desktop", NotifyPolicy.desktop)),
         file=bool(notify_d.get("file", NotifyPolicy.file)),
     )
+    for legacy, replacement in (
+        ("model_dev", "[adapter.dev] model"),
+        ("model_review", "[adapter.review] model"),
+    ):
+        if legacy in adapter_d:
+            raise PolicyError(f"adapter.{legacy} was removed — use {replacement} instead")
     raw_extra = adapter_d.get("extra_args")
     adapter = AdapterPolicy(
         name=str(adapter_d.get("name", AdapterPolicy.name)),
-        model_dev=str(adapter_d.get("model_dev", AdapterPolicy.model_dev)),
-        model_review=str(adapter_d.get("model_review", AdapterPolicy.model_review)),
+        model=str(adapter_d.get("model", AdapterPolicy.model)),
         extra_args=None if raw_extra is None else tuple(str(a) for a in raw_extra),
+        dev=_stage_adapter(adapter_d, "dev"),
+        review=_stage_adapter(adapter_d, "review"),
     )
     return Policy(gates=gates, limits=limits, verify=verify, notify=notify, adapter=adapter)
 
@@ -162,8 +218,17 @@ file = true                  # ATTENTION file in the run dir
 
 [adapter]
 name = "claude"              # claude | codex | gemini | <custom .automator/profiles/*.toml>
-model_dev = ""               # empty = CLI default model
-model_review = ""
+model = ""                   # empty = CLI default model
 # extra_args replaces the profile's default permission-bypass flags when set:
 # extra_args = ["--permission-mode", "bypassPermissions"]
+
+# Per-stage overrides for the dev and review passes. Unset keys inherit from
+# [adapter] when the stage runs the same client; a stage that switches client
+# falls back to that profile's defaults instead (model and extra_args are
+# client-specific). Stage tables must come after the [adapter] keys above.
+# [adapter.dev]
+# model = "opus"
+# [adapter.review]
+# name = "codex"
+# model = "gpt-5-codex"
 """

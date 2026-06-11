@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 
-from .adapters.profile import CLIProfile, ProfileError, load_profiles
+from .adapters.profile import ALIASES, CLIProfile, ProfileError, load_profiles
 from .policy import POLICY_TEMPLATE
 
 HOOK_SCRIPT_REL = ".automator/bmad_auto_hook.py"
@@ -92,11 +92,12 @@ def install_into(project: Path, clis: Sequence[str] = ("claude",)) -> int:
         available = load_profiles(project)
         profiles = []
         for name in clis:
-            if name not in available:
+            key = ALIASES.get(name, name)
+            if key not in available:
                 raise ProfileError(
                     f"unknown CLI profile: {name!r} (available: {sorted(available)})"
                 )
-            profiles.append(available[name])
+            profiles.append(available[key])
     except ProfileError as e:
         print(f"FAIL: {e}")
         return 1

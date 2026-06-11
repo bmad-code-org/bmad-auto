@@ -22,7 +22,7 @@ max_review_cycles = 5
 [verify]
 commands = ["pytest -q"]
 [adapter]
-model_dev = "haiku"
+model = "haiku"
 extra_args = ["--permission-mode", "plan"]
 """
     )
@@ -31,8 +31,92 @@ extra_args = ["--permission-mode", "plan"]
     assert pol.limits.max_review_cycles == 5
     assert pol.limits.max_dev_attempts == 2  # default survives partial table
     assert pol.verify.commands == ("pytest -q",)
-    assert pol.adapter.model_dev == "haiku"
+    assert pol.adapter.model == "haiku"
     assert pol.adapter.extra_args == ("--permission-mode", "plan")
+    # no stage tables: both roles resolve to the base
+    assert pol.adapter.resolved("dev") == policy.ResolvedAdapter(
+        "claude", "haiku", ("--permission-mode", "plan")
+    )
+    assert pol.adapter.resolved("review").model == "haiku"
+
+
+def test_stage_overrides_and_inheritance(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text(
+        """
+[adapter]
+name = "claude"
+model = "opus"
+extra_args = ["--permission-mode", "plan"]
+[adapter.review]
+name = "codex"
+model = "gpt-5-codex"
+"""
+    )
+    pol = policy.load(p)
+    dev = pol.adapter.resolved("dev")
+    assert dev == policy.ResolvedAdapter("claude", "opus", ("--permission-mode", "plan"))
+    review = pol.adapter.resolved("review")
+    assert review.name == "codex"
+    assert review.model == "gpt-5-codex"
+    # client switch: claude-specific extra_args must not leak into codex
+    assert review.extra_args is None
+
+
+def test_stage_client_switch_drops_base_model_and_extra_args(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text(
+        """
+[adapter]
+name = "claude"
+model = "opus"
+extra_args = ["--permission-mode", "plan"]
+[adapter.review]
+name = "codex"
+"""
+    )
+    review = policy.load(p).adapter.resolved("review")
+    assert review == policy.ResolvedAdapter("codex", "", None)
+
+
+def test_stage_same_client_inherits_and_overrides(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text(
+        """
+[adapter]
+model = "opus"
+[adapter.dev]
+model = ""
+[adapter.review]
+extra_args = ["--foo"]
+"""
+    )
+    pol = policy.load(p)
+    # explicit empty model in the stage table means "CLI default", beating the base
+    assert pol.adapter.resolved("dev") == policy.ResolvedAdapter("claude", "", None)
+    assert pol.adapter.resolved("review") == policy.ResolvedAdapter("claude", "opus", ("--foo",))
+
+
+def test_unknown_role_resolves_to_base(tmp_path):
+    pol = policy.load(None)
+    assert pol.adapter.resolved("retro") == policy.ResolvedAdapter("claude", "", None)
+
+
+def test_legacy_model_keys_rejected(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text('[adapter]\nmodel_dev = "haiku"\n')
+    with pytest.raises(policy.PolicyError, match=r"adapter\.model_dev"):
+        policy.load(p)
+    p.write_text('[adapter]\nmodel_review = "haiku"\n')
+    with pytest.raises(policy.PolicyError, match=r"adapter\.model_review"):
+        policy.load(p)
+
+
+def test_stage_scalar_rejected(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text('[adapter]\ndev = "opus"\n')
+    with pytest.raises(policy.PolicyError, match=r"\[adapter\.dev\] must be a table"):
+        policy.load(p)
 
 
 def test_invalid_gate_mode(tmp_path):

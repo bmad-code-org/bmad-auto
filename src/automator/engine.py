@@ -72,10 +72,14 @@ class Engine:
         max_stories: int | None = None,
         epic_filter: int | None = None,
         story_filter: str | None = None,
+        review_adapter: CodingCLIAdapter | None = None,
     ):
         self.paths = paths
         self.policy = policy
-        self.adapter = adapter
+        self.adapters = {
+            "dev": adapter,
+            "review": review_adapter if review_adapter is not None else adapter,
+        }
         self.run_dir = run_dir
         self.journal = journal
         self.state = state
@@ -215,7 +219,6 @@ class Engine:
                 task,
                 role="dev",
                 prompt=f"/bmad-quick-dev {task.story_key}",
-                model=self.policy.adapter.model_dev,
                 seq=task.attempt,
             )
             advance(task, Phase.DEV_VERIFY)
@@ -252,7 +255,6 @@ class Engine:
                 task,
                 role="review",
                 prompt=f"/bmad-code-review {task.spec_file}",
-                model=self.policy.adapter.model_review,
                 seq=task.review_cycle,
             )
             advance(task, Phase.REVIEW_VERIFY)
@@ -316,10 +318,10 @@ class Engine:
 
     # ------------------------------------------------------------- helpers
 
-    def _run_session(
-        self, task: StoryTask, role: str, prompt: str, model: str, seq: int
-    ) -> SessionResult:
+    def _run_session(self, task: StoryTask, role: str, prompt: str, seq: int) -> SessionResult:
         task_id = f"{task.story_key}-{role}-{seq}"
+        adapter = self.adapters[role]
+        cfg = self.policy.adapter.resolved(role)
         spec = SessionSpec(
             task_id=task_id,
             role=role,
@@ -331,12 +333,12 @@ class Engine:
                 "BMAD_AUTO_TASK_ID": task_id,
                 "BMAD_AUTO_STORY_KEY": task.story_key,
             },
-            model=model,
+            model=cfg.model,
             timeout_s=self.policy.limits.session_timeout_min * 60,
         )
         self.journal.append("session-start", task_id=task_id, role=role, prompt=prompt)
-        result = self.adapter.run(spec)
-        usage = self.adapter.read_usage(result)
+        result = adapter.run(spec)
+        usage = adapter.read_usage(result)
         task.record_session(
             SessionRecord(
                 task_id=task_id,

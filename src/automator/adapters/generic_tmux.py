@@ -50,11 +50,18 @@ class GenericTmuxAdapter(CodingCLIAdapter):
     state = "local-jsonl"
 
     def __init__(
-        self, run_dir: Path, policy: Policy, profile: CLIProfile, binary: str | None = None
+        self,
+        run_dir: Path,
+        policy: Policy,
+        profile: CLIProfile,
+        binary: str | None = None,
+        extra_args: tuple[str, ...] | None = None,
     ):
         self.run_dir = run_dir
         self.policy = policy
         self.profile = profile
+        # None = use the profile's default bypass flags; a tuple replaces them
+        self.extra_args = extra_args
         self.name = f"{profile.name}-tmux"
         self.binary = binary or profile.binary
         self.session_name = f"bmad-auto-{run_dir.name}"
@@ -87,7 +94,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             )
 
     def build_command(self, spec: SessionSpec) -> str:
-        extra = self.policy.adapter.extra_args
+        extra = self.extra_args
         if extra is None:
             extra = self.profile.bypass_args
         argv = [
