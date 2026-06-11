@@ -1,0 +1,18 @@
+# OpenAI Codex CLI (>= 0.139). Slash commands are NOT expanded when passed as
+# the initial prompt argument; the $skill-name mention syntax attaches the
+# skill instead (skills live in .agents/skills/) — live-verified 2026-06-11.
+# "use subagents as needed" is required or Codex runs the skill's parallel
+# phases (e.g. review layers) without spawning subagents. Codex has no
+# SessionEnd hook event — the adapter's window-death fallback covers crashes.
+name = "codex"
+binary = "codex"
+prompt_template = "Use the ${skill} skill now, and use subagents as needed: {args}"
+bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
+model_flag = "--model"
+usage_parser = "codex-rollout"
+first_run_note = "run `codex` once in the project and accept BOTH prompts: workspace trust, then 'Hooks need review' -> 'Trust all and continue' (untrusted hooks silently never fire); requires Codex >= 0.139"
+
+[hooks]
+dialect = "codex-hooks-json"
+config_path = ".codex/hooks.json"
+events = { SessionStart = "SessionStart", Stop = "Stop" }

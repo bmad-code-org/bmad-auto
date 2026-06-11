@@ -1,0 +1,21 @@
+# Google Gemini CLI (>= 0.46, hooks on by default). -i keeps the session
+# interactive with the slash command as the initial prompt (a positional
+# prompt would force headless mode). AfterAgent is the turn-complete event,
+# mapped to canonical Stop. Custom commands live in .gemini/commands/, skills
+# in .agents/skills/.
+name = "gemini"
+binary = "gemini"
+prompt_template = "{prompt}"
+launch_args = ["-i"]
+bypass_args = ["--approval-mode=yolo"]
+model_flag = "--model"
+usage_parser = "gemini-chat"
+first_run_note = "authenticate once (browser OAuth or GEMINI_API_KEY); requires Gemini CLI >= 0.46"
+
+[env]
+GEMINI_CLI_TRUST_WORKSPACE = "true"
+
+[hooks]
+dialect = "gemini-settings-json"
+config_path = ".gemini/settings.json"
+events = { SessionStart = "SessionStart", AfterAgent = "Stop", SessionEnd = "SessionEnd" }

@@ -1,34 +1,55 @@
 """`bmad-auto init`: make a target project orchestratable.
 
 - copies the hook relay script to <project>/.automator/bmad_auto_hook.py
-- idempotently merges hook registrations into <project>/.claude/settings.json
+- idempotently merges hook registrations into each selected CLI's hook config
+  (dialect + native->canonical event map come from the CLI profile)
 - writes .automator/policy.toml from the template (if missing)
 - gitignores .automator/runs/
+
+Every dialect registers the same relay script under the CLI's native event
+names while passing the canonical event name as the script argument, so the
+orchestrator's signal watcher is CLI-agnostic.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
+from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 
+from .adapters.profile import CLIProfile, ProfileError, load_profiles
 from .policy import POLICY_TEMPLATE
 
-HOOK_EVENTS = ("SessionStart", "Stop", "SessionEnd", "PreCompact")
 HOOK_SCRIPT_REL = ".automator/bmad_auto_hook.py"
 HOOK_MARKER = "bmad_auto_hook.py"
+GEMINI_HOOK_TIMEOUT_MS = 60_000
 
 
-def _hook_command(event: str) -> str:
-    return f'python3 "$CLAUDE_PROJECT_DIR"/{HOOK_SCRIPT_REL} {event}'
+def _hook_command(project: Path, profile: CLIProfile, canonical_event: str) -> str:
+    if profile.hooks.dialect == "claude-settings-json":
+        return f'python3 "$CLAUDE_PROJECT_DIR"/{HOOK_SCRIPT_REL} {canonical_event}'
+    # Codex/Gemini expose no $CLAUDE_PROJECT_DIR equivalent to hook commands;
+    # bake the absolute path at init time.
+    return f"python3 {shlex.quote(str(project / HOOK_SCRIPT_REL))} {canonical_event}"
 
 
-def merge_hooks(settings: dict) -> tuple[dict, bool]:
-    """Add bmad-auto hook entries to a settings dict. Returns (settings, changed)."""
+def _hook_entry(dialect: str, command: str) -> dict:
+    handler: dict = {"type": "command", "command": command}
+    if dialect == "gemini-settings-json":
+        handler["timeout"] = GEMINI_HOOK_TIMEOUT_MS  # Gemini timeouts are milliseconds
+        return {"matcher": "", "hooks": [handler]}
+    # claude-settings-json and codex-hooks-json share the schema
+    return {"hooks": [handler]}
+
+
+def merge_hooks(config: dict, registrations: dict[str, str], dialect: str) -> tuple[dict, bool]:
+    """Add relay registrations (native event -> command) to a hook config dict."""
     changed = False
-    hooks = settings.setdefault("hooks", {})
-    for event in HOOK_EVENTS:
-        matchers = hooks.setdefault(event, [])
+    hooks = config.setdefault("hooks", {})
+    for native_event, command in registrations.items():
+        matchers = hooks.setdefault(native_event, [])
         already = any(
             HOOK_MARKER in handler.get("command", "")
             for matcher in matchers
@@ -37,38 +58,62 @@ def merge_hooks(settings: dict) -> tuple[dict, bool]:
             if isinstance(handler, dict)
         )
         if not already:
-            matchers.append({"hooks": [{"type": "command", "command": _hook_command(event)}]})
+            matchers.append(_hook_entry(dialect, command))
             changed = True
-    return settings, changed
+    return config, changed
 
 
-def install_into(project: Path) -> int:
+def _register_hooks(project: Path, profile: CLIProfile) -> int:
+    config_path = project / profile.hooks.config_path
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config: dict = {}
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"FAIL: {config_path} is not valid JSON; fix it and re-run init")
+            return 1
+    registrations = {
+        native: _hook_command(project, profile, canonical)
+        for native, canonical in profile.hooks.events.items()
+    }
+    config, changed = merge_hooks(config, registrations, profile.hooks.dialect)
+    if changed:
+        config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"  hooks registered ({profile.name}): {config_path}")
+    else:
+        print(f"  hooks already registered ({profile.name})")
+    return 0
+
+
+def install_into(project: Path, clis: Sequence[str] = ("claude",)) -> int:
     project = project.resolve()
+    try:
+        available = load_profiles(project)
+        profiles = []
+        for name in clis:
+            if name not in available:
+                raise ProfileError(
+                    f"unknown CLI profile: {name!r} (available: {sorted(available)})"
+                )
+            profiles.append(available[name])
+    except ProfileError as e:
+        print(f"FAIL: {e}")
+        return 1
+
     automator_dir = project / ".automator"
     automator_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. hook relay script
+    # 1. hook relay script (shared by all CLIs)
     script_target = project / HOOK_SCRIPT_REL
     script_source = resources.files("automator.data").joinpath("bmad_auto_hook.py")
     script_target.write_text(script_source.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"  hook script: {script_target}")
 
-    # 2. settings.json hook registration
-    settings_path = project / ".claude" / "settings.json"
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings: dict = {}
-    if settings_path.is_file():
-        try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            print(f"FAIL: {settings_path} is not valid JSON; fix it and re-run init")
+    # 2. per-CLI hook registration
+    for profile in profiles:
+        if _register_hooks(project, profile) != 0:
             return 1
-    settings, changed = merge_hooks(settings)
-    if changed:
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-        print(f"  hooks registered: {settings_path}")
-    else:
-        print("  hooks already registered")
 
     # 3. policy template
     policy_path = automator_dir / "policy.toml"
@@ -90,9 +135,11 @@ def install_into(project: Path) -> int:
         print(f"  gitignored: {ignore_line}")
 
     print(
-        "init complete. One-time setup: if Claude Code has never run in this "
-        "project, start it once (`claude`) and accept the workspace-trust "
-        "dialog (and any hooks approval) before `bmad-auto run` — spawned "
-        "sessions cannot answer first-run dialogs."
+        "init complete. One-time setup before `bmad-auto run` — spawned "
+        "sessions cannot answer first-run dialogs, and a pending dialog reads "
+        "as a session timeout:"
     )
+    for profile in profiles:
+        if profile.first_run_note:
+            print(f"  {profile.name}: {profile.first_run_note}")
     return 0

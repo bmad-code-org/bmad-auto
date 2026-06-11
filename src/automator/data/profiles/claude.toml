@@ -1,0 +1,13 @@
+# Claude Code. Reference profile for the claude-settings-json hook dialect.
+name = "claude"
+binary = "claude"
+prompt_template = "{prompt}"
+bypass_args = ["--permission-mode", "bypassPermissions"]
+model_flag = "--model"
+usage_parser = "claude-jsonl"
+first_run_note = "run `claude` once in the project to accept workspace trust and hooks approval"
+
+[hooks]
+dialect = "claude-settings-json"
+config_path = ".claude/settings.json"
+events = { SessionStart = "SessionStart", Stop = "Stop", SessionEnd = "SessionEnd", PreCompact = "PreCompact" }

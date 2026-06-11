@@ -29,7 +29,8 @@ screen-scraping tmux panes. Here:
 
 ## Requirements
 
-- Python 3.11+, tmux, the `claude` CLI
+- Python 3.11+, tmux, and a supported coding CLI (`claude` by default; `codex`
+  and `gemini` via profiles — see "Other coding CLIs")
 - A BMAD v6 project (`_bmad/bmm/config.yaml`, sprint-status.yaml from
   `bmad-sprint-planning`) with the automation-mode-enabled skills from this
   repo (`bmad-quick-dev`, `bmad-code-review`)
@@ -95,10 +96,11 @@ max_tokens_per_story = 2000000
 commands = ["pytest -q", "ruff check ."]
 
 [adapter]
-name = "claude-code-tmux"
+name = "claude"            # CLI profile: claude | codex | gemini | custom
 model_dev = ""             # empty = CLI default
 model_review = ""
-extra_args = ["--permission-mode", "bypassPermissions"]
+# extra_args replaces the profile's default bypass flags when set:
+# extra_args = ["--permission-mode", "bypassPermissions"]
 ```
 
 Gate modes: `none` runs everything unattended; `per-epic` (default) pauses at
@@ -113,19 +115,47 @@ Everything about a run lives in `.automator/runs/<run-id>/` (gitignored):
 escalations), `logs/` (raw pane output, debugging only), `deferred/`
 (stashed specs from deferred stories), `ATTENTION` (human-readable alerts).
 
-Token usage is read from Claude Code transcript JSONLs per session and
-aggregated per story (`bmad-auto status`).
+Token usage is read from each CLI's local session transcript (selected by the
+profile's `usage_parser`) and aggregated per story (`bmad-auto status`).
 
 ## Other coding CLIs
 
-The adapter seam (`automator/adapters/base.py`) is organized around three
-capability axes — injection (`tmux-initial-prompt` / `launch-flag` / `http`),
-observation (`hook-signal` / `sse` / `transcript-poll`), and state location —
-so CLIs are not treated as identical dumb terminals. Codex, Gemini CLI, and
-Cursor CLI all have the needed feature set (skills/commands, hooks, resumable
-sessions) for a tmux-injection + hook-signal driver like the Claude one;
-opencode can skip tmux entirely via its HTTP server + SSE events (see the
-design stub in `adapters/opencode_http.py`).
+One generic driver (`adapters/generic_tmux.py`) runs any coding CLI that fits
+the tmux-injection + hook-signal transport; everything CLI-specific lives in a
+declarative **profile** (`adapters/profile.py`). Built-in profiles ship as
+TOML in `automator/data/profiles/`:
+
+| Profile | Status | Notes |
+|---|---|---|
+| `claude` | supported | reference implementation |
+| `codex` | supported, E2E-verified | Codex ≥ 0.139. No slash expansion in the initial prompt — the profile renders `$skill-name` mentions (plus a "use subagents as needed" nudge) instead. No SessionEnd hook; window-death fallback covers crashes. |
+| `gemini` | supported, E2E-verified | Gemini CLI ≥ 0.46 (hooks on by default since then). Launches with `-i` to stay interactive; `AfterAgent` maps to canonical Stop. Usage parser validated against real chat logs. |
+
+Heads-up on budgets: both Codex and Gemini report large cache-read counts
+(~0.9–1.8M on a trivial story), and `limits.max_tokens_per_story` counts
+them — size the budget accordingly.
+
+Shared prerequisites: the BMAD skills must be present in `.agents/skills/`
+(all three CLIs read it), and each CLI must have been run once interactively
+in the project for auth/trust — `bmad-auto init --cli codex --cli gemini`
+registers the hook relay and prints the per-CLI first-run steps.
+
+**Adding a CLI without touching Python:** drop a TOML file in
+`<project>/.automator/profiles/<name>.toml` (same fields as the built-ins:
+binary, `prompt_template`, bypass flags, a `[hooks]` block picking one of the
+config dialects `claude-settings-json` / `codex-hooks-json` /
+`gemini-settings-json`, and a native→canonical event map). The hook relay
+script and orchestrator are CLI-agnostic — each registration passes the
+canonical event name as the script argument. A CLI whose hook config clones
+one of the existing dialects (the ecosystem trend) needs nothing else; a
+genuinely different transport gets its own adapter class instead (see the
+opencode HTTP+SSE design stub in `adapters/opencode_http.py`).
+
+Cursor CLI is currently blocked on two gaps, for whoever picks it up: token
+usage is not exposed anywhere (hooks, JSON output, or on-disk chats), and
+slash-command expansion of the initial prompt argument is unverified — its
+`sessionStart`/`stop` hooks do fire in the CLI, so a profile using the
+window-death fallback plus `usage_parser = "none"` is feasible.
 
 ## Development
 

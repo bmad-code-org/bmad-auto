@@ -1,10 +1,17 @@
-"""Claude Code driver: interactive sessions in tmux windows, observed via hooks.
+"""Generic coding-CLI driver: interactive sessions in tmux windows, observed via hooks.
 
-Each pipeline step gets a fresh tmux window running the full interactive
-Claude Code app with the skill invocation as the initial prompt. Completion
-is detected exclusively through hook-written event files (Stop/SessionEnd)
-plus the presence of the skill-written result.json — the pane is piped to a
-log file for human debugging but NEVER parsed for control flow.
+Each pipeline step gets a fresh tmux window running the full interactive CLI
+with the skill invocation as the initial prompt. Completion is detected
+exclusively through hook-written event files (Stop/SessionEnd) plus the
+presence of the skill-written result.json — the pane is piped to a log file
+for human debugging but NEVER parsed for control flow.
+
+Everything CLI-specific (binary, prompt rendering, bypass flags, usage
+parser) comes from a declarative CLIProfile; each CLI's hook config registers
+the shared relay script under its native event names but passes the canonical
+event name as argv, so this adapter only ever sees canonical events. CLIs
+without a SessionEnd hook (e.g. Codex) are covered by the window-death
+fallback.
 """
 
 from __future__ import annotations
@@ -18,8 +25,9 @@ from pathlib import Path
 from ..model import TokenUsage
 from ..policy import Policy
 from ..signals import SignalWatcher
-from ..tokens import tally
+from ..tokens import read_usage as tally_usage
 from .base import CodingCLIAdapter, SessionHandle, SessionResult, SessionSpec
+from .profile import CLIProfile
 
 TMUX_TIMEOUT_S = 30
 RESULT_GRACE_S = 15.0
@@ -36,16 +44,19 @@ class TmuxError(Exception):
     pass
 
 
-class ClaudeTmuxAdapter(CodingCLIAdapter):
-    name = "claude-code-tmux"
+class GenericTmuxAdapter(CodingCLIAdapter):
     injection = "tmux-initial-prompt"
     observation = "hook-signal"
     state = "local-jsonl"
 
-    def __init__(self, run_dir: Path, policy: Policy, claude_bin: str = "claude"):
+    def __init__(
+        self, run_dir: Path, policy: Policy, profile: CLIProfile, binary: str | None = None
+    ):
         self.run_dir = run_dir
         self.policy = policy
-        self.claude_bin = claude_bin
+        self.profile = profile
+        self.name = f"{profile.name}-tmux"
+        self.binary = binary or profile.binary
         self.session_name = f"bmad-auto-{run_dir.name}"
         self.watcher = SignalWatcher(run_dir / "events")
         self.tasks_dir = run_dir / "tasks"
@@ -76,9 +87,17 @@ class ClaudeTmuxAdapter(CodingCLIAdapter):
             )
 
     def build_command(self, spec: SessionSpec) -> str:
-        argv = [self.claude_bin, spec.prompt, *self.policy.adapter.extra_args]
+        extra = self.policy.adapter.extra_args
+        if extra is None:
+            extra = self.profile.bypass_args
+        argv = [
+            self.binary,
+            *self.profile.launch_args,
+            self.profile.render_prompt(spec.prompt),
+            *extra,
+        ]
         if spec.model:
-            argv += ["--model", spec.model]
+            argv += [self.profile.model_flag, spec.model]
         return " ".join(shlex.quote(a) for a in argv)
 
     # --------------------------------------------------------------- adapter
@@ -90,7 +109,7 @@ class ClaudeTmuxAdapter(CodingCLIAdapter):
 
         self._ensure_session(spec.cwd)
         env_args: list[str] = []
-        for key, value in spec.env.items():
+        for key, value in {**self.profile.env, **spec.env}.items():
             env_args += ["-e", f"{key}={value}"]
         window_id = self._tmux(
             "new-window",
@@ -215,4 +234,4 @@ class ClaudeTmuxAdapter(CodingCLIAdapter):
     def read_usage(self, result: SessionResult) -> TokenUsage | None:
         if not result.transcript_path:
             return None
-        return tally(Path(result.transcript_path))
+        return tally_usage(self.profile.usage_parser, Path(result.transcript_path))

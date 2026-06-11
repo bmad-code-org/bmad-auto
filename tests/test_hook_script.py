@@ -48,6 +48,15 @@ def test_writes_event_file(tmp_path):
     assert not list((tmp_path / "events").glob("*.tmp"))
 
 
+def test_conversation_id_fallback(tmp_path):
+    """Cursor-style payloads carry conversation_id instead of session_id."""
+    env = {"BMAD_AUTO_RUN_DIR": str(tmp_path), "BMAD_AUTO_TASK_ID": "t1"}
+    proc = run_hook("Stop", env, {"conversation_id": "conv-9"})
+    assert proc.returncode == 0
+    files = list((tmp_path / "events").glob("*.json"))
+    assert json.loads(files[0].read_text())["session_id"] == "conv-9"
+
+
 def test_tolerates_garbage_stdin(tmp_path):
     env = {"BMAD_AUTO_RUN_DIR": str(tmp_path), "BMAD_AUTO_TASK_ID": "t1"}
     proc = run_hook("SessionEnd", env, None)  # empty stdin

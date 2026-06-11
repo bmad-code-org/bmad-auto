@@ -44,10 +44,11 @@ class NotifyPolicy:
 
 @dataclass(frozen=True)
 class AdapterPolicy:
-    name: str = "claude-code-tmux"
+    name: str = "claude"  # CLI profile name; "claude-code-tmux" kept as legacy alias
     model_dev: str = ""
     model_review: str = ""
-    extra_args: tuple[str, ...] = ("--permission-mode", "bypassPermissions")
+    # None = use the profile's default bypass flags; a list replaces them
+    extra_args: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -117,11 +118,12 @@ def load(path: Path | None) -> Policy:
         desktop=bool(notify_d.get("desktop", NotifyPolicy.desktop)),
         file=bool(notify_d.get("file", NotifyPolicy.file)),
     )
+    raw_extra = adapter_d.get("extra_args")
     adapter = AdapterPolicy(
         name=str(adapter_d.get("name", AdapterPolicy.name)),
         model_dev=str(adapter_d.get("model_dev", AdapterPolicy.model_dev)),
         model_review=str(adapter_d.get("model_review", AdapterPolicy.model_review)),
-        extra_args=tuple(str(a) for a in adapter_d.get("extra_args", AdapterPolicy.extra_args)),
+        extra_args=None if raw_extra is None else tuple(str(a) for a in raw_extra),
     )
     return Policy(gates=gates, limits=limits, verify=verify, notify=notify, adapter=adapter)
 
@@ -149,8 +151,9 @@ desktop = true               # notify-send, best-effort
 file = true                  # ATTENTION file in the run dir
 
 [adapter]
-name = "claude-code-tmux"
+name = "claude"              # claude | codex | gemini | <custom .automator/profiles/*.toml>
 model_dev = ""               # empty = CLI default model
 model_review = ""
-extra_args = ["--permission-mode", "bypassPermissions"]
+# extra_args replaces the profile's default permission-bypass flags when set:
+# extra_args = ["--permission-mode", "bypassPermissions"]
 """

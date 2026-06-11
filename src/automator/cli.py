@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -30,11 +31,14 @@ def _policy_path(project: Path) -> Path:
 
 
 def _make_adapter(name: str, project: Path, run_dir: Path, policy) -> CodingCLIAdapter:
-    if name == "claude-code-tmux":
-        from .adapters.claude_tmux import ClaudeTmuxAdapter
+    from .adapters.generic_tmux import GenericTmuxAdapter
+    from .adapters.profile import ProfileError, get_profile
 
-        return ClaudeTmuxAdapter(run_dir=run_dir, policy=policy)
-    raise SystemExit(f"unknown adapter: {name!r}")
+    try:
+        profile = get_profile(name, project)
+    except ProfileError as e:
+        raise SystemExit(f"error: {e}") from e
+    return GenericTmuxAdapter(run_dir=run_dir, policy=policy, profile=profile)
 
 
 def _new_run_id() -> str:
@@ -76,9 +80,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
         except sprintstatus.SprintStatusError as e:
             problems.append(str(e))
 
+    from .adapters.profile import ProfileError, get_profile
+
+    profile = None
     try:
         pol = policy_mod.load(_policy_path(project))
         notes.append(f"policy OK: gates={pol.gates.mode}, adapter={pol.adapter.name}")
+        try:
+            profile = get_profile(pol.adapter.name, project)
+        except ProfileError as e:
+            problems.append(str(e))
     except policy_mod.PolicyError as e:
         problems.append(str(e))
         pol = None
@@ -91,27 +102,32 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except verify.GitError as e:
         problems.append(f"git check failed: {e}")
 
-    for tool in ("tmux", "claude"):
+    tools = ("tmux", profile.binary) if profile else ("tmux",)
+    for tool in tools:
         if shutil.which(tool):
             notes.append(f"{tool} found")
         else:
             problems.append(f"{tool} not found on PATH")
 
-    settings = project / ".claude" / "settings.json"
-    hooks_ok = False
-    if settings.is_file():
-        try:
-            hooks = json.loads(settings.read_text(encoding="utf-8")).get("hooks", {})
-            hooks_ok = any(
-                "bmad_auto_hook" in json.dumps(hooks.get(event, []))
-                for event in ("Stop", "SessionStart", "SessionEnd")
+    if profile:
+        hook_config = project / profile.hooks.config_path
+        hooks_ok = False
+        if hook_config.is_file():
+            try:
+                hooks = json.loads(hook_config.read_text(encoding="utf-8")).get("hooks", {})
+                hooks_ok = any(
+                    "bmad_auto_hook" in json.dumps(hooks.get(event, []))
+                    for event in profile.hooks.events
+                )
+            except json.JSONDecodeError:
+                problems.append(f"{hook_config} is not valid JSON")
+        if hooks_ok:
+            notes.append(f"bmad-auto hooks registered for {profile.name}")
+        else:
+            problems.append(
+                f"bmad-auto hooks not registered for {profile.name} — "
+                f"run `bmad-auto init --cli {profile.name}`"
             )
-        except json.JSONDecodeError:
-            problems.append(f"{settings} is not valid JSON")
-    if hooks_ok:
-        notes.append("bmad-auto hooks registered")
-    else:
-        problems.append("bmad-auto hooks not registered — run `bmad-auto init`")
 
     for note in notes:
         print(f"  ok: {note}")
@@ -163,6 +179,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> int:
+    from .adapters.profile import get_profile
+
+    profile = get_profile(pol.adapter.name, paths.project)
+    extra = pol.adapter.extra_args if pol.adapter.extra_args is not None else profile.bypass_args
+
+    def render(prompt: str, model: str) -> str:
+        argv = [profile.binary, *profile.launch_args, f'"{profile.render_prompt(prompt)}"', *extra]
+        if model:
+            argv += [profile.model_flag, model]
+        return " ".join(argv)
+
     ss = sprintstatus.load(paths.sprint_status)
     queue = [
         s
@@ -179,12 +206,8 @@ def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> i
     print(f"would process {len(queue)} stories (gates={pol.gates.mode}):")
     for story in queue:
         print(f"\n  {story.key} (epic {story.epic}, status {story.status})")
-        print(f"    dev:    claude \"/bmad-quick-dev {story.key}\" "
-              f"{' '.join(pol.adapter.extra_args)}"
-              + (f" --model {pol.adapter.model_dev}" if pol.adapter.model_dev else ""))
-        print(f"    review: claude \"/bmad-code-review <spec from dev>\" "
-              f"{' '.join(pol.adapter.extra_args)}"
-              + (f" --model {pol.adapter.model_review}" if pol.adapter.model_review else ""))
+        print(f"    dev:    {render(f'/bmad-quick-dev {story.key}', pol.adapter.model_dev)}")
+        print(f"    review: {render('/bmad-code-review <spec from dev>', pol.adapter.model_review)}")
         print(f"    env:    BMAD_AUTO_MODE=1 BMAD_AUTO_STORY_KEY={story.key}")
     return 0
 
@@ -256,6 +279,10 @@ def cmd_attach(args: argparse.Namespace) -> int:
         print("no runs found", file=sys.stderr)
         return 1
     session = f"bmad-auto-{run_dir.name}"
+    if os.environ.get("TMUX"):
+        # already inside tmux: nesting is refused, switch this client instead
+        # (tmux switch-client -l comes back)
+        return subprocess.call(["tmux", "switch-client", "-t", f"={session}"])
     return subprocess.call(["tmux", "attach", "-t", session])
 
 
@@ -263,7 +290,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     from .install import install_into
 
     project = _project(args)
-    return install_into(project)
+    return install_into(project, clis=tuple(args.cli) if args.cli else ("claude",))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -280,7 +307,14 @@ def main(argv: list[str] | None = None) -> int:
         p.set_defaults(func=func)
         return p
 
-    add("init", cmd_init, "install hooks + policy template into the target project")
+    init_p = add("init", cmd_init, "install hooks + policy template into the target project")
+    init_p.add_argument(
+        "--cli",
+        action="append",
+        metavar="PROFILE",
+        help="CLI profile(s) to register hooks for (claude | codex | gemini | custom; "
+        "repeatable; default: claude)",
+    )
     add("validate", cmd_validate, "preflight checks; exit non-zero on failure")
 
     run_p = add("run", cmd_run, "run the orchestration loop")

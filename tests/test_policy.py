@@ -7,8 +7,8 @@ def test_defaults_when_file_missing(tmp_path):
     pol = policy.load(tmp_path / "nope.toml")
     assert pol.gates.mode == "per-epic"
     assert pol.limits.max_review_cycles == 3
-    assert pol.adapter.name == "claude-code-tmux"
-    assert pol.adapter.extra_args == ("--permission-mode", "bypassPermissions")
+    assert pol.adapter.name == "claude"
+    assert pol.adapter.extra_args is None  # None = use the profile's bypass flags
 
 
 def test_load_values(tmp_path):
@@ -23,6 +23,7 @@ max_review_cycles = 5
 commands = ["pytest -q"]
 [adapter]
 model_dev = "haiku"
+extra_args = ["--permission-mode", "plan"]
 """
     )
     pol = policy.load(p)
@@ -31,6 +32,7 @@ model_dev = "haiku"
     assert pol.limits.max_dev_attempts == 2  # default survives partial table
     assert pol.verify.commands == ("pytest -q",)
     assert pol.adapter.model_dev == "haiku"
+    assert pol.adapter.extra_args == ("--permission-mode", "plan")
 
 
 def test_invalid_gate_mode(tmp_path):

@@ -19,6 +19,9 @@ dev = ["pytest>=8.0", "ruff>=0.4"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"automator.data" = ["profiles/*.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
