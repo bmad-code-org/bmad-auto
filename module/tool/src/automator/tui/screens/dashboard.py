@@ -21,7 +21,15 @@ from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, RichLog, Static, TabbedContent, TabPane
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from ...model import RunState
 from ...runs import RUNS_DIR
@@ -204,9 +212,7 @@ class DashboardScreen(Screen[None]):
             if task != ctx.log_task:
                 ctx.log_task = task
                 ctx.log = (
-                    data.LogTail(ctx.run_dir / data.LOGS_DIR / f"{task}.log")
-                    if task
-                    else None
+                    data.LogTail(ctx.run_dir / data.LOGS_DIR / f"{task}.log") if task else None
                 )
                 snap.log_reset = True
             snap.log_task = task
@@ -335,8 +341,10 @@ class DashboardScreen(Screen[None]):
         widget = self.query_one("#sprint", Static)
         if summary is None:
             widget.update(
-                Text("sprint status unavailable — is this an initialized BMAD project?",
-                     style="dim")
+                Text(
+                    "sprint status unavailable — is this an initialized BMAD project?",
+                    style="dim",
+                )
             )
             return
         text = Text()

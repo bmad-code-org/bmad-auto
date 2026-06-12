@@ -13,8 +13,7 @@ def test_defaults_when_file_missing(tmp_path):
 
 def test_load_values(tmp_path):
     p = tmp_path / "policy.toml"
-    p.write_text(
-        """
+    p.write_text("""
 [gates]
 mode = "none"
 [limits]
@@ -24,8 +23,7 @@ commands = ["pytest -q"]
 [adapter]
 model = "haiku"
 extra_args = ["--permission-mode", "plan"]
-"""
-    )
+""")
     pol = policy.load(p)
     assert pol.gates.mode == "none"
     assert pol.limits.max_review_cycles == 5
@@ -42,8 +40,7 @@ extra_args = ["--permission-mode", "plan"]
 
 def test_stage_overrides_and_inheritance(tmp_path):
     p = tmp_path / "policy.toml"
-    p.write_text(
-        """
+    p.write_text("""
 [adapter]
 name = "claude"
 model = "opus"
@@ -51,8 +48,7 @@ extra_args = ["--permission-mode", "plan"]
 [adapter.review]
 name = "codex"
 model = "gpt-5-codex"
-"""
-    )
+""")
     pol = policy.load(p)
     dev = pol.adapter.resolved("dev")
     assert dev == policy.ResolvedAdapter("claude", "opus", ("--permission-mode", "plan"))
@@ -65,32 +61,28 @@ model = "gpt-5-codex"
 
 def test_stage_client_switch_drops_base_model_and_extra_args(tmp_path):
     p = tmp_path / "policy.toml"
-    p.write_text(
-        """
+    p.write_text("""
 [adapter]
 name = "claude"
 model = "opus"
 extra_args = ["--permission-mode", "plan"]
 [adapter.review]
 name = "codex"
-"""
-    )
+""")
     review = policy.load(p).adapter.resolved("review")
     assert review == policy.ResolvedAdapter("codex", "", None)
 
 
 def test_stage_same_client_inherits_and_overrides(tmp_path):
     p = tmp_path / "policy.toml"
-    p.write_text(
-        """
+    p.write_text("""
 [adapter]
 model = "opus"
 [adapter.dev]
 model = ""
 [adapter.review]
 extra_args = ["--foo"]
-"""
-    )
+""")
     pol = policy.load(p)
     # explicit empty model in the stage table means "CLI default", beating the base
     assert pol.adapter.resolved("dev") == policy.ResolvedAdapter("claude", "", None)

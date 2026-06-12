@@ -6,11 +6,7 @@
   "license": "MIT",
   "homepage": "",
   "repository": "",
-  "keywords": [
-    "bmad",
-    "bmad-auto",
-    "automation"
-  ],
+  "keywords": ["bmad", "bmad-auto", "automation"],
   "plugins": [
     {
       "name": "bauto",

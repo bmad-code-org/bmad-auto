@@ -43,7 +43,11 @@ def make_adapter(
     policy = Policy(limits=LimitsPolicy(**policy_kw) if policy_kw else LimitsPolicy())
     profile = get_profile(profile_name)
     return GenericTmuxAdapter(
-        run_dir=run_dir, policy=policy, profile=profile, binary=binary, extra_args=extra_args
+        run_dir=run_dir,
+        policy=policy,
+        profile=profile,
+        binary=binary,
+        extra_args=extra_args,
     )
 
 
@@ -143,9 +147,7 @@ def test_tmux_end_to_end_with_fake_cli(tmp_path, profile_name):
     try:
         result = adapter.run(spec)
     finally:
-        subprocess.run(
-            ["tmux", "kill-session", "-t", adapter.session_name], capture_output=True
-        )
+        subprocess.run(["tmux", "kill-session", "-t", adapter.session_name], capture_output=True)
 
     assert result.status == "completed"
     assert result.result_json["workflow"] == "quick-dev"
@@ -178,8 +180,6 @@ def test_tmux_crash_detected(tmp_path):
     try:
         result = adapter.run(spec)
     finally:
-        subprocess.run(
-            ["tmux", "kill-session", "-t", adapter.session_name], capture_output=True
-        )
+        subprocess.run(["tmux", "kill-session", "-t", adapter.session_name], capture_output=True)
     assert result.status == "crashed"
     assert result.result_json is None

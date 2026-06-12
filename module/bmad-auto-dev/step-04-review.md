@@ -1,5 +1,5 @@
 ---
-deferred_work_file: '{implementation_artifacts}/deferred-work.md'
+deferred_work_file: "{implementation_artifacts}/deferred-work.md"
 specLoopIteration: 1
 ---
 

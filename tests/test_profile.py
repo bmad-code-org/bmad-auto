@@ -67,11 +67,22 @@ def test_user_profile_overlay(tmp_path):
     ("mutation", "match"),
     [
         ('name = "mycli"\nbinary = "mycli"', "missing"),  # no [hooks]
-        (MINIMAL_PROFILE.replace('dialect = "claude-settings-json"', 'dialect = "nope"'), "dialect"),
+        (
+            MINIMAL_PROFILE.replace('dialect = "claude-settings-json"', 'dialect = "nope"'),
+            "dialect",
+        ),
         (MINIMAL_PROFILE.replace('Stop = "Stop"', 'Stop = "TurnDone"'), "canonical"),
-        (MINIMAL_PROFILE.replace("[hooks]", 'usage_parser = "magic"\n[hooks]'), "usage_parser"),
-        (MINIMAL_PROFILE.replace('config_path = ".mycli/settings.json"',
-            'config_path = "/abs/settings.json"'), "relative"),
+        (
+            MINIMAL_PROFILE.replace("[hooks]", 'usage_parser = "magic"\n[hooks]'),
+            "usage_parser",
+        ),
+        (
+            MINIMAL_PROFILE.replace(
+                'config_path = ".mycli/settings.json"',
+                'config_path = "/abs/settings.json"',
+            ),
+            "relative",
+        ),
     ],
 )
 def test_invalid_profiles_rejected(tmp_path, mutation, match):

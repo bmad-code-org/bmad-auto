@@ -228,9 +228,7 @@ async def test_start_run_modal_launches(project, monkeypatch):
     monkeypatch.setattr(launch, "tmux_available", lambda: True)
 
     def fake_start(proj, run_id, *, epic, story, max_stories):
-        calls.update(
-            project=proj, run_id=run_id, epic=epic, story=story, max_stories=max_stories
-        )
+        calls.update(project=proj, run_id=run_id, epic=epic, story=story, max_stories=max_stories)
 
     monkeypatch.setattr(launch, "start_run_detached", fake_start)
     app = BmadAutoApp(project.project)
@@ -252,8 +250,7 @@ async def test_start_run_modal_launches(project, monkeypatch):
         assert screen.selected_run_id == calls["run_id"]
         await until(
             pilot,
-            lambda: "starting"
-            in str(screen.query_one("#runheader", RunHeader).content),
+            lambda: "starting" in str(screen.query_one("#runheader", RunHeader).content),
         )
 
 
@@ -382,9 +379,7 @@ async def test_resume_finished_run_refused(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await until(pilot, lambda: dashboard(app).selected_run_id is not None)
         await pilot.press("e")
-        await until(
-            pilot, lambda: any("already finished" in m for m in notifications(app))
-        )
+        await until(pilot, lambda: any("already finished" in m for m in notifications(app)))
         assert isinstance(app.screen, DashboardScreen)
 
 
@@ -395,9 +390,7 @@ async def test_attach_without_tmux_notifies(project, monkeypatch):
     async with app.run_test() as pilot:
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("a")
-        await until(
-            pilot, lambda: any("tmux not found" in m for m in notifications(app))
-        )
+        await until(pilot, lambda: any("tmux not found" in m for m in notifications(app)))
 
 
 async def test_attach_without_agent_session_notifies(project, monkeypatch):
@@ -410,18 +403,14 @@ async def test_attach_without_agent_session_notifies(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await until(pilot, lambda: dashboard(app).selected_run_id is not None)
         await pilot.press("a")
-        await until(
-            pilot, lambda: any("no live agent session" in m for m in notifications(app))
-        )
+        await until(pilot, lambda: any("no live agent session" in m for m in notifications(app)))
 
 
 # ------------------------------------------------------- sweep decision flow
 
 
 async def test_decision_banner_shows_and_clears(project):
-    run_dir = make_run(
-        project.project, "20260611-100000-aaaa", run_type="sweep", alive=True
-    )
+    run_dir = make_run(project.project, "20260611-100000-aaaa", run_type="sweep", alive=True)
     journal = Journal(run_dir)
     journal.append("sweep-start")
     journal.append("decision-pending", dw_id="DW-7", question="reopen the cache work?")
@@ -454,9 +443,7 @@ def _patch_attach_exec(monkeypatch) -> list[list[str]]:
 
 
 async def test_attach_targets_ctl_window_when_decision_pending(project, monkeypatch):
-    run_dir = make_run(
-        project.project, "20260611-100000-aaaa", run_type="sweep", alive=True
-    )
+    run_dir = make_run(project.project, "20260611-100000-aaaa", run_type="sweep", alive=True)
     Journal(run_dir).append("decision-pending", dw_id="DW-7", question="q?")
     selected: list[str] = []
     monkeypatch.setattr(launch, "tmux_available", lambda: True)

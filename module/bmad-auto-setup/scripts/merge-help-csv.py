@@ -121,9 +121,7 @@ def write_csv(path: str, header: list[str], rows: list[list[str]], verbose: bool
             writer.writerow(row)
 
 
-def cleanup_legacy_csvs(
-    legacy_dir: str, module_code: str, verbose: bool = False
-) -> list:
+def cleanup_legacy_csvs(legacy_dir: str, module_code: str, verbose: bool = False) -> list:
     """Delete legacy per-module module-help.csv files for this module and core only.
 
     Returns list of deleted file paths.
@@ -166,9 +164,7 @@ def reject_unresolved_paths(named_paths: list[tuple[str, str]]) -> None:
 def main():
     args = parse_args()
 
-    reject_unresolved_paths(
-        [("--target", args.target), ("--legacy-dir", args.legacy_dir)]
-    )
+    reject_unresolved_paths([("--target", args.target), ("--legacy-dir", args.legacy_dir)])
 
     # Read source entries
     source_header, source_rows = read_csv_rows(args.source)
@@ -224,9 +220,7 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        legacy_deleted = cleanup_legacy_csvs(
-            args.legacy_dir, args.module_code, args.verbose
-        )
+        legacy_deleted = cleanup_legacy_csvs(args.legacy_dir, args.module_code, args.verbose)
 
     # Output result summary as JSON
     result = {

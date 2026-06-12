@@ -14,7 +14,9 @@ from . import (
     __version__,
     bmadconfig,
     deferredwork,
-    policy as policy_mod,
+)
+from . import policy as policy_mod
+from . import (
     runs,
     sprintstatus,
     verify,
@@ -54,7 +56,10 @@ def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIA
             except ProfileError as e:
                 raise SystemExit(f"error: {e}") from e
             by_cfg[cfg] = GenericTmuxAdapter(
-                run_dir=run_dir, policy=policy, profile=profile, extra_args=cfg.extra_args
+                run_dir=run_dir,
+                policy=policy,
+                profile=profile,
+                extra_args=cfg.extra_args,
             )
         adapters[role] = by_cfg[cfg]
     return adapters
@@ -205,7 +210,12 @@ def _render_invocation(pol, project: Path, role: str, prompt: str) -> str:
     cfg = pol.adapter.resolved(role)
     profile = get_profile(cfg.name, project)
     extra = cfg.extra_args if cfg.extra_args is not None else profile.bypass_args
-    argv = [profile.binary, *profile.launch_args, f'"{profile.render_prompt(prompt)}"', *extra]
+    argv = [
+        profile.binary,
+        *profile.launch_args,
+        f'"{profile.render_prompt(prompt)}"',
+        *extra,
+    ]
     if cfg.model:
         argv += [profile.model_flag, cfg.model]
     return " ".join(argv)
@@ -434,9 +444,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_attach(args: argparse.Namespace) -> int:
     project = _project(args)
-    run_dir = (
-        project / RUNS_DIR / args.run_id if args.run_id else runs.latest_run_dir(project)
-    )
+    run_dir = project / RUNS_DIR / args.run_id if args.run_id else runs.latest_run_dir(project)
     if run_dir is None:
         print("no runs found", file=sys.stderr)
         return 1
@@ -529,7 +537,11 @@ def main(argv: list[str] | None = None) -> int:
     attach_p = add("attach", cmd_attach, "tmux attach to a run's session")
     attach_p.add_argument("run_id", nargs="?")
 
-    add("tui", cmd_tui, "interactive dashboard (needs `pip install 'bmad-automator[tui]'`)")
+    add(
+        "tui",
+        cmd_tui,
+        "interactive dashboard (needs `pip install 'bmad-automator[tui]'`)",
+    )
 
     args = parser.parse_args(argv)
     try:

@@ -92,12 +92,12 @@ class AdapterPolicy:
         same_client = name == self.name
         return ResolvedAdapter(
             name=name,
-            model=stage.model
-            if stage.model is not None
-            else (self.model if same_client else ""),
-            extra_args=stage.extra_args
-            if stage.extra_args is not None
-            else (self.extra_args if same_client else None),
+            model=(stage.model if stage.model is not None else (self.model if same_client else "")),
+            extra_args=(
+                stage.extra_args
+                if stage.extra_args is not None
+                else (self.extra_args if same_client else None)
+            ),
         )
 
 
@@ -181,9 +181,7 @@ def loads(text: str) -> Policy:
         max_tokens_per_story=int(
             limits_d.get("max_tokens_per_story", LimitsPolicy.max_tokens_per_story)
         ),
-        cache_read_weight=float(
-            limits_d.get("cache_read_weight", LimitsPolicy.cache_read_weight)
-        ),
+        cache_read_weight=float(limits_d.get("cache_read_weight", LimitsPolicy.cache_read_weight)),
     )
     if limits.max_review_cycles < 1 or limits.max_dev_attempts < 1:
         raise PolicyError("limits.max_review_cycles and limits.max_dev_attempts must be >= 1")
@@ -226,7 +224,12 @@ def loads(text: str) -> Policy:
     if sweep.max_bundles < 1 or sweep.max_triage_attempts < 1:
         raise PolicyError("sweep.max_bundles and sweep.max_triage_attempts must be >= 1")
     return Policy(
-        gates=gates, limits=limits, verify=verify, notify=notify, adapter=adapter, sweep=sweep
+        gates=gates,
+        limits=limits,
+        verify=verify,
+        notify=notify,
+        adapter=adapter,
+        sweep=sweep,
     )
 
 

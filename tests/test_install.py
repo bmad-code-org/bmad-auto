@@ -37,9 +37,7 @@ def test_merge_hooks_preserves_existing():
     assert changed
     assert settings["permissions"] == {"allow": ["Bash(ls)"]}
     commands = [
-        handler["command"]
-        for matcher in settings["hooks"]["Stop"]
-        for handler in matcher["hooks"]
+        handler["command"] for matcher in settings["hooks"]["Stop"] for handler in matcher["hooks"]
     ]
     assert "echo hi" in commands
     assert any("bmad_auto_hook" in c for c in commands)

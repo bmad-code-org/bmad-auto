@@ -110,7 +110,10 @@ class Engine:
             self.state.paused_stage = pause.stage
             self.state.paused_story_key = pause.story_key
             self.journal.append(
-                "run-paused", reason=pause.reason, stage=pause.stage, story_key=pause.story_key
+                "run-paused",
+                reason=pause.reason,
+                stage=pause.stage,
+                story_key=pause.story_key,
             )
         finally:
             self._save()
@@ -312,7 +315,9 @@ class Engine:
                     clean = True
                     break
                 self.journal.append(
-                    "review-verify-failed", story_key=task.story_key, reason=outcome.reason
+                    "review-verify-failed",
+                    story_key=task.story_key,
+                    reason=outcome.reason,
                 )
                 if outcome.fixable and task.review_cycle < self.policy.limits.max_review_cycles:
                     # failing verify commands are dev work, not review work: a
@@ -331,9 +336,7 @@ class Engine:
         advance(task, Phase.COMMITTING)
         self._save()
         try:
-            task.commit_sha = verify.commit_story(
-                self.paths.project, self._commit_message(task)
-            )
+            task.commit_sha = verify.commit_story(self.paths.project, self._commit_message(task))
         except verify.GitError as e:
             self._escalate(task, f"commit failed: {e}")
         advance(task, Phase.DONE)
@@ -478,9 +481,7 @@ class Engine:
             # defer entries — they are real knowledge worth keeping
             if snapshot is not None:
                 current = (
-                    deferred_work.read_text(encoding="utf-8")
-                    if deferred_work.is_file()
-                    else None
+                    deferred_work.read_text(encoding="utf-8") if deferred_work.is_file() else None
                 )
                 if current != snapshot:
                     deferred_work.parent.mkdir(parents=True, exist_ok=True)
@@ -549,9 +550,7 @@ class Engine:
             self.journal.append("sweep-auto-finished", trigger=trigger)
         except Exception as e:  # noqa: BLE001 — child must never break the parent
             self.journal.append("sweep-auto-failed", trigger=trigger, error=str(e))
-            gates.notify(
-                self.policy, self.run_dir, "auto sweep failed", f"{trigger}: {e}"
-            )
+            gates.notify(self.policy, self.run_dir, "auto sweep failed", f"{trigger}: {e}")
 
     def _epic_boundary(self, finished_epic: int, next_epic: int) -> None:
         self.journal.append("epic-boundary", finished=finished_epic, next=next_epic)

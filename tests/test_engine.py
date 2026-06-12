@@ -1,7 +1,8 @@
 """Engine scenario tests against the mock adapter — no tmux, no LLM."""
 
-
 from pathlib import Path
+
+from conftest import dev_effect, review_effect, spec_path, write_sprint
 
 from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
@@ -25,7 +26,6 @@ from automator.policy import (
     VerifyPolicy,
 )
 from automator.verify import rev_parse_head, worktree_clean
-from conftest import dev_effect, review_effect, spec_path, write_sprint
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 
@@ -219,7 +219,8 @@ def test_plateau_defer_when_review_never_clean(project):
 def test_defer_preserves_deferred_work_additions(project):
     """Review sessions append real knowledge to deferred-work.md; a plateau
     defer's git reset must not erase it."""
-    from conftest import git, review_effect as make_review
+    from conftest import git
+    from conftest import review_effect as make_review
 
     project.deferred_work.write_text("# Deferred Work\n")
     git(project.project, "add", "-A")
@@ -378,7 +379,11 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
     )
     engine, adapter = make_engine(
         project,
-        [dev_effect(project, "1-1-a"), fix, review_effect(project, "1-1-a", clean=True)],
+        [
+            dev_effect(project, "1-1-a"),
+            fix,
+            review_effect(project, "1-1-a", clean=True),
+        ],
         policy=policy,
     )
     summary = engine.run()
@@ -421,7 +426,12 @@ def test_review_verify_failure_routes_fix_session_then_rereview(project):
     )
     engine, adapter = make_engine(
         project,
-        [dev_with_marker, breaking_review, fix, review_effect(project, "1-1-a", clean=True)],
+        [
+            dev_with_marker,
+            breaking_review,
+            fix,
+            review_effect(project, "1-1-a", clean=True),
+        ],
         policy=policy,
     )
     summary = engine.run()
@@ -451,9 +461,7 @@ def test_review_verify_failure_without_fix_budget_defers(project):
         verify=VerifyPolicy(commands=(f"test -f {marker}",)),
         limits=LimitsPolicy(max_dev_attempts=1),
     )
-    engine, adapter = make_engine(
-        project, [dev_with_marker, breaking_review], policy=policy
-    )
+    engine, adapter = make_engine(project, [dev_with_marker, breaking_review], policy=policy)
     summary = engine.run()
 
     assert summary.deferred == 1 and summary.done == 0
@@ -519,7 +527,9 @@ def test_per_epic_auto_sweep_fires_at_boundary(project):
             "2-1-b": "ready-for-dev",
         },
     )
-    policy = Policy(gates=GatesPolicy(mode="none"), notify=QUIET, sweep=SweepPolicy(auto="per-epic"))
+    policy = Policy(
+        gates=GatesPolicy(mode="none"), notify=QUIET, sweep=SweepPolicy(auto="per-epic")
+    )
     calls = []
     engine, _ = make_engine(
         project,
@@ -550,7 +560,9 @@ def test_auto_sweep_no_refire_on_resume(project):
         },
     )
     policy = Policy(
-        gates=GatesPolicy(mode="per-epic"), notify=QUIET, sweep=SweepPolicy(auto="per-epic")
+        gates=GatesPolicy(mode="per-epic"),
+        notify=QUIET,
+        sweep=SweepPolicy(auto="per-epic"),
     )
     calls = []
     engine, _ = make_engine(
@@ -620,6 +632,12 @@ def test_journal_records_decisions(project):
     )
     engine.run()
     kinds = [e["kind"] for e in engine.journal.entries()]
-    for expected in ("story-start", "session-start", "dev-decision", "review-result",
-                     "story-done", "run-complete"):
+    for expected in (
+        "story-start",
+        "session-start",
+        "dev-decision",
+        "review-result",
+        "story-done",
+        "run-complete",
+    ):
         assert expected in kinds

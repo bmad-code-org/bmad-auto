@@ -33,9 +33,7 @@ class OpencodeHttpAdapter(CodingCLIAdapter):
 
     def __init__(self, base_url: str = "http://127.0.0.1:4096"):
         self.base_url = base_url
-        raise NotImplementedError(
-            "opencode-http adapter is a design stub — see module docstring"
-        )
+        raise NotImplementedError("opencode-http adapter is a design stub — see module docstring")
 
     def start_session(self, spec: SessionSpec) -> SessionHandle:
         raise NotImplementedError

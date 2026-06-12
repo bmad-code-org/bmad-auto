@@ -6,7 +6,10 @@ from automator.tokens import read_usage, tally, tally_codex_rollout, tally_gemin
 
 def test_weighted_total():
     usage = TokenUsage(
-        input_tokens=100, output_tokens=50, cache_read_tokens=1000, cache_creation_tokens=10
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_tokens=1000,
+        cache_creation_tokens=10,
     )
     assert usage.weighted_total(0.1) == 100 + 50 + 10 + 100
     assert usage.weighted_total(1.0) == usage.total
@@ -16,7 +19,10 @@ def test_weighted_total():
 def test_tally_mixed_shapes(tmp_path):
     lines = [
         # Claude Code shape: usage nested in message
-        {"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}},
+        {
+            "type": "assistant",
+            "message": {"usage": {"input_tokens": 100, "output_tokens": 50}},
+        },
         # cache fields
         {
             "type": "assistant",
@@ -112,7 +118,13 @@ def test_gemini_chat_dedupes_reemitted_messages(tmp_path):
         {
             "id": "g1",
             "type": "gemini",
-            "tokens": {"input": 12273, "output": 45, "cached": 0, "thoughts": 87, "tool": 0},
+            "tokens": {
+                "input": 12273,
+                "output": 45,
+                "cached": 0,
+                "thoughts": 87,
+                "tool": 0,
+            },
         },
         {"$set": {"lastUpdated": "..."}},
         # same message re-emitted with toolCalls added: must not double-count
@@ -120,12 +132,24 @@ def test_gemini_chat_dedupes_reemitted_messages(tmp_path):
             "id": "g1",
             "type": "gemini",
             "toolCalls": [{}],
-            "tokens": {"input": 12273, "output": 45, "cached": 0, "thoughts": 87, "tool": 0},
+            "tokens": {
+                "input": 12273,
+                "output": 45,
+                "cached": 0,
+                "thoughts": 87,
+                "tool": 0,
+            },
         },
         {
             "id": "g2",
             "type": "gemini",
-            "tokens": {"input": 12429, "output": 2, "cached": 11367, "thoughts": 16, "tool": 0},
+            "tokens": {
+                "input": 12429,
+                "output": 2,
+                "cached": 11367,
+                "thoughts": 16,
+                "tool": 0,
+            },
         },
     ]
     path = tmp_path / "session.jsonl"

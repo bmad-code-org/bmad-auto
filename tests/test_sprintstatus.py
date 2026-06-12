@@ -1,7 +1,7 @@
 import pytest
+from conftest import write_sprint
 
 from automator import sprintstatus
-from conftest import write_sprint
 
 
 def test_load_classifies_keys(project):
@@ -20,7 +20,11 @@ def test_load_classifies_keys(project):
     )
     ss = sprintstatus.load(project.sprint_status)
     assert ss.epics == {1: "in-progress", 2: "backlog"}
-    assert [s.key for s in ss.stories] == ["1-1-user-auth", "1-2-account-mgmt", "2-1-personality"]
+    assert [s.key for s in ss.stories] == [
+        "1-1-user-auth",
+        "1-2-account-mgmt",
+        "2-1-personality",
+    ]
     assert ss.stories[1].epic == 1 and ss.stories[1].num == 2
     assert ss.retros == {1: "optional", 2: "optional"}
     assert ss.unknown_keys == ("weird-key",)

@@ -1,5 +1,5 @@
 ---
-deferred_work_file: '{implementation_artifacts}/deferred-work.md'
+deferred_work_file: "{implementation_artifacts}/deferred-work.md"
 ---
 
 # Step 2: Plan
@@ -42,7 +42,6 @@ HALT and ask human: `[A] Approve` | `[E] Edit`
   - **If the file is missing:** HALT. Tell the user the spec file is gone and STOP — do not write anything to `{spec_file}`, do not set status, do not proceed to Step 3. Nothing below this point runs.
   - **If the file exists:** Compare the content to what you wrote. If it has changed since you wrote it, acknowledge the external edits — show a brief summary of what changed — and proceed with the updated version. Then set status `ready-for-dev` in `{spec_file}`. Everything inside `<frozen-after-approval>` is now locked — only the human can change it. → Step 3.
 - **E**: Apply changes, then return to CHECKPOINT 1.
-
 
 ## NEXT
 

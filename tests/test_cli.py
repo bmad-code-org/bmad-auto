@@ -3,8 +3,10 @@
 import argparse
 import json
 
-from automator import cli, policy as policy_mod
 from conftest import install_bmad_config, write_sprint
+
+from automator import cli
+from automator import policy as policy_mod
 
 DUAL_CLIENT_POLICY = """\
 [adapter]
@@ -119,8 +121,14 @@ def test_run_honors_preassigned_run_id_and_writes_pid(project, monkeypatch):
 
 def test_sweep_command_parses_flags():
     parser_args = [
-        "sweep", "--project", ".", "--no-prompt", "--decisions-only",
-        "--max-bundles", "3", "--dry-run",
+        "sweep",
+        "--project",
+        ".",
+        "--no-prompt",
+        "--decisions-only",
+        "--max-bundles",
+        "3",
+        "--dry-run",
     ]
     # exercise argparse wiring only: dry-run path needs a valid project, so
     # just confirm parsing reaches cmd_sweep with the expected namespace

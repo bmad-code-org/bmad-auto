@@ -1,7 +1,8 @@
+from conftest import git, spec_path, write_spec, write_sprint
+
 from automator import verify
 from automator.model import StoryTask
 from automator.policy import Policy, VerifyPolicy
-from conftest import git, spec_path, write_spec, write_sprint
 
 
 def make_task(paths, story_key="1-1-a"):

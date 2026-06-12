@@ -7,13 +7,13 @@ system — skills plus the orchestrator that invokes them. Standard BMAD install
 are never modified; the skills are automator-owned forks maintained against their
 upstream counterparts.
 
-| Component | Forked from | Role |
-|---|---|---|
-| `tool/` (bmad-auto) | — (this repo) | the orchestrator: ralph-loop, hooks, tmux adapters, TUI. CLI `bmad-auto`. |
-| `bmad-auto-dev` | `bmad-quick-dev` | unattended implementation: story key / feedback file / dw-bundle → spec + code + result.json |
-| `bmad-auto-review` | `bmad-code-review` | unattended adversarial review of a dev spec in a fresh context |
-| `bmad-auto-sweep` | — (automator-native) | read-only deferred-work ledger triage |
-| `bmad-auto-setup` | — (scaffolded) | registers the module in `_bmad/config.yaml` + `module-help.csv`, **installs the bundled tool**, runs `bmad-auto init` + `validate` |
+| Component           | Forked from          | Role                                                                                                                               |
+| ------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `tool/` (bmad-auto) | — (this repo)        | the orchestrator: ralph-loop, hooks, tmux adapters, TUI. CLI `bmad-auto`.                                                          |
+| `bmad-auto-dev`     | `bmad-quick-dev`     | unattended implementation: story key / feedback file / dw-bundle → spec + code + result.json                                       |
+| `bmad-auto-review`  | `bmad-code-review`   | unattended adversarial review of a dev spec in a fresh context                                                                     |
+| `bmad-auto-sweep`   | — (automator-native) | read-only deferred-work ledger triage                                                                                              |
+| `bmad-auto-setup`   | — (scaffolded)       | registers the module in `_bmad/config.yaml` + `module-help.csv`, **installs the bundled tool**, runs `bmad-auto init` + `validate` |
 
 ## Install into a project
 

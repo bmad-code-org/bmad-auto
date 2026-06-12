@@ -1,7 +1,7 @@
 ---
-deferred_work_file: '{implementation_artifacts}/deferred-work.md'
-spec_file: '' # set at runtime for both routes before leaving this step
-story_key: '' # set at runtime to the current story's full sprint-status key (e.g. 3-2-digest-delivery) when the intent is an epic story and sprint-status resolution succeeds
+deferred_work_file: "{implementation_artifacts}/deferred-work.md"
+spec_file: "" # set at runtime for both routes before leaving this step
+story_key: "" # set at runtime to the current story's full sprint-status key (e.g. 3-2-digest-delivery) when the intent is an epic story and sprint-status resolution succeeds
 ---
 
 # Step 1: Clarify and Route
@@ -77,6 +77,7 @@ If the spec is an epic story and `{sprint_status}` exists: find the `development
        - **Epics** (`*epic*`) — feature breakdown into implementable stories
        - **Product Brief** (`*brief*`) — project vision and scope
      - Scan the listing for files matching these patterns. If any look relevant to the current intent, load them selectively — you don't need all of them, but you need the right constraints and requirements rather than guessing from code alone.
+
 2. Clarify intent. Do not fantasize, do not leave open questions. If you must ask questions, ask them as a numbered list. When the human replies, verify that every single numbered question was answered. If any were ignored, HALT and re-ask only the missing questions before proceeding. Keep looping until intent is clear enough to implement.
 3. Version control sanity check. Is the working tree clean? Does the current branch make sense for this intent — considering its name and recent history? If the tree is dirty or the branch is an obvious mismatch, HALT and ask the human before proceeding. If version control is unavailable, skip this check.
 4. Multi-goal check (see SCOPE STANDARD). If the intent fails the single-goal criteria:
@@ -94,7 +95,6 @@ If the spec is an epic story and `{sprint_status}` exists: find the `development
    **EARLY EXIT** → `./step-oneshot.md`
 
    **b) Plan-code-review** — everything else. When uncertain whether blast radius is truly zero, choose this path.
-
 
 ## NEXT
 

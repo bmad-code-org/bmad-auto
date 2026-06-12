@@ -46,9 +46,21 @@ def test_start_run_detached_argv(fake_run, tmp_path: Path):
     launch.start_run_detached(tmp_path, "RID", epic=2, story="1-2-x", max_stories=3)
 
     # control session was missing: has-session, then new-session, then new-window
-    assert [c[1] for c in fake_run.calls] == ["has-session", "new-session", "new-window"]
+    assert [c[1] for c in fake_run.calls] == [
+        "has-session",
+        "new-session",
+        "new-window",
+    ]
     ns = fake_run.by_verb("new-session")[0]
-    assert ns == ["tmux", "new-session", "-d", "-s", "bmad-auto-ctl", "-c", str(tmp_path)]
+    assert ns == [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        "bmad-auto-ctl",
+        "-c",
+        str(tmp_path),
+    ]
 
     nw = fake_run.by_verb("new-window")[0]
     assert nw[:2] == ["tmux", "new-window"]
@@ -58,10 +70,22 @@ def test_start_run_detached_argv(fake_run, tmp_path: Path):
     assert nw[nw.index("-c") + 1] == str(tmp_path)
     assert nw[-3:-1] == ["sh", "-c"]
     shell = nw[-1]
-    assert expected_cli(
-        "run", "--project", str(tmp_path), "--run-id", "RID",
-        "--epic", "2", "--story", "1-2-x", "--max-stories", "3",
-    ) in shell
+    assert (
+        expected_cli(
+            "run",
+            "--project",
+            str(tmp_path),
+            "--run-id",
+            "RID",
+            "--epic",
+            "2",
+            "--story",
+            "1-2-x",
+            "--max-stories",
+            "3",
+        )
+        in shell
+    )
     assert "read -r" in shell  # window stays open showing the exit status
 
 
@@ -74,16 +98,24 @@ def test_start_run_omits_blank_filters(fake_run, tmp_path: Path):
 
 
 def test_start_sweep_detached_flags(fake_run, tmp_path: Path):
-    launch.start_sweep_detached(
-        tmp_path, "RID", no_prompt=True, decisions_only=True, max_bundles=2
-    )
+    launch.start_sweep_detached(tmp_path, "RID", no_prompt=True, decisions_only=True, max_bundles=2)
     nw = fake_run.by_verb("new-window")[0]
     assert nw[nw.index("-n") + 1] == "sweep-RID"
     shell = nw[-1]
-    assert expected_cli(
-        "sweep", "--project", str(tmp_path), "--run-id", "RID",
-        "--no-prompt", "--decisions-only", "--max-bundles", "2",
-    ) in shell
+    assert (
+        expected_cli(
+            "sweep",
+            "--project",
+            str(tmp_path),
+            "--run-id",
+            "RID",
+            "--no-prompt",
+            "--decisions-only",
+            "--max-bundles",
+            "2",
+        )
+        in shell
+    )
 
 
 def test_resume_detached_argv(fake_run, tmp_path: Path):
@@ -150,9 +182,7 @@ def test_ctl_window_no_session_or_tmux(monkeypatch):
 
 def test_select_ctl_window_argv(fake_run):
     launch.select_ctl_window("sweep-RID")
-    assert fake_run.calls == [
-        ["tmux", "select-window", "-t", "=bmad-auto-ctl:sweep-RID"]
-    ]
+    assert fake_run.calls == [["tmux", "select-window", "-t", "=bmad-auto-ctl:sweep-RID"]]
 
 
 def test_run_captured_merges_streams(monkeypatch):

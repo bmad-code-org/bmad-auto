@@ -5,6 +5,7 @@ Shared sub-step for updating `sprint-status.yaml` during bmad-auto-dev. Called f
 ## Preconditions
 
 Skip this entire file (return to caller) if ANY of:
+
 - `{story_key}` is unset
 - `{sprint_status}` does not exist on disk
 

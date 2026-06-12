@@ -158,9 +158,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             pass
         return SessionHandle(task_id=spec.task_id, native_id=window_id)
 
-    def wait_for_completion(
-        self, handle: SessionHandle, spec: SessionSpec
-    ) -> SessionResult:
+    def wait_for_completion(self, handle: SessionHandle, spec: SessionSpec) -> SessionResult:
         deadline = time.monotonic() + spec.timeout_s
         session_id: str | None = None
         transcript_path: str | None = None
@@ -235,9 +233,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             return None
         return data if isinstance(data, dict) else None
 
-    def _await_result(
-        self, task_id: str, grace_s: float = RESULT_GRACE_S
-    ) -> dict | None:
+    def _await_result(self, task_id: str, grace_s: float = RESULT_GRACE_S) -> dict | None:
         deadline = time.monotonic() + grace_s
         while True:
             result = self._read_result(task_id)

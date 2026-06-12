@@ -75,22 +75,63 @@ def _stage_fields(stage: str) -> tuple[_Field, ...]:
 
 
 _FIELDS: tuple[_Field, ...] = (
-    _Field("gates", "mode", "select",
-           options=tuple(sorted(GATE_MODES)), default=GatesPolicy.mode),
-    _Field("gates", "retrospective", "select",
-           options=tuple(sorted(RETRO_MODES)), default=GatesPolicy.retrospective),
-    _Field("limits", "max_review_cycles", "int",
-           minimum=1, default=LimitsPolicy.max_review_cycles),
-    _Field("limits", "max_dev_attempts", "int",
-           minimum=1, default=LimitsPolicy.max_dev_attempts),
-    _Field("limits", "session_timeout_min", "int",
-           minimum=1, default=LimitsPolicy.session_timeout_min),
-    _Field("limits", "stop_without_result_nudges", "int",
-           minimum=0, default=LimitsPolicy.stop_without_result_nudges),
-    _Field("limits", "max_tokens_per_story", "int",
-           minimum=1, default=LimitsPolicy.max_tokens_per_story),
-    _Field("limits", "cache_read_weight", "float",
-           minimum=0.0, maximum=1.0, default=LimitsPolicy.cache_read_weight),
+    _Field(
+        "gates",
+        "mode",
+        "select",
+        options=tuple(sorted(GATE_MODES)),
+        default=GatesPolicy.mode,
+    ),
+    _Field(
+        "gates",
+        "retrospective",
+        "select",
+        options=tuple(sorted(RETRO_MODES)),
+        default=GatesPolicy.retrospective,
+    ),
+    _Field(
+        "limits",
+        "max_review_cycles",
+        "int",
+        minimum=1,
+        default=LimitsPolicy.max_review_cycles,
+    ),
+    _Field(
+        "limits",
+        "max_dev_attempts",
+        "int",
+        minimum=1,
+        default=LimitsPolicy.max_dev_attempts,
+    ),
+    _Field(
+        "limits",
+        "session_timeout_min",
+        "int",
+        minimum=1,
+        default=LimitsPolicy.session_timeout_min,
+    ),
+    _Field(
+        "limits",
+        "stop_without_result_nudges",
+        "int",
+        minimum=0,
+        default=LimitsPolicy.stop_without_result_nudges,
+    ),
+    _Field(
+        "limits",
+        "max_tokens_per_story",
+        "int",
+        minimum=1,
+        default=LimitsPolicy.max_tokens_per_story,
+    ),
+    _Field(
+        "limits",
+        "cache_read_weight",
+        "float",
+        minimum=0.0,
+        maximum=1.0,
+        default=LimitsPolicy.cache_read_weight,
+    ),
     _Field("verify", "commands", "lines"),
     _Field("notify", "desktop", "switch", default=NotifyPolicy.desktop),
     _Field("notify", "file", "switch", default=NotifyPolicy.file),
@@ -98,11 +139,21 @@ _FIELDS: tuple[_Field, ...] = (
     _Field("adapter", "model", "str", placeholder="CLI default model"),
     _Field("adapter", "extra_args", "args"),
     *(spec for stage in STAGES for spec in _stage_fields(stage)),
-    _Field("sweep", "auto", "select",
-           options=tuple(sorted(SWEEP_AUTO_MODES)), default=SweepPolicy.auto),
+    _Field(
+        "sweep",
+        "auto",
+        "select",
+        options=tuple(sorted(SWEEP_AUTO_MODES)),
+        default=SweepPolicy.auto,
+    ),
     _Field("sweep", "max_bundles", "int", minimum=1, default=SweepPolicy.max_bundles),
-    _Field("sweep", "max_triage_attempts", "int",
-           minimum=1, default=SweepPolicy.max_triage_attempts),
+    _Field(
+        "sweep",
+        "max_triage_attempts",
+        "int",
+        minimum=1,
+        default=SweepPolicy.max_triage_attempts,
+    ),
 )
 
 # collect() sentinel for a field whose widget holds an unusable value
@@ -190,9 +241,7 @@ class SettingsScreen(Screen[None]):
         yield Footer()
 
     def _has_keys(self, section: str) -> bool:
-        return any(
-            self._doc.get(section, k) is not None for k in ("name", "model", "extra_args")
-        )
+        return any(self._doc.get(section, k) is not None for k in ("name", "model", "extra_args"))
 
     def _compose_field(self, spec: _Field) -> ComposeResult:
         raw = self._doc.get(spec.section, spec.key)
@@ -233,8 +282,7 @@ class SettingsScreen(Screen[None]):
                 )
             elif spec.kind == "args":
                 override = raw is not None
-                yield Switch(value=override, id=f"{spec.widget_id}-override",
-                             classes="argswitch")
+                yield Switch(value=override, id=f"{spec.widget_id}-override", classes="argswitch")
                 yield Input(
                     value=shlex.join(str(a) for a in raw) if override else None,
                     placeholder="profile default flags — toggle to override",

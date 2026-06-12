@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import tomllib
 
+from test_tui_app import until
 from textual.widgets import Input, Switch
 
 from automator import policy as policy_mod
@@ -18,7 +19,6 @@ from automator.tui.app import BmadAutoApp
 from automator.tui.screens.dashboard import DashboardScreen
 from automator.tui.screens.settings_screen import SettingsScreen
 from automator.tui.settings import PolicyDoc
-from test_tui_app import until
 
 
 def fresh_doc(tmp_path) -> PolicyDoc:
@@ -146,9 +146,7 @@ async def test_settings_screen_untouched_save_writes_nothing_new(project):
         await open_settings(app, pilot)
         await pilot.press("ctrl+s")
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
-        assert (project.project / POLICY_FILE).read_text(
-            encoding="utf-8"
-        ) == POLICY_TEMPLATE
+        assert (project.project / POLICY_FILE).read_text(encoding="utf-8") == POLICY_TEMPLATE
 
 
 async def test_settings_screen_blocks_invalid_value(project):
@@ -164,9 +162,7 @@ async def test_settings_screen_blocks_invalid_value(project):
 
         strip = screen.query_one("#errors", Static)
         assert "cache_read_weight" in str(strip.content)
-        assert (project.project / POLICY_FILE).read_text(
-            encoding="utf-8"
-        ) == POLICY_TEMPLATE
+        assert (project.project / POLICY_FILE).read_text(encoding="utf-8") == POLICY_TEMPLATE
 
 
 async def test_settings_screen_stage_override_roundtrip(project):

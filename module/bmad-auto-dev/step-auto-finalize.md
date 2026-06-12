@@ -50,7 +50,7 @@ session and creates the commit itself.
    ```
 
    **Bundle mode**: additionally include `"dw_ids": [<the bundle file's dw
-   ids, verbatim>]` — the orchestrator rejects the result when the list does
+ids, verbatim>]` — the orchestrator rejects the result when the list does
    not match the bundle.
 
 6. State in one line what was implemented and end your turn. Do not ask

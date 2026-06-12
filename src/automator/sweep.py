@@ -28,6 +28,7 @@ from .statemachine import advance
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
+
 TRIAGE_KEY = "sweep-triage"
 TRIAGE_WORKFLOW = "deferred-sweep-triage"
 BUNDLE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
@@ -202,8 +203,15 @@ def validate_triage(
         recommendation = str(item.get("recommendation", ""))
         if recommendation not in keys:
             errors.append(f"decision {dw_id}: recommendation {recommendation!r} not an option")
-        decisions.append(Decision(dw_id, question, str(item.get("context", "")).strip(),
-                                  tuple(options), recommendation))
+        decisions.append(
+            Decision(
+                dw_id,
+                question,
+                str(item.get("context", "")).strip(),
+                tuple(options),
+                recommendation,
+            )
+        )
 
     unclaimed = sorted(universe - set(seen))
     if unclaimed:
@@ -298,9 +306,7 @@ class SweepEngine(Engine):
         )
         self.prompting = prompting
         self.decisions_only = decisions_only
-        self.max_bundles = (
-            max_bundles if max_bundles is not None else self.policy.sweep.max_bundles
-        )
+        self.max_bundles = max_bundles if max_bundles is not None else self.policy.sweep.max_bundles
         self.prompter = prompter or DecisionPrompter()
         self.state.run_type = "sweep"
 
@@ -386,7 +392,10 @@ class SweepEngine(Engine):
             advance(task, Phase.TRIAGE_RUNNING)
             self._save()
             result = self._run_session(
-                task, role="triage", prompt=self._triage_prompt(feedback), seq=task.attempt
+                task,
+                role="triage",
+                prompt=self._triage_prompt(feedback),
+                seq=task.attempt,
             )
             advance(task, Phase.TRIAGE_VERIFY)
             self._save()
@@ -408,9 +417,7 @@ class SweepEngine(Engine):
             if plan is not None:
                 advance(task, Phase.DONE)
                 self._save()
-                triage_path.write_text(
-                    json.dumps(result.result_json, indent=2), encoding="utf-8"
-                )
+                triage_path.write_text(json.dumps(result.result_json, indent=2), encoding="utf-8")
                 self.journal.append(
                     "sweep-triage-result",
                     bundles=len(plan.bundles),
@@ -421,13 +428,10 @@ class SweepEngine(Engine):
                 )
                 return plan
             if task.attempt >= self.policy.sweep.max_triage_attempts:
-                self._escalate(
-                    task, "triage output failed validation: " + "; ".join(errors)
-                )
+                self._escalate(task, "triage output failed validation: " + "; ".join(errors))
             feedback = self._write_feedback(
                 task,
-                "The triage result.json failed deterministic validation:\n- "
-                + "\n- ".join(errors),
+                "The triage result.json failed deterministic validation:\n- " + "\n- ".join(errors),
             )
 
     def _triage_prompt(self, feedback: Path | None) -> str:
@@ -490,7 +494,10 @@ class SweepEngine(Engine):
                 tmp.write_text(json.dumps(answers, indent=2), encoding="utf-8")
                 tmp.replace(decisions_path)
                 self.journal.append(
-                    "decision-answered", dw_id=decision.id, key=option.key, effect=option.effect
+                    "decision-answered",
+                    dw_id=decision.id,
+                    key=option.key,
+                    effect=option.effect,
                 )
                 self._apply_decision_effect(decision, option)
         self._commit_ledger("chore(sweep): record deferred-work decisions")
@@ -501,7 +508,9 @@ class SweepEngine(Engine):
         detail = option.resolution or option.intent
         deferredwork.append_decision(ledger, decision.id, self._today(), option.label, detail)
         if option.effect == "close":
-            note = "closed by human decision" + (f": {option.resolution}" if option.resolution else "")
+            note = "closed by human decision" + (
+                f": {option.resolution}" if option.resolution else ""
+            )
             deferredwork.mark_done(ledger, decision.id, self._today(), note)
 
     def _commit_ledger(self, message: str) -> None:

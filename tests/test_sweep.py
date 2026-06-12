@@ -2,14 +2,6 @@
 
 import json
 
-from automator import deferredwork
-from automator.adapters.base import SessionResult
-from automator.adapters.mock import MockAdapter
-from automator.journal import Journal, load_state
-from automator.model import Phase, RunState, TokenUsage
-from automator.policy import GatesPolicy, NotifyPolicy, Policy, SweepPolicy
-from automator.sweep import DecisionPrompter, SweepEngine, validate_triage
-from automator.verify import worktree_clean
 from conftest import (
     bundle_dev_effect,
     bundle_review_effect,
@@ -18,6 +10,15 @@ from conftest import (
     triage_effect,
     write_ledger,
 )
+
+from automator import deferredwork
+from automator.adapters.base import SessionResult
+from automator.adapters.mock import MockAdapter
+from automator.journal import Journal, load_state
+from automator.model import Phase, RunState, TokenUsage
+from automator.policy import GatesPolicy, NotifyPolicy, Policy, SweepPolicy
+from automator.sweep import DecisionPrompter, SweepEngine, validate_triage
+from automator.verify import worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 
@@ -100,7 +101,12 @@ def test_validate_triage_happy():
                 "question": "renegotiate?",
                 "context": "ctx",
                 "options": [
-                    {"key": "1", "label": "build it", "effect": "build", "intent": "do x"},
+                    {
+                        "key": "1",
+                        "label": "build it",
+                        "effect": "build",
+                        "intent": "do x",
+                    },
                     {"key": "2", "label": "keep", "effect": "keep-open"},
                 ],
                 "recommendation": "1",
@@ -159,8 +165,10 @@ def test_validate_triage_bad_fields():
 
 
 def test_validate_triage_unknown_id():
-    rj = triage_result(["DW-1"], skip=[{"id": "DW-1", "reason": "moot"},
-                                       {"id": "DW-42", "reason": "ghost"}])
+    rj = triage_result(
+        ["DW-1"],
+        skip=[{"id": "DW-1", "reason": "moot"}, {"id": "DW-42", "reason": "ghost"}],
+    )
     plan, errors = validate_triage(rj, {"DW-1"})
     assert plan is None
     assert any("DW-42" in e for e in errors)
@@ -259,8 +267,12 @@ def test_interactive_decisions_build_and_close(project):
                 "question": "build the widening?",
                 "context": "ctx",
                 "options": [
-                    {"key": "1", "label": "Widen it", "effect": "build",
-                     "intent": "widen the field"},
+                    {
+                        "key": "1",
+                        "label": "Widen it",
+                        "effect": "build",
+                        "intent": "widen the field",
+                    },
                     {"key": "2", "label": "Keep as is", "effect": "keep-open"},
                 ],
                 "recommendation": "1",
@@ -270,8 +282,12 @@ def test_interactive_decisions_build_and_close(project):
                 "question": "close as moot?",
                 "context": "",
                 "options": [
-                    {"key": "1", "label": "Close it", "effect": "close",
-                     "resolution": "superseded by v2"},
+                    {
+                        "key": "1",
+                        "label": "Close it",
+                        "effect": "close",
+                        "resolution": "superseded by v2",
+                    },
                     {"key": "2", "label": "Keep open", "effect": "keep-open"},
                 ],
                 "recommendation": "1",
@@ -369,7 +385,11 @@ def test_decisions_only_runs_no_bundles(project):
         ],
     )
     engine, adapter = make_sweep(
-        project, [triage_effect(plan)], answers=["1"], prompting=True, decisions_only=True
+        project,
+        [triage_effect(plan)],
+        answers=["1"],
+        prompting=True,
+        decisions_only=True,
     )
     summary = engine.run()
     assert not summary.paused
@@ -427,9 +447,7 @@ def test_max_bundles_truncation(project):
             {"name": "third-fix", "dw_ids": ["DW-3"], "intent": "c"},
         ],
     )
-    policy = Policy(
-        gates=GatesPolicy(mode="none"), notify=QUIET, sweep=SweepPolicy(max_bundles=1)
-    )
+    policy = Policy(gates=GatesPolicy(mode="none"), notify=QUIET, sweep=SweepPolicy(max_bundles=1))
     engine, adapter = make_sweep(
         project,
         [
@@ -463,7 +481,11 @@ def test_escalated_bundle_resume_skips_it_and_runs_rest(project):
             result_json={
                 "workflow": "quick-dev",
                 "escalations": [
-                    {"type": "bundle-item-blocked", "severity": "CRITICAL", "detail": "no"}
+                    {
+                        "type": "bundle-item-blocked",
+                        "severity": "CRITICAL",
+                        "detail": "no",
+                    }
                 ],
             },
         )

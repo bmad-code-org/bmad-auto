@@ -1,5 +1,5 @@
 ---
-failed_layers: '' # set at runtime: comma-separated list of layers that failed or returned empty
+failed_layers: "" # set at runtime: comma-separated list of layers that failed or returned empty
 ---
 
 # Step 2: Review
@@ -40,7 +40,6 @@ failed_layers: '' # set at runtime: comma-separated list of layers that failed o
 3. **Subagent failure handling**: If any subagent fails, times out, or returns empty results, append the layer name to `{failed_layers}` (comma-separated) and proceed with findings from the remaining layers.
 
 4. Collect all findings from the completed layers.
-
 
 ## NEXT
 

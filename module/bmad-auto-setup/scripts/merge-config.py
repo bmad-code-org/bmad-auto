@@ -131,9 +131,7 @@ def load_legacy_values(
                 # Module-specific key that matches a current variable definition
                 legacy_module[k] = v
         if verbose:
-            print(
-                f"Legacy module config: {list(legacy_module.keys())}", file=sys.stderr
-            )
+            print(f"Legacy module config: {list(legacy_module.keys())}", file=sys.stderr)
 
     return legacy_core, legacy_module, files_found
 
@@ -161,9 +159,7 @@ def apply_legacy_defaults(answers: dict, legacy_core: dict, legacy_module: dict)
     return merged
 
 
-def cleanup_legacy_configs(
-    legacy_dir: str, module_code: str, verbose: bool = False
-) -> list:
+def cleanup_legacy_configs(legacy_dir: str, module_code: str, verbose: bool = False) -> list:
     """Delete legacy config.yaml files for this module and core only.
 
     Returns list of deleted file paths.
@@ -191,9 +187,7 @@ def extract_module_metadata(module_yaml: dict) -> dict:
     return meta
 
 
-def apply_result_templates(
-    module_yaml: dict, module_answers: dict, verbose: bool = False
-) -> dict:
+def apply_result_templates(module_yaml: dict, module_answers: dict, verbose: bool = False) -> dict:
     """Apply result templates from module.yaml to transform raw answer values.
 
     For each answer, if the corresponding variable definition in module.yaml has
@@ -204,11 +198,7 @@ def apply_result_templates(
     transformed = {}
     for key, value in module_answers.items():
         var_def = module_yaml.get(key)
-        if (
-            isinstance(var_def, dict)
-            and "result" in var_def
-            and "{project-root}" not in str(value)
-        ):
+        if isinstance(var_def, dict) and "result" in var_def and "{project-root}" not in str(value):
             template = var_def["result"]
             transformed[key] = template.replace("{value}", str(value))
             if verbose:
@@ -255,7 +245,10 @@ def merge_config(
     for key in _CORE_USER_KEYS:
         if key in config:
             if verbose:
-                print(f"Removing user-only key '{key}' from config (belongs in config.user.yaml)", file=sys.stderr)
+                print(
+                    f"Removing user-only key '{key}' from config (belongs in config.user.yaml)",
+                    file=sys.stderr,
+                )
             del config[key]
 
     # Write core values at root (global properties, not nested under "core")
@@ -265,7 +258,10 @@ def merge_config(
         shared_core = {k: v for k, v in core_answers.items() if k not in _CORE_USER_KEYS}
         if shared_core:
             if verbose:
-                print(f"Writing core config at root: {list(shared_core.keys())}", file=sys.stderr)
+                print(
+                    f"Writing core config at root: {list(shared_core.keys())}",
+                    file=sys.stderr,
+                )
             config.update(shared_core)
 
     # Anti-zombie: remove existing module section
@@ -279,9 +275,7 @@ def merge_config(
 
     # Build module section: metadata + variable values
     module_section = extract_module_metadata(module_yaml)
-    module_answers = apply_result_templates(
-        module_yaml, answers.get("module", {}), verbose
-    )
+    module_answers = apply_result_templates(module_yaml, answers.get("module", {}), verbose)
     module_section.update(module_answers)
 
     if verbose:
@@ -378,7 +372,10 @@ def main():
     # Load inputs
     module_yaml = load_yaml_file(args.module_yaml)
     if not module_yaml:
-        print(f"Error: Could not load module.yaml from {args.module_yaml}", file=sys.stderr)
+        print(
+            f"Error: Could not load module.yaml from {args.module_yaml}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     answers = load_json_file(args.answers)
@@ -417,9 +414,7 @@ def main():
     # Legacy cleanup: delete old per-module config files
     legacy_deleted = []
     if args.legacy_dir:
-        legacy_deleted = cleanup_legacy_configs(
-            args.legacy_dir, module_yaml["code"], args.verbose
-        )
+        legacy_deleted = cleanup_legacy_configs(args.legacy_dir, module_yaml["code"], args.verbose)
 
     # Output result summary as JSON
     module_code = module_yaml["code"]

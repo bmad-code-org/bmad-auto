@@ -29,11 +29,7 @@ class PolicyDoc:
 
     @classmethod
     def load(cls, path: Path) -> PolicyDoc:
-        text = (
-            path.read_text(encoding="utf-8")
-            if path.is_file()
-            else policy_mod.POLICY_TEMPLATE
-        )
+        text = path.read_text(encoding="utf-8") if path.is_file() else policy_mod.POLICY_TEMPLATE
         return cls(tomlkit.parse(text))
 
     def _table(self, section: str, create: bool) -> Any | None:

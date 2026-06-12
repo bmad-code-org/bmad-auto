@@ -150,9 +150,7 @@ def journal_line(entry: dict[str, Any]) -> Text:
     text = Text()
     text.append(f"{clock:8s} ", style="dim")
     text.append(f"{kind:24s}", style=style)
-    fields = "  ".join(
-        f"{k}={_short(v)}" for k, v in entry.items() if k not in ("ts", "kind")
-    )
+    fields = "  ".join(f"{k}={_short(v)}" for k, v in entry.items() if k not in ("ts", "kind"))
     if fields:
         text.append(" " + fields)
     return text

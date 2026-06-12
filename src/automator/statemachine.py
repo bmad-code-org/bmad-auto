@@ -19,7 +19,13 @@ TRANSITIONS: dict[Phase, frozenset[Phase]] = {
     Phase.REVIEW_RUNNING: frozenset({Phase.REVIEW_VERIFY}),
     Phase.REVIEW_VERIFY: frozenset(
         # DEV_RUNNING: fix session after a clean review whose verify commands failed
-        {Phase.REVIEW_RUNNING, Phase.DEV_RUNNING, Phase.COMMITTING, Phase.DEFERRED, Phase.ESCALATED}
+        {
+            Phase.REVIEW_RUNNING,
+            Phase.DEV_RUNNING,
+            Phase.COMMITTING,
+            Phase.DEFERRED,
+            Phase.ESCALATED,
+        }
     ),
     Phase.COMMITTING: frozenset({Phase.DONE, Phase.ESCALATED}),
     Phase.TRIAGE_RUNNING: frozenset({Phase.TRIAGE_VERIFY}),

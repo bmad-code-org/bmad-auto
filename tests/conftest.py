@@ -45,9 +45,7 @@ def project(tmp_path: Path) -> ProjectPaths:
     git(root, "config", "user.name", "test")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "initial")
-    return ProjectPaths(
-        project=root, implementation_artifacts=impl, planning_artifacts=plan
-    )
+    return ProjectPaths(project=root, implementation_artifacts=impl, planning_artifacts=plan)
 
 
 def install_bmad_config(paths: ProjectPaths) -> None:

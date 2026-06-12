@@ -5,9 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT = (
-    Path(__file__).parent.parent / "src" / "automator" / "data" / "bmad_auto_hook.py"
-)
+SCRIPT = Path(__file__).parent.parent / "src" / "automator" / "data" / "bmad_auto_hook.py"
 
 
 def run_hook(event: str, env: dict, payload) -> subprocess.CompletedProcess:

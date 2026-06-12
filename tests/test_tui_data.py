@@ -8,11 +8,12 @@ import os
 import subprocess
 from pathlib import Path
 
+from conftest import install_bmad_config, write_sprint
+
 from automator.journal import Journal, save_state
 from automator.model import RunState
 from automator.runs import RUNS_DIR, write_pid
 from automator.tui import data
-from conftest import install_bmad_config, write_sprint
 
 
 def make_run(root: Path, run_id: str, **state_kwargs) -> Path:

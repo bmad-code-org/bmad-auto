@@ -142,7 +142,10 @@ def discover_runs(project: Path) -> list[RunInfo]:
                 out.append(RunInfo(run_dir.name, run_dir, "?", "", UNKNOWN))
                 continue
             if sig is not None:
-                _header_cache[state_path] = (sig, (run_type, started_at, finished, paused))
+                _header_cache[state_path] = (
+                    sig,
+                    (run_type, started_at, finished, paused),
+                )
         status = _classify(finished, paused, run_dir)
         out.append(RunInfo(run_dir.name, run_dir, run_type, started_at, status))
     return out

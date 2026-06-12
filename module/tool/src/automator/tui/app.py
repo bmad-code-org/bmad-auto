@@ -86,9 +86,7 @@ class BmadAutoApp(App[None]):
         self.push_screen(self._dashboard)
 
     def action_toggle_dark(self) -> None:
-        self.theme = (
-            "textual-light" if self.theme == "textual-dark" else "textual-dark"
-        )
+        self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
 
     # ------------------------------------------------------------ run control
 
@@ -104,7 +102,8 @@ class BmadAutoApp(App[None]):
         try:
             if not verify.worktree_clean(self.project):
                 self.notify(
-                    "git worktree is not clean — commit or stash first", severity="error"
+                    "git worktree is not clean — commit or stash first",
+                    severity="error",
                 )
                 return
         except verify.GitError as e:
@@ -171,7 +170,8 @@ class BmadAutoApp(App[None]):
             return
         if result["dry_run"]:
             self._show_captured(
-                "sweep --dry-run", ["sweep", "--project", str(self.project), "--dry-run"]
+                "sweep --dry-run",
+                ["sweep", "--project", str(self.project), "--dry-run"],
             )
             return
 
@@ -236,9 +236,7 @@ class BmadAutoApp(App[None]):
         # A sweep blocked on a decision prompt has no agent session — the
         # human answers in the orchestrator's ctl window. Otherwise prefer the
         # live agent session, falling back to the ctl window between sessions.
-        if window is not None and (
-            self._dashboard.decision_pending is not None or not agent_live
-        ):
+        if window is not None and (self._dashboard.decision_pending is not None or not agent_live):
             launch.select_ctl_window(window)
             target = f"={launch.CTL_SESSION}"
         elif agent_live:

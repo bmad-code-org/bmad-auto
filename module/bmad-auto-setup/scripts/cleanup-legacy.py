@@ -146,9 +146,7 @@ def count_files(path: Path) -> int:
     return count
 
 
-def cleanup_directories(
-    bmad_dir: str, dirs_to_remove: list, verbose: bool = False
-) -> tuple:
+def cleanup_directories(bmad_dir: str, dirs_to_remove: list, verbose: bool = False) -> tuple:
     """Remove specified directories under bmad_dir.
 
     Returns:
@@ -224,9 +222,7 @@ def reject_unresolved_paths(named_paths: list[tuple[str, str]]) -> None:
 def main():
     args = parse_args()
 
-    reject_unresolved_paths(
-        [("--bmad-dir", args.bmad_dir), ("--skills-dir", args.skills_dir)]
-    )
+    reject_unresolved_paths([("--bmad-dir", args.bmad_dir), ("--skills-dir", args.skills_dir)])
 
     bmad_dir = args.bmad_dir
     module_code = args.module_code
@@ -258,9 +254,7 @@ def main():
         )
 
     # Remove directories
-    removed, not_found, total_files = cleanup_directories(
-        bmad_dir, dirs_to_remove, args.verbose
-    )
+    removed, not_found, total_files = cleanup_directories(bmad_dir, dirs_to_remove, args.verbose)
 
     # Build result
     result = {

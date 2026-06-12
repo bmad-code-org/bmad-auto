@@ -15,30 +15,41 @@ field-by-field, and will kill this session after your final turn.
     "workflow": "deferred-sweep-triage",
     "open_ids": ["DW-1", "DW-3", "..."],
     "already_resolved": [
-      {"id": "DW-1", "evidence": "<file:line or commit that resolved it>"}
+      { "id": "DW-1", "evidence": "<file:line or commit that resolved it>" }
     ],
     "bundles": [
-      {"name": "<kebab-case-name>", "dw_ids": ["DW-3"],
-       "intent": "<2-6 sentences: the one cohesive goal>"}
+      {
+        "name": "<kebab-case-name>",
+        "dw_ids": ["DW-3"],
+        "intent": "<2-6 sentences: the one cohesive goal>"
+      }
     ],
     "blocked": [
-      {"id": "DW-4", "blocker": "<named story/epic that must land first>"}
+      { "id": "DW-4", "blocker": "<named story/epic that must land first>" }
     ],
-    "skip": [
-      {"id": "DW-9", "reason": "<why this is moot/superseded>"}
-    ],
+    "skip": [{ "id": "DW-9", "reason": "<why this is moot/superseded>" }],
     "decisions": [
-      {"id": "DW-7",
-       "question": "<the choice the human must make>",
-       "context": "<2-4 sentences of code-grounded context>",
-       "options": [
-         {"key": "1", "label": "<short label>", "effect": "build",
-          "intent": "<what a dev session would implement>"},
-         {"key": "2", "label": "<short label>", "effect": "close",
-          "resolution": "<optional: why closing is fine>"},
-         {"key": "3", "label": "<short label>", "effect": "keep-open"}
-       ],
-       "recommendation": "1"}
+      {
+        "id": "DW-7",
+        "question": "<the choice the human must make>",
+        "context": "<2-4 sentences of code-grounded context>",
+        "options": [
+          {
+            "key": "1",
+            "label": "<short label>",
+            "effect": "build",
+            "intent": "<what a dev session would implement>"
+          },
+          {
+            "key": "2",
+            "label": "<short label>",
+            "effect": "close",
+            "resolution": "<optional: why closing is fine>"
+          },
+          { "key": "3", "label": "<short label>", "effect": "keep-open" }
+        ],
+        "recommendation": "1"
+      }
     ],
     "escalations": []
   }
@@ -64,8 +75,15 @@ field-by-field, and will kill this session after your final turn.
   same entries in result.json `escalations` and end your turn. Schema:
 
   ```json
-  {"escalations": [{"type": "<short-kebab-kind>", "severity": "CRITICAL|PREFERENCE",
-                    "detail": "<one or two sentences>"}]}
+  {
+    "escalations": [
+      {
+        "type": "<short-kebab-kind>",
+        "severity": "CRITICAL|PREFERENCE",
+        "detail": "<one or two sentences>"
+      }
+    ]
+  }
   ```
 
 ## Behavior rules
