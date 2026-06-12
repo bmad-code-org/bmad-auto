@@ -59,6 +59,12 @@ captured and shown in a scrollable modal instead of spawned in tmux.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+…and the same layout, live:
+
+<div align="center">
+<img src="images/dashboard.png" alt="The bmad-auto TUI dashboard, fully populated." width="880">
+</div>
+
 ### Left column
 
 Three stacked panes; `tab` / `shift+tab` move focus between them. The sprint
