@@ -147,6 +147,9 @@ def test_sweep_command_parses_flags():
         "--decisions-only",
         "--max-bundles",
         "3",
+        "--repeat",
+        "--max-cycles",
+        "4",
         "--dry-run",
     ]
     # exercise argparse wiring only: dry-run path needs a valid project, so
@@ -169,4 +172,6 @@ def test_sweep_command_parses_flags():
     assert captured["no_prompt"] is True
     assert captured["decisions_only"] is True
     assert captured["max_bundles"] == 3
+    assert captured["repeat"] is True
+    assert captured["max_cycles"] == 4
     assert captured["dry_run"] is True

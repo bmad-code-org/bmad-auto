@@ -309,6 +309,8 @@ behavior.
 | `sweep.auto`                          | select                 | `never`          | `never` / `per-epic` / `run-end`                    |
 | `sweep.max_bundles`                   | int ≥ 1                | 5                | bundles per sweep; triage excess truncated          |
 | `sweep.max_triage_attempts`           | int ≥ 1                | 2                | triage validation retries                           |
+| `sweep.repeat`                        | switch                 | off              | re-triage after each cycle, continue on new work    |
+| `sweep.max_cycles`                    | int ≥ 1                | 5                | cycle cap per sweep run when repeat is on           |
 
 `extra_args` fields are special: the switch distinguishes "use the profile's
 default flags" (off — the key stays absent) from "replace them with exactly

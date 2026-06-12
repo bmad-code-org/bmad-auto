@@ -255,6 +255,8 @@ def _start_sweep(
     prompting: bool,
     decisions_only: bool,
     max_bundles: int | None,
+    repeat: bool | None = None,
+    max_cycles: int | None = None,
     trigger: str,
     run_id: str | None = None,
 ) -> int:
@@ -274,6 +276,8 @@ def _start_sweep(
         "prompting": prompting,
         "decisions_only": decisions_only,
         "max_bundles": max_bundles,
+        "repeat": repeat,
+        "max_cycles": max_cycles,
         "trigger": trigger,
     }
     (run_dir / "sweep.json").write_text(json.dumps(options, indent=2), encoding="utf-8")
@@ -292,6 +296,8 @@ def _start_sweep(
         prompting=prompting,
         decisions_only=decisions_only,
         max_bundles=max_bundles,
+        repeat=repeat,
+        max_cycles=max_cycles,
     )
     summary = engine.run()
     print(summary.render())
@@ -336,6 +342,8 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         prompting=not args.no_prompt,
         decisions_only=args.decisions_only,
         max_bundles=args.max_bundles,
+        repeat=args.repeat,
+        max_cycles=args.max_cycles,
         trigger="cli",
         run_id=args.run_id,
     )
@@ -400,6 +408,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
             prompting=bool(opts.get("prompting", False)),
             decisions_only=bool(opts.get("decisions_only", False)),
             max_bundles=opts.get("max_bundles"),
+            repeat=opts.get("repeat"),
+            max_cycles=opts.get("max_cycles"),
         )
     else:
         engine = Engine(
@@ -533,6 +543,14 @@ def main(argv: list[str] | None = None) -> int:
         help="triage + answer decisions + record them; run no bundles",
     )
     sweep_p.add_argument("--max-bundles", type=int, help="override [sweep] max_bundles")
+    sweep_p.add_argument(
+        "--repeat",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="override [sweep] repeat: after a cycle completes, re-triage and continue "
+        "on newly deferred work until nothing addressable completes",
+    )
+    sweep_p.add_argument("--max-cycles", type=int, help="override [sweep] max_cycles")
     sweep_p.add_argument(
         "--dry-run", action="store_true", help="list open ledger entries, spawn nothing"
     )

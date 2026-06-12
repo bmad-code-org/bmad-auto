@@ -18,7 +18,7 @@ from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
 from automator.journal import Journal, load_state
 from automator.model import Phase, RunState, TokenUsage
-from automator.policy import GatesPolicy, NotifyPolicy, Policy, SweepPolicy
+from automator.policy import GatesPolicy, LimitsPolicy, NotifyPolicy, Policy, SweepPolicy
 from automator.sweep import DecisionPrompter, SweepEngine, validate_migration, validate_triage
 from automator.verify import worktree_clean
 
@@ -58,7 +58,7 @@ def make_sweep(project, script, policy=None, answers=(), prompting=False, **kwar
     return engine, adapter
 
 
-def resume_sweep(project, engine, script, answers=(), prompting=False):
+def resume_sweep(project, engine, script, answers=(), prompting=False, **kwargs):
     state = load_state(engine.run_dir)
     state.clear_pause()
     adapter = MockAdapter(script)
@@ -73,6 +73,7 @@ def resume_sweep(project, engine, script, answers=(), prompting=False):
         state=state,
         prompting=prompting,
         prompter=prompter,
+        **kwargs,
     )
     return new_engine, adapter
 
@@ -622,6 +623,360 @@ def test_escalated_bundle_resume_skips_it_and_runs_rest(project):
     # triage was NOT re-run: only the two bundle sessions
     assert len(adapter.sessions) == 2
     assert ledger_entries(project)["DW-1"].open  # escalated bundle untouched
+
+
+# ----------------------------------------------------------- repeat cycles
+
+
+def repeat_policy(**kw):
+    return Policy(
+        gates=GatesPolicy(mode="none"), notify=QUIET, sweep=SweepPolicy(repeat=True, **kw)
+    )
+
+
+def appending_dev(project, inner, dw_id):
+    """Wrap a bundle dev effect so the session also appends a new open ledger
+    entry — the 'sweep generated new deferred work' scenario."""
+
+    def effect(spec):
+        result = inner(spec)
+        ledger = project.deferred_work
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8")
+            + f"\n### {dw_id}: item {dw_id}\n\norigin: test, 2026-06-11\n"
+            f"location: src.txt:1\nreason: follow-up from bundle.\nstatus: open\n",
+            encoding="utf-8",
+        )
+        return result
+
+    return effect
+
+
+def test_repeat_off_is_single_cycle(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan = triage_result(
+        ["DW-1"], bundles=[{"name": "one-fix", "dw_ids": ["DW-1"], "intent": "fix"}]
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan),
+            appending_dev(project, bundle_dev_effect(project, "one-fix", ["DW-1"]), "DW-2"),
+            bundle_review_effect(project, "one-fix"),
+        ],
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert len(adapter.sessions) == 3  # no second triage
+    journal = journal_text(engine)
+    assert "sweep-cycle" not in journal and "sweep-repeat-done" not in journal
+    assert ledger_entries(project)["DW-2"].open  # waits for the next sweep
+
+
+def test_repeat_two_cycles_then_no_open(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan1 = triage_result(
+        ["DW-1"], bundles=[{"name": "first-fix", "dw_ids": ["DW-1"], "intent": "a"}]
+    )
+    plan2 = triage_result(
+        ["DW-2"], bundles=[{"name": "follow-up", "dw_ids": ["DW-2"], "intent": "b"}]
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            appending_dev(project, bundle_dev_effect(project, "first-fix", ["DW-1"]), "DW-2"),
+            bundle_review_effect(project, "first-fix"),
+            triage_effect(plan2),
+            bundle_dev_effect(project, "follow-up", ["DW-2"]),
+            bundle_review_effect(project, "follow-up"),
+        ],
+        policy=repeat_policy(),
+    )
+    summary = engine.run()
+    assert not summary.paused
+    tasks = engine.state.tasks
+    assert tasks["sweep-triage"].phase == Phase.DONE
+    assert tasks["dw-first-fix"].phase == Phase.DONE
+    assert tasks["sweep-triage-2"].phase == Phase.DONE
+    assert tasks["dw2-follow-up"].phase == Phase.DONE
+    journal = journal_text(engine)
+    assert "sweep-cycle" in journal
+    assert "sweep-repeat-done" in journal and "no-open" in journal
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")
+    assert entries["DW-2"].status.startswith("done")
+    assert worktree_clean(project.project)
+    # cycle-2 dev got the cycle-scoped intent file
+    intent_path = adapter.sessions[4].prompt.split("--dw-bundle ", 1)[1].split()[0]
+    assert "c2-follow-up" in intent_path
+
+
+def test_repeat_stops_on_no_progress(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan1 = triage_result(
+        ["DW-1"], bundles=[{"name": "first-fix", "dw_ids": ["DW-1"], "intent": "a"}]
+    )
+    plan2 = triage_result(["DW-2"], blocked=[{"id": "DW-2", "blocker": "story 9-9"}])
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            appending_dev(project, bundle_dev_effect(project, "first-fix", ["DW-1"]), "DW-2"),
+            bundle_review_effect(project, "first-fix"),
+            triage_effect(plan2),
+        ],
+        policy=repeat_policy(),
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert len(adapter.sessions) == 4  # the cycle-2 triage confirmed nothing addressable
+    assert "no-progress" in journal_text(engine)
+    assert ledger_entries(project)["DW-2"].open
+
+
+def test_repeat_max_cycles_cap(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan1 = triage_result(
+        ["DW-1"], bundles=[{"name": "fix-one", "dw_ids": ["DW-1"], "intent": "a"}]
+    )
+    plan2 = triage_result(
+        ["DW-2"], bundles=[{"name": "fix-two", "dw_ids": ["DW-2"], "intent": "b"}]
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            appending_dev(project, bundle_dev_effect(project, "fix-one", ["DW-1"]), "DW-2"),
+            bundle_review_effect(project, "fix-one"),
+            triage_effect(plan2),
+            appending_dev(project, bundle_dev_effect(project, "fix-two", ["DW-2"]), "DW-3"),
+            bundle_review_effect(project, "fix-two"),
+        ],
+        policy=repeat_policy(max_cycles=2),
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert len(adapter.sessions) == 6  # no cycle-3 triage despite DW-3 open
+    assert "max-cycles" in journal_text(engine)
+    assert ledger_entries(project)["DW-3"].open
+
+
+def test_repeat_failed_bundle_not_rebuilt(project):
+    """A bundle that deferred in cycle 1 must not be re-materialized when a
+    later triage re-proposes its ids — that would loop until max_cycles."""
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    plan1 = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[
+            {"name": "bad-fix", "dw_ids": ["DW-1"], "intent": "a"},
+            {"name": "good-fix", "dw_ids": ["DW-2"], "intent": "b"},
+        ],
+    )
+    plan2 = triage_result(
+        ["DW-1"], bundles=[{"name": "bad-fix-again", "dw_ids": ["DW-1"], "intent": "a2"}]
+    )
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        sweep=SweepPolicy(repeat=True),
+        limits=LimitsPolicy(max_review_cycles=1, max_dev_attempts=1),
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            # bad-fix: spec never reaches in-review -> dev verify fails -> deferred
+            lambda spec: SessionResult(
+                status="completed", result_json={"workflow": "quick-dev", "escalations": []}
+            ),
+            bundle_dev_effect(project, "good-fix", ["DW-2"]),
+            bundle_review_effect(project, "good-fix"),
+            triage_effect(plan2),
+        ],
+        policy=policy,
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert engine.state.tasks["dw-bad-fix"].phase == Phase.DEFERRED
+    assert "sweep-bundle-skipped" in journal_text(engine)
+    assert not any(k.startswith("dw2-") for k in engine.state.tasks)
+    assert "no-progress" in journal_text(engine)
+    assert ledger_entries(project)["DW-1"].open
+
+
+def test_repeat_keep_open_answer_blocks_rebundle(project):
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    decision = {
+        "id": "DW-1",
+        "question": "build it?",
+        "context": "",
+        "options": [
+            {"key": "1", "label": "Build", "effect": "build", "intent": "x"},
+            {"key": "2", "label": "Keep open", "effect": "keep-open"},
+        ],
+        "recommendation": "2",
+    }
+    plan1 = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[{"name": "safe-fix", "dw_ids": ["DW-2"], "intent": "fix"}],
+        decisions=[decision],
+    )
+    # cycle 2: triage tries to bundle the kept-open entry directly
+    plan2 = triage_result(
+        ["DW-1"], bundles=[{"name": "sneaky-fix", "dw_ids": ["DW-1"], "intent": "y"}]
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            bundle_dev_effect(project, "safe-fix", ["DW-2"]),
+            bundle_review_effect(project, "safe-fix"),
+            triage_effect(plan2),
+        ],
+        policy=repeat_policy(),
+        answers=["2"],
+        prompting=True,
+    )
+    summary = engine.run()
+    assert not summary.paused
+    journal = journal_text(engine)
+    assert "sweep-bundle-skipped" in journal and "human-chose-keep-open" in journal
+    assert not any("sneaky-fix" in k for k in engine.state.tasks)
+    assert ledger_entries(project)["DW-1"].open
+
+
+def test_repeat_resume_mid_cycle_two(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan1 = triage_result(
+        ["DW-1"], bundles=[{"name": "first-fix", "dw_ids": ["DW-1"], "intent": "a"}]
+    )
+    plan2 = triage_result(
+        ["DW-2"], bundles=[{"name": "follow-up", "dw_ids": ["DW-2"], "intent": "b"}]
+    )
+
+    def escalating_dev(spec):
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "quick-dev",
+                "escalations": [
+                    {"type": "bundle-item-blocked", "severity": "CRITICAL", "detail": "no"}
+                ],
+            },
+        )
+
+    engine, _ = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            appending_dev(project, bundle_dev_effect(project, "first-fix", ["DW-1"]), "DW-2"),
+            bundle_review_effect(project, "first-fix"),
+            triage_effect(plan2),
+            escalating_dev,
+        ],
+        policy=repeat_policy(),
+    )
+    summary = engine.run()
+    assert summary.paused
+    assert load_state(engine.run_dir).sweep_cycle == 2
+    assert engine.state.tasks["dw2-follow-up"].phase == Phase.ESCALATED
+
+    resumed, adapter = resume_sweep(project, engine, [])
+    summary = resumed.run()
+    assert not summary.paused
+    # resume re-enters cycle 2 directly: triage-2.json reloads (no session),
+    # the escalated bundle is dropped by the failed-ids filter, and the cycle
+    # reports no progress
+    assert adapter.sessions == []
+    journal = journal_text(resumed)
+    assert "sweep-bundle-skipped" in journal and "no-progress" in journal
+    assert ledger_entries(project)["DW-2"].open  # escalated bundle untouched
+
+
+def test_repeat_decisions_only_single_cycle(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan = triage_result(
+        ["DW-1"], bundles=[{"name": "one-fix", "dw_ids": ["DW-1"], "intent": "fix"}]
+    )
+    engine, adapter = make_sweep(
+        project, [triage_effect(plan)], policy=repeat_policy(), decisions_only=True
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert len(adapter.sessions) == 1
+    journal = journal_text(engine)
+    assert "sweep-decisions-only" in journal and "sweep-cycle" not in journal
+
+
+def test_repeat_unattended_decision_notifies_once(project):
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    decision = {
+        "id": "DW-1",
+        "question": "q",
+        "context": "",
+        "options": [
+            {"key": "1", "label": "a", "effect": "build", "intent": "x"},
+            {"key": "2", "label": "b", "effect": "keep-open"},
+        ],
+        "recommendation": "2",
+    }
+    plan1 = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[{"name": "safe-fix", "dw_ids": ["DW-2"], "intent": "fix"}],
+        decisions=[decision],
+    )
+    plan2 = triage_result(["DW-1"], decisions=[decision])
+    engine, _ = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            bundle_dev_effect(project, "safe-fix", ["DW-2"]),
+            bundle_review_effect(project, "safe-fix"),
+            triage_effect(plan2),
+        ],
+        policy=repeat_policy(),
+        prompting=False,
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert journal_text(engine).count("decision-skipped-unattended") == 1
+    assert "no-progress" in journal_text(engine)
+
+
+def test_repeat_truncated_bundles_picked_up_next_cycle(project):
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    plan1 = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[
+            {"name": "first-fix", "dw_ids": ["DW-1"], "intent": "a"},
+            {"name": "second-fix", "dw_ids": ["DW-2"], "intent": "b"},
+        ],
+    )
+    plan2 = triage_result(
+        ["DW-2"], bundles=[{"name": "second-fix", "dw_ids": ["DW-2"], "intent": "b"}]
+    )
+    engine, _ = make_sweep(
+        project,
+        [
+            triage_effect(plan1),
+            bundle_dev_effect(project, "first-fix", ["DW-1"]),
+            bundle_review_effect(project, "first-fix"),
+            triage_effect(plan2),
+            bundle_dev_effect(project, "second-fix", ["DW-2"]),
+            bundle_review_effect(project, "second-fix"),
+        ],
+        policy=repeat_policy(max_bundles=1),
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert "sweep-bundles-truncated" in journal_text(engine)
+    # same bundle name across cycles lands under distinct task keys
+    assert engine.state.tasks["dw-first-fix"].phase == Phase.DONE
+    assert engine.state.tasks["dw2-second-fix"].phase == Phase.DONE
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")
+    assert entries["DW-2"].status.startswith("done")
 
 
 # ------------------------------------------------------- legacy migration

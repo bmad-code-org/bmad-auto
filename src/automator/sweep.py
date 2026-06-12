@@ -377,6 +377,8 @@ class SweepEngine(Engine):
         prompting: bool = False,
         decisions_only: bool = False,
         max_bundles: int | None = None,
+        repeat: bool | None = None,
+        max_cycles: int | None = None,
         prompter: DecisionPrompter | None = None,
         **kwargs: Any,
     ):
@@ -387,7 +389,12 @@ class SweepEngine(Engine):
         self.prompting = prompting
         self.decisions_only = decisions_only
         self.max_bundles = max_bundles if max_bundles is not None else self.policy.sweep.max_bundles
+        self.repeat = repeat if repeat is not None else self.policy.sweep.repeat
+        self.max_cycles = max_cycles if max_cycles is not None else self.policy.sweep.max_cycles
         self.prompter = prompter or DecisionPrompter()
+        # decisions already journaled as skipped this process; without it a
+        # persistent decision item would notify once per repeat cycle
+        self._skipped_decisions: set[str] = set()
         self.state.run_type = "sweep"
 
     # the date stamped into ledger edits; isolated for tests
@@ -398,24 +405,71 @@ class SweepEngine(Engine):
 
     def _loop(self) -> None:
         ledger = self.paths.deferred_work
-        text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
-        if deferredwork.has_legacy(text):
-            self._ensure_migration(text)
+        cycle = max(1, self.state.sweep_cycle)
+        while True:
+            self.state.sweep_cycle = cycle
+            self._save()
             text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
-        open_now = deferredwork.open_ids(text)
-        if not open_now:
-            self.journal.append("sweep-nothing-open", ledger=str(ledger))
-            return
+            if deferredwork.has_legacy(text):
+                if cycle > 1:
+                    # freeform text appeared mid-run; _ensure_migration assumes
+                    # one migration per run, so hand off to a fresh sweep
+                    self.journal.append(
+                        "sweep-repeat-done", cycles=cycle - 1, reason="legacy-appeared"
+                    )
+                    gates.notify(
+                        self.policy,
+                        self.run_dir,
+                        "legacy ledger entries appeared mid-sweep",
+                        "run a fresh `bmad-auto sweep` to migrate them",
+                    )
+                    return
+                self._ensure_migration(text)
+                text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
+            open_now = deferredwork.open_ids(text)
+            if not open_now:
+                if cycle == 1:
+                    self.journal.append("sweep-nothing-open", ledger=str(ledger))
+                else:
+                    self.journal.append("sweep-repeat-done", cycles=cycle - 1, reason="no-open")
+                return
+            if cycle > 1:
+                self.journal.append("sweep-cycle", cycle=cycle, open=len(open_now))
+            progressed = self._cycle(cycle, open_now)
+            if self.decisions_only or not self.repeat:
+                return
+            if not progressed:
+                self.journal.append("sweep-repeat-done", cycles=cycle, reason="no-progress")
+                return
+            if cycle >= self.max_cycles:
+                self.journal.append("sweep-repeat-done", cycles=cycle, reason="max-cycles")
+                return
+            # a deferred bundle's ledger restore can leave the tree dirty; the
+            # next cycle's triage and bundle baselines need a clean tree
+            self._commit_ledger("chore(sweep): commit ledger before next sweep cycle")
+            cycle += 1
 
-        plan = self._ensure_triage(open_now)
-        self._close_resolved(plan)
-        answers = self._decisions_phase(plan)
+    def _cycle(self, cycle: int, open_now: set[str]) -> bool:
+        """One triage -> close -> decide -> bundle pass. Returns whether the
+        cycle completed any addressable work — the repeat loop's progress
+        predicate. Caveat: on crash-resume of a cycle whose only progress was
+        already-resolved closes, the replayed (idempotent) closes report 0 and
+        the run stops with no-progress; errs toward stopping, never loops."""
+        plan = self._ensure_triage(open_now, cycle)
+        closed = self._close_resolved(plan)
+        answers, decisions_closed = self._decisions_phase(plan)
         bundles = self._materialize_bundles(plan, answers)
         if self.decisions_only:
             self.journal.append("sweep-decisions-only", bundles_not_run=len(bundles))
-            return
+            return False
         for bundle in bundles:
-            self._run_bundle(bundle)
+            self._run_bundle(bundle, cycle)
+        bundles_done = sum(
+            1
+            for b in bundles
+            if self.state.tasks[self._bundle_key(b.name, cycle)].phase == Phase.DONE
+        )
+        return closed > 0 or decisions_closed > 0 or bundles_done > 0
 
     def _run_story(self, task: StoryTask) -> None:
         # no spec-approval gate for bundles: the bundle intent came from the
@@ -423,8 +477,14 @@ class SweepEngine(Engine):
         if self._dev_phase(task):
             self._review_and_commit(task)
 
-    def _run_bundle(self, bundle: Bundle) -> None:
-        key = f"dw-{bundle.name}"
+    # cycle 1 keeps the legacy key so pre-repeat paused runs resume unchanged;
+    # "dw{N}-" (not "dw-c{N}-") so a cycle-1 bundle named "c2-foo" can never
+    # collide with a cycle-2 bundle named "foo"
+    def _bundle_key(self, name: str, cycle: int) -> str:
+        return f"dw-{name}" if cycle == 1 else f"dw{cycle}-{name}"
+
+    def _run_bundle(self, bundle: Bundle, cycle: int) -> None:
+        key = self._bundle_key(bundle.name, cycle)
         task = self.state.tasks.get(key)
         if task is not None and task.terminal:
             return  # finished (or adjudicated) in a previous resume cycle
@@ -442,7 +502,8 @@ class SweepEngine(Engine):
             if task.baseline_commit:
                 self._reset_to(task.baseline_commit)
             task.phase = Phase.PENDING  # deliberate reset, not a normal transition
-        task.bundle_file = str(self._write_intent(bundle))
+        dirname = bundle.name if cycle == 1 else f"c{cycle}-{bundle.name}"
+        task.bundle_file = str(self._write_intent(bundle, dirname))
         self._save()
         self._run_story(task)
 
@@ -558,8 +619,10 @@ class SweepEngine(Engine):
 
     # --------------------------------------------------------------- triage
 
-    def _ensure_triage(self, open_now: set[str]) -> TriagePlan:
-        triage_path = self.run_dir / "triage.json"
+    def _ensure_triage(self, open_now: set[str], cycle: int = 1) -> TriagePlan:
+        suffix = "" if cycle == 1 else f"-{cycle}"
+        triage_path = self.run_dir / f"triage{suffix}.json"
+        triage_key = TRIAGE_KEY + suffix
         if triage_path.is_file():
             # already validated this run; the ledger has moved since (closes,
             # decisions), so skip the open-set equality re-check
@@ -568,13 +631,13 @@ class SweepEngine(Engine):
                 return plan
             self.journal.append("sweep-triage-reload-failed", errors=errors)
 
-        task = self.state.tasks.get(TRIAGE_KEY)
+        task = self.state.tasks.get(triage_key)
         if task is None:
-            task = StoryTask(story_key=TRIAGE_KEY, epic=0)
-            self.state.tasks[TRIAGE_KEY] = task
+            task = StoryTask(story_key=triage_key, epic=0)
+            self.state.tasks[triage_key] = task
         elif task.phase != Phase.PENDING:
             # resumed mid-triage or retrying after an escalation: restart
-            self.journal.append("resume-restart", story_key=TRIAGE_KEY, phase=str(task.phase))
+            self.journal.append("resume-restart", story_key=triage_key, phase=str(task.phase))
             if task.phase == Phase.ESCALATED:
                 task.attempt = 0  # the human resumed deliberately; fresh budget
             task.phase = Phase.PENDING  # deliberate reset, not a normal transition
@@ -635,7 +698,7 @@ class SweepEngine(Engine):
 
     # ------------------------------------------------------ ledger phases
 
-    def _close_resolved(self, plan: TriagePlan) -> None:
+    def _close_resolved(self, plan: TriagePlan) -> int:
         ledger = self.paths.deferred_work
         closed = []
         for entry in plan.already_resolved:
@@ -646,16 +709,20 @@ class SweepEngine(Engine):
         if closed:
             self.journal.append("sweep-resolved-closed", dw_ids=closed)
         self._commit_ledger("chore(sweep): close resolved deferred-work entries")
+        return len(closed)
 
-    def _decisions_phase(self, plan: TriagePlan) -> dict[str, dict[str, str]]:
+    def _decisions_phase(self, plan: TriagePlan) -> tuple[dict[str, dict[str, str]], int]:
         decisions_path = self.run_dir / "decisions.json"
         answers: dict[str, dict[str, str]] = (
             _read_json(decisions_path) if decisions_path.is_file() else {}
         )
+        closed = 0
         pending = [d for d in plan.decisions if d.id not in answers]
         if not self.prompting:
+            pending = [d for d in pending if d.id not in self._skipped_decisions]
             for decision in pending:
                 self.journal.append("decision-skipped-unattended", dw_id=decision.id)
+                self._skipped_decisions.add(decision.id)
             if pending:
                 gates.notify(
                     self.policy,
@@ -693,8 +760,10 @@ class SweepEngine(Engine):
                     effect=option.effect,
                 )
                 self._apply_decision_effect(decision, option)
+                if option.effect == "close":
+                    closed += 1
         self._commit_ledger("chore(sweep): record deferred-work decisions")
-        return answers
+        return answers, closed
 
     def _apply_decision_effect(self, decision: Decision, option: DecisionOption) -> None:
         ledger = self.paths.deferred_work
@@ -739,13 +808,42 @@ class SweepEngine(Engine):
                     ),
                 )
             )
+        # ids a prior bundle already failed on: re-triaging them would rebuild
+        # the same hopeless bundle every repeat cycle (and a cached build-effect
+        # decision answer would re-materialize its bundle each cycle)
+        failed_ids = {
+            i
+            for t in self.state.tasks.values()
+            if t.story_key.startswith("dw") and t.phase in (Phase.DEFERRED, Phase.ESCALATED)
+            for i in t.dw_ids
+        }
+        # ids a human explicitly chose to keep open: a later triage must not
+        # override that answer (bundle dev sessions mark their dw_ids done)
+        keep_open_ids = {dw_id for dw_id, a in answers.items() if a.get("effect") == "keep-open"}
+        kept = []
+        for b in bundles:
+            overlap = sorted(set(b.dw_ids) & (failed_ids | keep_open_ids))
+            if overlap:
+                self.journal.append(
+                    "sweep-bundle-skipped",
+                    name=b.name,
+                    dw_ids=overlap,
+                    reason=(
+                        "failed-or-escalated-earlier"
+                        if set(b.dw_ids) & failed_ids
+                        else "human-chose-keep-open"
+                    ),
+                )
+                continue
+            kept.append(b)
+        bundles = kept
         if len(bundles) > self.max_bundles:
             dropped = [b.name for b in bundles[self.max_bundles :]]
             self.journal.append("sweep-bundles-truncated", dropped=dropped)
             bundles = bundles[: self.max_bundles]
         return bundles
 
-    def _write_intent(self, bundle: Bundle) -> Path:
+    def _write_intent(self, bundle: Bundle, dirname: str) -> Path:
         ledger = self.paths.deferred_work
         text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
         entries = {e.id: e for e in deferredwork.parse_ledger(text)}
@@ -763,7 +861,7 @@ class SweepEngine(Engine):
         if bundle.decision_note:
             lines += ["", "## Human decision", "", bundle.decision_note]
         lines += ["", "## Ledger entries (verbatim)", "", "\n\n".join(blocks), ""]
-        path = self.run_dir / "bundles" / bundle.name / "intent.md"
+        path = self.run_dir / "bundles" / dirname / "intent.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines), encoding="utf-8")
         return path
