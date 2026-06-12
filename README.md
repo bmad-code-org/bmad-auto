@@ -64,12 +64,12 @@ The orchestrator drives its own forks of the BMAD dev/review skills — your
 standard BMAD install is never modified. The module lives in `module/`
 (BMAD module code `bauto`) and contains four skills:
 
-| Skill | Role |
-|---|---|
-| `bmad-auto-dev` | unattended implementation (fork of `bmad-quick-dev`) |
+| Skill              | Role                                                       |
+| ------------------ | ---------------------------------------------------------- |
+| `bmad-auto-dev`    | unattended implementation (fork of `bmad-quick-dev`)       |
 | `bmad-auto-review` | unattended adversarial review (fork of `bmad-code-review`) |
-| `bmad-auto-sweep` | deferred-work ledger triage (automation-only) |
-| `bmad-auto-setup` | registers the module in `_bmad/` config + help |
+| `bmad-auto-sweep`  | deferred-work ledger triage (automation-only)              |
+| `bmad-auto-setup`  | registers the module in `_bmad/` config + help             |
 
 Install into a target project by copying the skill folders into the trees the
 CLIs read (`.claude/skills/` for Claude Code, `.agents/skills/` for
@@ -93,7 +93,7 @@ manually; the forks keep the upstream file structure to make this easy.
 
 ## How a story flows
 
-```
+```text
 sprint-status.yaml: 1-2-account-mgmt: ready-for-dev
   │
   ├─ DEV     tmux window: claude "/bmad-auto-dev 1-2-account-mgmt"
@@ -127,7 +127,7 @@ Skills accumulate an append-only ledger (`deferred-work.md`, `DW-<n>` entries)
 of split-off goals, pre-existing review findings, and items deferred as
 "needs human decision". `bmad-auto sweep` processes it:
 
-```
+```text
 bmad-auto sweep [--no-prompt] [--decisions-only] [--max-bundles N] [--dry-run]
   │
   ├─ TRIAGE   fresh window: claude "/bmad-auto-sweep"
@@ -160,14 +160,14 @@ A live dashboard over everything above: run picker (newest auto-selected),
 per-story phase/attempt/token table, and tabs tailing the journal, the active
 session's pane log, sprint status, and the ATTENTION file.
 
-| Key | Action |
-|---|---|
+| Key       | Action                                                             |
+| --------- | ------------------------------------------------------------------ |
 | `r` / `s` | start a run / sweep (modal for epic, story, max-stories, dry-run…) |
-| `e` | resume the selected paused/interrupted run |
-| `a` | attach to the live agent session (or the orchestrator window) |
-| `v` | run `bmad-auto validate`, output in a modal |
-| `g` | settings editor for `.automator/policy.toml` |
-| `d` / `q` | toggle dark mode / quit |
+| `e`       | resume the selected paused/interrupted run                         |
+| `a`       | attach to the live agent session (or the orchestrator window)      |
+| `v`       | run `bmad-auto validate`, output in a modal                        |
+| `g`       | settings editor for `.automator/policy.toml`                       |
+| `d` / `q` | toggle dark mode / quit                                            |
 
 **The TUI is an observer/launcher, never the engine.** Runs started with `r`/`s`
 are detached `bmad-auto` processes in windows of a dedicated tmux session
@@ -257,11 +257,11 @@ the tmux-injection + hook-signal transport; everything CLI-specific lives in a
 declarative **profile** (`adapters/profile.py`). Built-in profiles ship as
 TOML in `automator/data/profiles/`:
 
-| Profile | Status | Notes |
-|---|---|---|
-| `claude` | supported | reference implementation |
-| `codex` | supported, E2E-verified | Codex ≥ 0.139. No slash expansion in the initial prompt — the profile renders `$skill-name` mentions (plus a "use subagents as needed" nudge) instead. No SessionEnd hook; window-death fallback covers crashes. |
-| `gemini` | supported, E2E-verified | Gemini CLI ≥ 0.46 (hooks on by default since then). Launches with `-i` to stay interactive; `AfterAgent` maps to canonical Stop. Usage parser validated against real chat logs. |
+| Profile  | Status                  | Notes                                                                                                                                                                                                            |
+| -------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude` | supported               | reference implementation                                                                                                                                                                                         |
+| `codex`  | supported, E2E-verified | Codex ≥ 0.139. No slash expansion in the initial prompt — the profile renders `$skill-name` mentions (plus a "use subagents as needed" nudge) instead. No SessionEnd hook; window-death fallback covers crashes. |
+| `gemini` | supported, E2E-verified | Gemini CLI ≥ 0.46 (hooks on by default since then). Launches with `-i` to stay interactive; `AfterAgent` maps to canonical Stop. Usage parser validated against real chat logs.                                  |
 
 On budgets: agentic sessions are dominated by cache reads (80–90%+ of raw
 tokens), which every supported vendor bills at ~0.1x base input. The

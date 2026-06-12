@@ -1,0 +1,9 @@
+# Prettier friendly markdownlint config (all formatting rules disabled)
+extends: markdownlint/style/prettier
+# MD033 (no-inline-html) and MD036 (no-emphasis-as-heading) misfire on this repo's
+# content: the skill templates use angle-bracket *notation* (placeholders like
+# <branch>/<base>, decision markers like <D> <P> <W>, pseudo-tags like
+# <frozen-after-approval>) that markdownlint reads as HTML, and inline bold labels
+# (e.g. **Steps**, status banners) that are deliberately emphasis, not headings.
+MD033: false
+MD036: false

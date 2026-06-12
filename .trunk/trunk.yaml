@@ -1,0 +1,50 @@
+# This file controls the behavior of Trunk: https://docs.trunk.io/cli
+# To learn more about the format of this file, see https://docs.trunk.io/reference/trunk-yaml
+version: 0.1
+cli:
+  version: 1.25.0
+# Trunk provides extensibility via plugins. (https://docs.trunk.io/plugins)
+plugins:
+  sources:
+    - id: trunk
+      ref: v1.10.2
+      uri: https://github.com/trunk-io/plugins
+# Many linters and tools depend on runtimes - configure them here. (https://docs.trunk.io/runtimes)
+runtimes:
+  enabled:
+    - node@22.16.0
+    - python@3.14.4
+# This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
+lint:
+  enabled:
+    - bandit@1.9.4
+    - black@26.5.1
+    - checkov@3.3.1
+    - git-diff-check
+    - hadolint@2.14.0
+    - isort@8.0.1
+    - markdownlint@0.48.0
+    - prettier@3.8.4
+    - ruff@0.15.17
+    - taplo@0.10.0
+    - trufflehog@3.95.5
+    - yamllint@1.38.0
+  ignore:
+    # module/tool/ is a generated copy of the canonical source (src/, pyproject.toml,
+    # README.md), produced by scripts/sync-tool.py and verified in CI. Lint the source,
+    # not the copy.
+    - linters: [ALL]
+      paths:
+        - module/tool/**
+    # Test code legitimately uses asserts, temp paths, and subprocess helpers; security
+    # scanning them only produces noise.
+    - linters: [bandit]
+      paths:
+        - tests/**
+actions:
+  disabled:
+    - trunk-announce
+    - trunk-check-pre-push
+    - trunk-fmt-pre-commit
+  enabled:
+    - trunk-upgrade-available

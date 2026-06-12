@@ -40,7 +40,7 @@ captured and shown in a scrollable modal instead of spawned in tmux.
 
 ## Dashboard layout
 
-```
+```text
 ┌─ bmad-auto — /path/to/project ─────────────────────────────────────────┐
 │ st run              type │ 20260611-091500-3f2a  ▶ running             │
 │ ✔  20260610-…       story│ started 2026-06-11T09:15:00  epic 2         │
@@ -86,14 +86,14 @@ total tokens`. Below that, situational banners:
 
 One row per story (or sweep bundle/triage task) in the selected run:
 
-| Column | Meaning |
-|---|---|
-| `story` | story key, or the sweep task id |
-| `phase` | `pending` → `dev-running` → `dev-verify` → `review-running` → `review-verify` → `committing` → `done`; terminal alternatives `deferred` / `escalated`; sweep triage shows `triage-running` / `triage-verify` |
-| `dev` | dev attempt counter, `×N` |
-| `review` | review cycle counter, `×N` |
-| `tokens` | raw token total for the story, `-` until known |
-| `info` | defer reason, or the commit SHA (first 12 chars) once committed |
+| Column   | Meaning                                                                                                                                                                                                      |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `story`  | story key, or the sweep task id                                                                                                                                                                              |
+| `phase`  | `pending` → `dev-running` → `dev-verify` → `review-running` → `review-verify` → `committing` → `done`; terminal alternatives `deferred` / `escalated`; sweep triage shows `triage-running` / `triage-verify` |
+| `dev`    | dev attempt counter, `×N`                                                                                                                                                                                    |
+| `review` | review cycle counter, `×N`                                                                                                                                                                                   |
+| `tokens` | raw token total for the story, `-` until known                                                                                                                                                               |
+| `info`   | defer reason, or the commit SHA (first 12 chars) once committed                                                                                                                                              |
 
 ### Tabs (bottom right)
 
@@ -116,13 +116,13 @@ One row per story (or sweep bundle/triage task) in the selected run:
 
 Run status is classified from `state.json` plus a liveness probe:
 
-| Glyph | Status | Color | Meaning |
-|---|---|---|---|
-| `▶` | running | green | not finished, not paused, engine pid alive |
-| `⏸` | paused | yellow | engine is waiting at a gate or escalation — `e` resumes |
-| `✔` | finished | dim | run completed |
-| `✖` | interrupted | bold red | engine pid is dead but the run never finished — `e` resumes |
-| `?` | unknown | dim | liveness can't be determined, or `state.json` is unreadable |
+| Glyph | Status      | Color    | Meaning                                                     |
+| ----- | ----------- | -------- | ----------------------------------------------------------- |
+| `▶`   | running     | green    | not finished, not paused, engine pid alive                  |
+| `⏸`   | paused      | yellow   | engine is waiting at a gate or escalation — `e` resumes     |
+| `✔`   | finished    | dim      | run completed                                               |
+| `✖`   | interrupted | bold red | engine pid is dead but the run never finished — `e` resumes |
+| `?`   | unknown     | dim      | liveness can't be determined, or `state.json` is unreadable |
 
 Liveness is **local-only**: `engine.pid` is checked with `os.kill(pid, 0)`.
 A run driven on another host (shared checkout) always shows `unknown`, never
@@ -131,26 +131,26 @@ per-run tmux session, which can prove `alive` but never `dead`.
 
 Journal kinds are styled by substring, first match wins:
 
-| Substring | Color | Examples |
-|---|---|---|
-| `escalat`, `failed` | red | `preference-escalation`, `review-verify-failed` |
-| `done`, `complete`, `finished` | green | `story-done`, `run-complete` |
-| `decision`, `deferred`, `boundary`, `truncated` | yellow | `decision-pending`, `epic-boundary` |
-| `start`, `resume` | cyan | `session-start`, `run-resume` |
-| anything else | dim | |
+| Substring                                       | Color  | Examples                                        |
+| ----------------------------------------------- | ------ | ----------------------------------------------- |
+| `escalat`, `failed`                             | red    | `preference-escalation`, `review-verify-failed` |
+| `done`, `complete`, `finished`                  | green  | `story-done`, `run-complete`                    |
+| `decision`, `deferred`, `boundary`, `truncated` | yellow | `decision-pending`, `epic-boundary`             |
+| `start`, `resume`                               | cyan   | `session-start`, `run-resume`                   |
+| anything else                                   | dim    |                                                 |
 
 ## Key bindings
 
-| Key | Action |
-|---|---|
-| `r` | start a run (modal) |
-| `s` | start a sweep (modal) |
-| `e` | resume the selected paused/interrupted run (confirm modal) |
+| Key | Action                                                           |
+| --- | ---------------------------------------------------------------- |
+| `r` | start a run (modal)                                              |
+| `s` | start a sweep (modal)                                            |
+| `e` | resume the selected paused/interrupted run (confirm modal)       |
 | `a` | attach to the selected run's live session or orchestrator window |
-| `v` | run `bmad-auto validate`, output in a modal |
-| `g` | settings editor for `.automator/policy.toml` |
-| `d` | toggle dark/light theme |
-| `q` | quit (running engines are unaffected) |
+| `v` | run `bmad-auto validate`, output in a modal                      |
+| `g` | settings editor for `.automator/policy.toml`                     |
+| `d` | toggle dark/light theme                                          |
+| `q` | quit (running engines are unaffected)                            |
 
 In the settings editor: `ctrl+s` saves, `escape` goes back without saving.
 In any modal: `escape` cancels.
@@ -191,7 +191,7 @@ whose state is unreadable. The confirmation modal shows what you are resuming:
 - paused runs: `paused at <stage> — <reason>` in yellow;
 - non-paused runs: `run is not paused — it looks interrupted` (dim);
 - and, in bold red, `engine.pid is still alive — resuming would double-drive
-  this run` when the original engine still appears to be running. Heed this
+this run` when the original engine still appears to be running. Heed this
   one: two engines driving one run dir corrupt each other's state. It can also
   mean the pid was recycled by another process — verify before resuming.
 
@@ -253,26 +253,26 @@ while empty). Unset keys show their default as a placeholder rather than a
 baked-in value; clearing a field deletes the key, restoring default/inherit
 behavior.
 
-| Section.key | Type | Default | Notes |
-|---|---|---|---|
-| `gates.mode` | select | `per-epic` | `none` / `per-epic` / `per-story-spec-approval` |
-| `gates.retrospective` | select | `notify` | `never` / `notify` / `auto` |
-| `limits.max_review_cycles` | int ≥ 1 | 3 | review loop bound before plateau-defer |
-| `limits.max_dev_attempts` | int ≥ 1 | 2 | dev retry budget |
-| `limits.session_timeout_min` | int ≥ 1 | 45 | per-session wall clock |
-| `limits.stop_without_result_nudges` | int ≥ 0 | 1 | nudges when a session stops without result.json |
-| `limits.max_tokens_per_story` | int ≥ 1 | 2000000 | cost-weighted budget |
-| `limits.cache_read_weight` | float 0.0–1.0 | 0.1 | cache-read weight in the budget; 1.0 = raw |
-| `verify.commands` | one per line | (none) | test/lint commands run before commit |
-| `notify.desktop` | switch | on | desktop notifications |
-| `notify.file` | switch | on | ATTENTION file logging |
-| `adapter.name` | text | `claude` | CLI profile: `claude` / `codex` / `gemini` / custom |
-| `adapter.model` | text | (CLI default) | model override |
-| `adapter.extra_args` | override switch + args | profile defaults | see below |
-| `adapter.dev` / `.review` / `.triage` | text ×2 + args | inherit | per-stage `name` / `model` / `extra_args` overrides |
-| `sweep.auto` | select | `never` | `never` / `per-epic` / `run-end` |
-| `sweep.max_bundles` | int ≥ 1 | 5 | bundles per sweep; triage excess truncated |
-| `sweep.max_triage_attempts` | int ≥ 1 | 2 | triage validation retries |
+| Section.key                           | Type                   | Default          | Notes                                               |
+| ------------------------------------- | ---------------------- | ---------------- | --------------------------------------------------- |
+| `gates.mode`                          | select                 | `per-epic`       | `none` / `per-epic` / `per-story-spec-approval`     |
+| `gates.retrospective`                 | select                 | `notify`         | `never` / `notify` / `auto`                         |
+| `limits.max_review_cycles`            | int ≥ 1                | 3                | review loop bound before plateau-defer              |
+| `limits.max_dev_attempts`             | int ≥ 1                | 2                | dev retry budget                                    |
+| `limits.session_timeout_min`          | int ≥ 1                | 45               | per-session wall clock                              |
+| `limits.stop_without_result_nudges`   | int ≥ 0                | 1                | nudges when a session stops without result.json     |
+| `limits.max_tokens_per_story`         | int ≥ 1                | 2000000          | cost-weighted budget                                |
+| `limits.cache_read_weight`            | float 0.0–1.0          | 0.1              | cache-read weight in the budget; 1.0 = raw          |
+| `verify.commands`                     | one per line           | (none)           | test/lint commands run before commit                |
+| `notify.desktop`                      | switch                 | on               | desktop notifications                               |
+| `notify.file`                         | switch                 | on               | ATTENTION file logging                              |
+| `adapter.name`                        | text                   | `claude`         | CLI profile: `claude` / `codex` / `gemini` / custom |
+| `adapter.model`                       | text                   | (CLI default)    | model override                                      |
+| `adapter.extra_args`                  | override switch + args | profile defaults | see below                                           |
+| `adapter.dev` / `.review` / `.triage` | text ×2 + args         | inherit          | per-stage `name` / `model` / `extra_args` overrides |
+| `sweep.auto`                          | select                 | `never`          | `never` / `per-epic` / `run-end`                    |
+| `sweep.max_bundles`                   | int ≥ 1                | 5                | bundles per sweep; triage excess truncated          |
+| `sweep.max_triage_attempts`           | int ≥ 1                | 2                | triage validation retries                           |
 
 `extra_args` fields are special: the switch distinguishes "use the profile's
 default flags" (off — the key stays absent) from "replace them with exactly
@@ -286,21 +286,21 @@ buttons and block the save. The write itself is atomic (temp file +
 
 ## Troubleshooting
 
-| Message | Cause / fix |
-|---|---|
-| `tmux not found on PATH — launch/attach disabled` | install tmux; the dashboard still works read-only |
-| `git worktree is not clean — commit or stash first` | the launch guard; commit/stash and retry |
-| `another run is live: <ids>` | a second engine on the same project may conflict — confirm only if you know they won't touch the same stories |
-| `launch may have failed — attach to tmux session bmad-auto-ctl` | no `state.json` within 10 s of launch; attach to the ctl window to read the error (the window stays open with the exit code) |
-| `no run selected` | `e` / `a` need a selected run — the project has no runs yet |
-| `state for run <id> is unreadable` | corrupt/missing `state.json`; inspect the run dir |
-| `run <id> already finished` | finished runs can't be resumed |
+| Message                                                                             | Cause / fix                                                                                                                        |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `tmux not found on PATH — launch/attach disabled`                                   | install tmux; the dashboard still works read-only                                                                                  |
+| `git worktree is not clean — commit or stash first`                                 | the launch guard; commit/stash and retry                                                                                           |
+| `another run is live: <ids>`                                                        | a second engine on the same project may conflict — confirm only if you know they won't touch the same stories                      |
+| `launch may have failed — attach to tmux session bmad-auto-ctl`                     | no `state.json` within 10 s of launch; attach to the ctl window to read the error (the window stays open with the exit code)       |
+| `no run selected`                                                                   | `e` / `a` need a selected run — the project has no runs yet                                                                        |
+| `state for run <id> is unreadable`                                                  | corrupt/missing `state.json`; inspect the run dir                                                                                  |
+| `run <id> already finished`                                                         | finished runs can't be resumed                                                                                                     |
 | `nothing to attach: no live agent session … runs started outside the TUI have none` | between sessions there is no agent window, and shell-started runs have no ctl window; wait for the next session or attach manually |
-| `cannot suspend here — run manually: tmux attach …` | the terminal can't suspend the TUI; run the printed command in another terminal |
-| `engine.pid is still alive — resuming would double-drive this run` | the original engine still runs (or its pid was recycled); attach and check before resuming |
-| `policy.toml is not valid TOML: …` | hand-edited file is syntactically broken; fix it in an editor — the settings screen needs a parseable document to start from |
-| `sprint status unavailable — is this an initialized BMAD project?` | missing/invalid `_bmad/bmm/config.yaml` or sprint-status.yaml; run `bmad-auto init` / `bmad-sprint-planning` |
-| header shows `state unavailable` | the run dir exists but `state.json` is missing or never parsed; usually transient at launch |
+| `cannot suspend here — run manually: tmux attach …`                                 | the terminal can't suspend the TUI; run the printed command in another terminal                                                    |
+| `engine.pid is still alive — resuming would double-drive this run`                  | the original engine still runs (or its pid was recycled); attach and check before resuming                                         |
+| `policy.toml is not valid TOML: …`                                                  | hand-edited file is syntactically broken; fix it in an editor — the settings screen needs a parseable document to start from       |
+| `sprint status unavailable — is this an initialized BMAD project?`                  | missing/invalid `_bmad/bmm/config.yaml` or sprint-status.yaml; run `bmad-auto init` / `bmad-sprint-planning`                       |
+| header shows `state unavailable`                                                    | the run dir exists but `state.json` is missing or never parsed; usually transient at launch                                        |
 
 Degradation is graceful by design: a mid-write or missing file never crashes a
 poll — the dashboard keeps the last good state (`?` / `unknown` where it has

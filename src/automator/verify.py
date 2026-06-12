@@ -221,7 +221,9 @@ def run_verify_commands(policy: Policy, cwd: Path) -> list[CommandResult]:
     results = []
     for command in policy.verify.commands:
         try:
-            proc = subprocess.run(
+            # Verify commands are operator-authored shell strings from the project's
+            # policy (e.g. "pytest -q && ruff check"); shell=True is intentional here.
+            proc = subprocess.run(  # nosec B602
                 command,
                 shell=True,
                 cwd=cwd,
@@ -281,9 +283,7 @@ def verify_review_bundle(task: StoryTask, paths: ProjectPaths, policy: Policy) -
     text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
     entries = {e.id: e for e in deferredwork.parse_ledger(text)}
     not_done = sorted(
-        i
-        for i in task.dw_ids
-        if i not in entries or not entries[i].status.startswith("done")
+        i for i in task.dw_ids if i not in entries or not entries[i].status.startswith("done")
     )
     if not_done:
         return VerifyOutcome.retry(
