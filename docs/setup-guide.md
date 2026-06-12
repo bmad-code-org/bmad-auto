@@ -71,7 +71,7 @@ There are **two layers** here, and confusing them is the usual stumbling block:
   registered hooks, a CLI can't signal the engine.
 - `.automator/policy.toml` `[adapter]` selects which CLI actually **runs** each stage.
 
-So a mixed setup — say `claude` for dev and `codex` for review — needs *both*: the hooks
+So a mixed setup — say `claude` for dev and `codex` for review — needs _both_: the hooks
 registered for each CLI (`--cli claude --cli codex`) **and** the role pointed at that CLI in
 `policy.toml`:
 
