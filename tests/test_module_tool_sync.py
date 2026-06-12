@@ -6,11 +6,9 @@ canonical source stays at the repo root (src/automator, pyproject.toml,
 README.md) where development + `pip install -e .` happen; module/tool/ must
 mirror it byte-for-byte. This test turns drift into a CI failure.
 
-To refresh the vendored copy after editing the tool:
-    rm -rf module/tool && mkdir -p module/tool/src
-    cp -r src/automator module/tool/src/automator
-    cp pyproject.toml README.md module/tool/
-    find module/tool -type d -name __pycache__ -prune -exec rm -rf {} +
+To refresh the vendored copy after editing the tool, run:
+    python scripts/sync-tool.py
+(or `python scripts/sync-tool.py --check` to verify without writing).
 """
 
 import filecmp
@@ -59,6 +57,6 @@ def test_vendored_metadata_file_matches_source(name: str) -> None:
     vendored = REPO / "module" / "tool" / name
     assert canonical.is_file(), f"canonical file missing: {canonical}"
     assert vendored.is_file(), f"vendored file missing: {vendored}"
-    assert filecmp.cmp(canonical, vendored, shallow=False), (
-        f"{vendored} has drifted from {canonical}; re-copy it to fix."
-    )
+    assert filecmp.cmp(
+        canonical, vendored, shallow=False
+    ), f"{vendored} has drifted from {canonical}; re-copy it to fix."
