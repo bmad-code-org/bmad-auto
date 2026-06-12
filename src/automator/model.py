@@ -189,6 +189,9 @@ class RunState:
     paused_story_key: str | None = None
     finished: bool = False
     run_type: str = "story"  # "story" | "sweep" — resume/status dispatch on it
+    # sweep runs only: the triage->bundles cycle in progress; 1 maps to the
+    # legacy (unsuffixed) artifact names so old paused runs resume unchanged
+    sweep_cycle: int = 1
     # auto-sweep triggers already fired this run (e.g. "epic-1", "run-end");
     # guards re-fire on resume
     sweeps_triggered: list[str] = field(default_factory=list)
@@ -219,6 +222,7 @@ class RunState:
             "paused_story_key": self.paused_story_key,
             "finished": self.finished,
             "run_type": self.run_type,
+            "sweep_cycle": self.sweep_cycle,
             "sweeps_triggered": self.sweeps_triggered,
             "tasks": {k: t.to_dict() for k, t in self.tasks.items()},
         }
@@ -236,6 +240,7 @@ class RunState:
             paused_story_key=d.get("paused_story_key"),
             finished=bool(d.get("finished", False)),
             run_type=str(d.get("run_type", "story")),
+            sweep_cycle=int(d.get("sweep_cycle", 1)),
             sweeps_triggered=[str(s) for s in d.get("sweeps_triggered", [])],
             tasks={k: StoryTask.from_dict(t) for k, t in d.get("tasks", {}).items()},
         )

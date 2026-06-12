@@ -164,11 +164,15 @@ def test_sweep_defaults_and_override(tmp_path):
     assert pol.sweep.auto == "never"
     assert pol.sweep.max_bundles == 5
     assert pol.sweep.max_triage_attempts == 2
+    assert pol.sweep.repeat is False
+    assert pol.sweep.max_cycles == 5
     p = tmp_path / "policy.toml"
-    p.write_text('[sweep]\nauto = "run-end"\nmax_bundles = 2\n')
+    p.write_text('[sweep]\nauto = "run-end"\nmax_bundles = 2\nrepeat = true\nmax_cycles = 3\n')
     pol = policy.load(p)
     assert pol.sweep.auto == "run-end"
     assert pol.sweep.max_bundles == 2
+    assert pol.sweep.repeat is True
+    assert pol.sweep.max_cycles == 3
 
 
 def test_sweep_invalid_values(tmp_path):
@@ -178,6 +182,9 @@ def test_sweep_invalid_values(tmp_path):
         policy.load(p)
     p.write_text("[sweep]\nmax_bundles = 0\n")
     with pytest.raises(policy.PolicyError, match="max_bundles"):
+        policy.load(p)
+    p.write_text("[sweep]\nmax_cycles = 0\n")
+    with pytest.raises(policy.PolicyError, match="max_cycles"):
         policy.load(p)
 
 

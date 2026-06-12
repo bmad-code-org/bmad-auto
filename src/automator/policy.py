@@ -53,6 +53,8 @@ class SweepPolicy:
     max_bundles: int = 5  # bundles executed per sweep; triage excess is truncated
     max_triage_attempts: int = 2
     max_migration_attempts: int = 2  # legacy-ledger migration retries before escalating
+    repeat: bool = False  # re-triage after a cycle completes; continue on new deferred work
+    max_cycles: int = 5  # total cycles per sweep run when repeat is on
 
 
 @dataclass(frozen=True)
@@ -220,15 +222,25 @@ def loads(text: str) -> Policy:
         max_migration_attempts=int(
             sweep_d.get("max_migration_attempts", SweepPolicy.max_migration_attempts)
         ),
+        repeat=bool(sweep_d.get("repeat", SweepPolicy.repeat)),
+        max_cycles=int(sweep_d.get("max_cycles", SweepPolicy.max_cycles)),
     )
     if sweep.auto not in SWEEP_AUTO_MODES:
         raise PolicyError(
             f"sweep.auto must be one of {sorted(SWEEP_AUTO_MODES)}: got {sweep.auto!r}"
         )
-    if min(sweep.max_bundles, sweep.max_triage_attempts, sweep.max_migration_attempts) < 1:
+    if (
+        min(
+            sweep.max_bundles,
+            sweep.max_triage_attempts,
+            sweep.max_migration_attempts,
+            sweep.max_cycles,
+        )
+        < 1
+    ):
         raise PolicyError(
-            "sweep.max_bundles, sweep.max_triage_attempts and "
-            "sweep.max_migration_attempts must be >= 1"
+            "sweep.max_bundles, sweep.max_triage_attempts, "
+            "sweep.max_migration_attempts and sweep.max_cycles must be >= 1"
         )
     return Policy(
         gates=gates,
@@ -288,4 +300,6 @@ auto = "never"               # never | per-epic | run-end (auto-triggered sweeps
 max_bundles = 5              # bundles executed per sweep; triage excess is truncated
 max_triage_attempts = 2      # triage validation retries before escalating
 max_migration_attempts = 2   # legacy-ledger migration retries before escalating
+repeat = false               # after a cycle completes, re-triage and continue on newly deferred work
+max_cycles = 5               # safety cap on total cycles per sweep run when repeat = true
 """

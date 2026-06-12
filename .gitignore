@@ -10,3 +10,4 @@ __pycache__/
 build/
 dist/
 _bmad/
+uv.lock

@@ -154,6 +154,8 @@ _FIELDS: tuple[_Field, ...] = (
         minimum=1,
         default=SweepPolicy.max_triage_attempts,
     ),
+    _Field("sweep", "repeat", "switch", default=SweepPolicy.repeat),
+    _Field("sweep", "max_cycles", "int", minimum=1, default=SweepPolicy.max_cycles),
 )
 
 # collect() sentinel for a field whose widget holds an unusable value

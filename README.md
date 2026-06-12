@@ -128,7 +128,7 @@ of split-off goals, pre-existing review findings, and items deferred as
 "needs human decision". `bmad-auto sweep` processes it:
 
 ```text
-bmad-auto sweep [--no-prompt] [--decisions-only] [--max-bundles N] [--dry-run]
+bmad-auto sweep [--no-prompt] [--decisions-only] [--max-bundles N] [--repeat] [--max-cycles N] [--dry-run]
   │
   ├─ TRIAGE   fresh window: claude "/bmad-auto-sweep"
   │           verifies EVERY open entry against the actual code (ledger
@@ -148,6 +148,14 @@ bmad-auto sweep [--no-prompt] [--decisions-only] [--max-bundles N] [--dry-run]
 Sweeps are their own resumable runs (`bmad-auto resume <id>`). `[sweep] auto`
 in the policy fires an unattended sweep automatically at epic boundaries or
 run end; a failed/paused child sweep never interrupts the parent run.
+
+Bundle dev sessions can themselves append new deferred entries (split-off
+goals, review findings). With `[sweep] repeat` (or `--repeat`) the sweep
+re-triages after each cycle and keeps going on that newly generated work,
+stopping when a cycle completes nothing addressable — nothing closed as
+already-resolved or by decision, no bundle done — or at `max_cycles`.
+Bundles that failed in an earlier cycle and entries a human chose to keep
+open are never re-bundled.
 
 ## TUI
 
@@ -232,6 +240,8 @@ model = ""                 # empty = CLI default
 auto = "never"             # never | per-epic | run-end (auto sweeps never prompt)
 max_bundles = 5            # bundles executed per sweep; triage excess truncated
 max_triage_attempts = 2    # triage validation retries before escalating
+repeat = false             # re-triage after each cycle, continue on new deferred work
+max_cycles = 5             # safety cap on cycles per sweep run when repeat = true
 ```
 
 Gate modes: `none` runs everything unattended; `per-epic` (default) pauses at
