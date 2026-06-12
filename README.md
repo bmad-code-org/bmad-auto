@@ -156,9 +156,11 @@ pip install -e ".[tui]"   # textual + tomlkit; the core stays pyyaml-only
 bmad-auto tui
 ```
 
-A live dashboard over everything above: run picker (newest auto-selected),
+A live dashboard over everything above: run picker (newest auto-selected), an
+expandable sprint tree (epics → stories/retro, done items checked green), the
+deferred-work ledger (severity color-coded, enter opens the full entry),
 per-story phase/attempt/token table, and tabs tailing the journal, the active
-session's pane log, sprint status, and the ATTENTION file.
+session's pane log, and the ATTENTION file.
 
 | Key       | Action                                                             |
 | --------- | ------------------------------------------------------------------ |

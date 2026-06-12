@@ -40,9 +40,25 @@ class BmadAutoApp(App[None]):
     TITLE = "bmad-auto"
 
     CSS = """
-    #runs {
+    #left {
         width: 34;
         border-right: solid $primary-darken-2;
+    }
+    #runs {
+        height: 2fr;
+        min-height: 4;
+    }
+    #sprint-tree {
+        height: 3fr;
+        min-height: 4;
+        border-top: solid $primary-darken-2;
+    }
+    #deferred {
+        height: 2fr;
+        min-height: 4;
+        border-top: solid $primary-darken-2;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     #detail {
         width: 1fr;
@@ -62,9 +78,6 @@ class BmadAutoApp(App[None]):
     }
     #journal {
         height: 1fr;
-    }
-    #sprint {
-        padding: 1 2;
     }
     """
 

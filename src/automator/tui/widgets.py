@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from rich.text import Text
-from textual.widgets import Static
+from textual.widgets import Static, Tree
 from textual.widgets.option_list import Option
+from textual.widgets.tree import TreeNode
 
 from ..model import Phase, RunState
+from ..sprintstatus import SprintStatus, Story
 from . import data
 
 STATUS_GLYPHS = {
@@ -176,3 +178,152 @@ class JournalEntryOption(Option):
 def _short(value: Any, limit: int = 60) -> str:
     s = str(value)
     return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
+# ------------------------------------------------------------- sprint tree
+
+# Story/retro statuses -> glyph + style. Statuses come from an LLM-maintained
+# file, so lookups always .get() with a "?"/dim fallback, never KeyError.
+SPRINT_GLYPHS = {
+    "done": "✓",
+    "in-progress": "▶",
+    "review": "◆",
+    "ready-for-dev": "○",
+    "backlog": "·",
+    "optional": "·",
+}
+
+SPRINT_STYLES = {
+    "done": "green",
+    "in-progress": "cyan",
+    "review": "magenta",
+    "ready-for-dev": "cyan",
+    "backlog": "dim",
+    "optional": "dim",
+}
+
+
+def sprint_story_label(story: Story) -> Text:
+    glyph = SPRINT_GLYPHS.get(story.status, "?")
+    style = SPRINT_STYLES.get(story.status, "dim")
+    return Text(f"{glyph} {story.num}-{story.slug}", style=style)
+
+
+def sprint_retro_label(status: str) -> Text:
+    glyph = SPRINT_GLYPHS.get(status, "?")
+    style = SPRINT_STYLES.get(status, "dim")
+    return Text(f"{glyph} retrospective", style=style)
+
+
+def sprint_epic_label(num: int, status: str, done: int, total: int) -> Text:
+    complete = status == "done" or (total > 0 and done == total)
+    text = Text()
+    text.append(f"Epic {num}", style="green" if complete else "bold")
+    if total:
+        text.append(f" · {done}/{total}", style="green" if complete else "dim")
+    if complete:
+        text.append(" ✓", style="green")
+    return text
+
+
+class SprintTree(Tree[str]):
+    """Sprint status as expandable epics with their stories and retro.
+
+    Refreshed every rescan tick, so updates reconcile in place: existing
+    nodes only get set_label(), which keeps expansion state and the cursor.
+    Children are rebuilt only when an epic's story set actually changes.
+    Node data is the sprint-status key ("epic-2", "2-1-slug", ...)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.show_root = False
+        self.guide_depth = 2
+        self._epic_nodes: dict[int, TreeNode[str]] = {}
+        self._epic_child_keys: dict[int, tuple[str, ...]] = {}
+        self._placeholder = True
+        self.update_sprint(None)
+
+    def _show_placeholder(self, label: str) -> None:
+        self.clear()
+        self._epic_nodes.clear()
+        self._epic_child_keys.clear()
+        self.root.add_leaf(Text(label, style="dim"))
+        self._placeholder = True
+
+    def update_sprint(self, ss: SprintStatus | None) -> None:
+        if ss is None:
+            self._show_placeholder("sprint status unavailable")
+            return
+        stories_by_epic: dict[int, list[Story]] = {}
+        for story in ss.stories:
+            stories_by_epic.setdefault(story.epic, []).append(story)
+        epic_nums = sorted(set(ss.epics) | set(stories_by_epic) | set(ss.retros))
+        if not epic_nums:
+            self._show_placeholder("no sprint data")
+            return
+        if self._placeholder:
+            self.clear()
+            self._placeholder = False
+        for num in [n for n in self._epic_nodes if n not in epic_nums]:
+            self._epic_nodes.pop(num).remove()
+            self._epic_child_keys.pop(num, None)
+        for num in epic_nums:
+            stories = stories_by_epic.get(num, [])
+            retro = ss.retros.get(num)
+            label = sprint_epic_label(
+                num,
+                ss.epics.get(num, ""),
+                sum(s.status == "done" for s in stories),
+                len(stories),
+            )
+            node = self._epic_nodes.get(num)
+            if node is None:
+                node = self.root.add(label, data=f"epic-{num}")
+                self._epic_nodes[num] = node
+            else:
+                node.set_label(label)
+            child_keys = tuple(s.key for s in stories)
+            child_labels = [sprint_story_label(s) for s in stories]
+            if retro is not None:
+                child_keys += (f"epic-{num}-retrospective",)
+                child_labels.append(sprint_retro_label(retro))
+            if self._epic_child_keys.get(num) == child_keys:
+                for child, child_label in zip(node.children, child_labels):
+                    child.set_label(child_label)
+            else:
+                node.remove_children()
+                for key, child_label in zip(child_keys, child_labels):
+                    node.add_leaf(child_label, data=key)
+                self._epic_child_keys[num] = child_keys
+
+
+# ------------------------------------------------------------ deferred work
+
+_SEVERITY_STYLES = {
+    "critical": "bold red",
+    "high": "red",
+    "medium": "yellow",
+    "low": "dim",
+}
+
+
+def deferred_line(item: data.DeferredItem) -> Text:
+    # single-line; the pane's text-wrap/text-overflow CSS truncates with "…"
+    text = Text()
+    if item.done:
+        text.append(f"{item.id} ✓ {item.title}", style="green")
+    else:
+        text.append(f"{item.id} ", style="dim")
+        text.append(item.title, style=_SEVERITY_STYLES.get(item.severity or "", ""))
+    return text
+
+
+class DeferredEntryOption(Option):
+    """One deferred-work entry as an OptionList row; carries the item so
+    selecting it can show the full entry body. option_id is the DW id when
+    unique in the ledger (used to restore the highlight across refreshes),
+    None for forgiveness when an LLM wrote duplicate ids."""
+
+    def __init__(self, item: data.DeferredItem, option_id: str | None = None) -> None:
+        super().__init__(deferred_line(item), id=option_id)
+        self.item = item

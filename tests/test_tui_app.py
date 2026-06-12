@@ -29,11 +29,12 @@ from automator.tui.screens.dashboard import DashboardScreen
 from automator.tui.screens.modals import (
     ConfirmModal,
     ConfirmResumeModal,
+    DeferredEntryModal,
     StartRunModal,
     StartSweepModal,
     TextOutputModal,
 )
-from automator.tui.widgets import RunHeader
+from automator.tui.widgets import RunHeader, SprintTree
 
 
 def make_run(
@@ -280,22 +281,151 @@ async def test_journal_jump_pins_other_sessions_log(project):
         assert "(pinned" not in log_text(screen)
 
 
-async def test_sprint_tab_shows_counts(project):
+# ----------------------------------------------------------- sprint tree pane
+
+
+async def test_sprint_tree_populates(project):
     install_bmad_config(project)
-    write_sprint(project, {"1-1-a": "done", "1-2-b": "backlog", "1-3-c": "backlog"})
-    make_run(project.project, "20260611-100000-aaaa", finished=True)
+    write_sprint(
+        project,
+        {
+            "epic-1": "in-progress",
+            "1-1-auth": "done",
+            "1-2-search": "backlog",
+            "epic-1-retrospective": "optional",
+            "epic-2": "backlog",
+            "2-1-billing": "backlog",
+        },
+    )
     app = BmadAutoApp(project.project)
     async with app.run_test() as pilot:
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         screen = dashboard(app)
+        tree = screen.query_one("#sprint-tree", SprintTree)
+        await until(pilot, lambda: len(tree.root.children) == 2)
+        epic1, epic2 = tree.root.children
+        assert "Epic 1" in str(epic1.label) and "1/2" in str(epic1.label)
+        assert "Epic 2" in str(epic2.label)
+        assert not epic1.is_expanded  # epics start collapsed
+        epic1.expand()
+        labels = [str(c.label) for c in epic1.children]
+        assert any("✓ 1-auth" in label for label in labels)  # done story, checked
+        assert any("2-search" in label for label in labels)
+        assert any("retrospective" in label for label in labels)
+        done_label = next(c.label for c in epic1.children if "auth" in str(c.label))
+        assert done_label.style == "green"
 
-        def sprint_text() -> str:
-            from textual.widgets import Static
 
-            return str(screen.query_one("#sprint", Static).content)
+async def test_sprint_tree_preserves_expansion_across_refresh(project):
+    install_bmad_config(project)
+    write_sprint(project, {"epic-1": "in-progress", "1-1-auth": "in-progress"})
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        tree = screen.query_one("#sprint-tree", SprintTree)
+        # wait past the initial placeholder for the real epic node
+        await until(pilot, lambda: "Epic 1" in str(tree.root.children[0].label))
+        node = tree.root.children[0]
+        node.expand()
+        write_sprint(project, {"epic-1": "in-progress", "1-1-auth": "done"})
+        screen._tick(force_rescan=True)
 
-        await until(pilot, lambda: "3 stories" in sprint_text())
-        assert "2 actionable" in sprint_text()
+        def story_checked() -> bool:
+            children = tree.root.children[0].children
+            return bool(children) and "✓" in str(children[0].label)
+
+        await until(pilot, story_checked)
+        assert tree.root.children[0] is node  # reconciled in place, not rebuilt
+        assert node.is_expanded
+
+
+async def test_sprint_tree_forgives_malformed_yaml(project):
+    install_bmad_config(project)
+    project.sprint_status.write_text("{ not valid yaml [")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        tree = screen.query_one("#sprint-tree", SprintTree)
+        await pilot.pause(0.2)
+        assert "sprint status unavailable" in str(tree.root.children[0].label)
+        # the app keeps polling and recovers once the file is fixed
+        write_sprint(project, {"epic-1": "backlog", "1-1-auth": "backlog"})
+        screen._tick(force_rescan=True)
+        await until(pilot, lambda: "Epic 1" in str(tree.root.children[0].label))
+
+
+# ---------------------------------------------------------- deferred work pane
+
+
+_LEDGER = (
+    "# Deferred Work\n\n"
+    "### DW-1: Fix flaky retry\n\n"
+    "origin: test, 2026-06-01\nlocation: a.py:1\n"
+    "severity: high\nreason: test.\nstatus: open\n\n"
+    "### DW-2: Polish help text\n\n"
+    "origin: test, 2026-06-01\nlocation: b.py:2\n"
+    "severity: low\nreason: test.\nstatus: done 2026-06-10\n"
+)
+
+
+def deferred_rows(deferred: OptionList) -> list[str]:
+    return [str(deferred.get_option_at_index(i).prompt) for i in range(deferred.option_count)]
+
+
+async def test_deferred_pane_lists_and_opens_modal(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(_LEDGER, encoding="utf-8")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        deferred = screen.query_one("#deferred", OptionList)
+        await until(pilot, lambda: deferred.option_count == 2)
+        rows = deferred_rows(deferred)
+        assert "DW-1" in rows[0] and "Fix flaky retry" in rows[0]
+        assert "DW-2 ✓" in rows[1]  # done entry, checked
+        done_prompt = deferred.get_option_at_index(1).prompt
+        assert all(span.style == "green" for span in done_prompt.spans)
+        deferred.focus()
+        deferred.highlighted = 0
+        await pilot.press("enter")
+        await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        statics = app.screen.query("Static")
+        assert any("location: a.py:1" in str(s.content) for s in statics)
+        await pilot.press("escape")
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+
+
+async def test_deferred_pane_preserves_highlight_across_refresh(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(_LEDGER, encoding="utf-8")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        deferred = screen.query_one("#deferred", OptionList)
+        await until(pilot, lambda: deferred.option_count == 2)
+        deferred.highlighted = 1  # DW-2
+        project.deferred_work.write_text(
+            _LEDGER.replace("status: open", "status: done 2026-06-12"), encoding="utf-8"
+        )
+        screen._tick(force_rescan=True)
+        await until(pilot, lambda: "DW-1 ✓" in deferred_rows(deferred)[0])
+        assert deferred.get_option_at_index(deferred.highlighted).id == "DW-2"
+
+
+async def test_deferred_pane_placeholder_without_ledger(project):
+    install_bmad_config(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        deferred = screen.query_one("#deferred", OptionList)
+        await until(pilot, lambda: deferred.option_count == 1)
+        assert "deferred ledger unavailable" in deferred_rows(deferred)[0]
+        assert deferred.get_option_at_index(0).disabled
 
 
 def test_cli_tui_hint_without_textual(project, monkeypatch, capsys):

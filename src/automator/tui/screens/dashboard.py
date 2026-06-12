@@ -28,15 +28,23 @@ from textual.widgets import (
     Header,
     OptionList,
     RichLog,
-    Static,
     TabbedContent,
     TabPane,
 )
+from textual.widgets.option_list import Option, OptionDoesNotExist
 
+from ... import sprintstatus
 from ...model import RunState
 from ...runs import RUNS_DIR
 from .. import data
-from ..widgets import JournalEntryOption, RunHeader, status_cell
+from ..widgets import (
+    DeferredEntryOption,
+    JournalEntryOption,
+    RunHeader,
+    SprintTree,
+    status_cell,
+)
+from .modals import DeferredEntryModal
 
 # Keep at most this many parsed journal entries per run for active-task
 # tracking; the visible pane is bounded separately per widget.
@@ -47,6 +55,8 @@ _MAX_JOURNAL_OPTIONS = 2000  # visible journal rows kept in the OptionList
 _RESCAN_EVERY = 3  # run-list + sprint rescan cadence, in 1s ticks
 
 _LAUNCH_TIMEOUT = 10.0  # seconds before a pending launch is presumed failed
+
+_UNAPPLIED: Any = object()  # "no snapshot applied yet" for the identity gates
 
 
 class _PollContext:
@@ -71,8 +81,9 @@ class _PollContext:
 class _Snapshot:
     generation: int
     runs: list[data.RunInfo] | None = None  # None: no rescan this tick
-    sprint_refreshed: bool = False
-    sprint: data.SprintSummary | None = None
+    project_refreshed: bool = False  # sprint + deferred rescanned this tick
+    sprint: sprintstatus.SprintStatus | None = None
+    deferred: list[data.DeferredItem] | None = None
     has_run: bool = False
     run_id: str = ""
     status: str = data.UNKNOWN
@@ -104,6 +115,11 @@ class DashboardScreen(Screen[None]):
         self._pending_run: str | None = None  # just-launched run, no state.json yet
         self._pending_deadline = 0.0
         self._decision: tuple[str, str] | None = None
+        # identity gates: the stat-gated readers return the same object while
+        # the file is unchanged, so `is` detects "nothing to repaint"; the
+        # sentinel makes the first snapshot always paint (even a None one)
+        self._last_sprint: Any = _UNAPPLIED
+        self._last_deferred: Any = _UNAPPLIED
         # journal -> log jump state, all owned by the UI thread
         self._log_index: data.LogIndex | None = None
         self._displayed_log_task: str | None = None
@@ -113,7 +129,10 @@ class DashboardScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield DataTable(id="runs", cursor_type="row")
+            with Vertical(id="left"):
+                yield DataTable(id="runs", cursor_type="row")
+                yield SprintTree("sprint", id="sprint-tree")
+                yield OptionList(id="deferred")
             with Vertical(id="detail"):
                 yield RunHeader(id="runheader")
                 yield DataTable(id="tasks", cursor_type="row")
@@ -124,8 +143,6 @@ class DashboardScreen(Screen[None]):
                         # headroom over the render's 2000-line history cap so
                         # the header row is never silently dropped at capacity
                         yield RichLog(id="log", max_lines=2048, auto_scroll=True)
-                    with TabPane("Sprint", id="tab-sprint"):
-                        yield Static(id="sprint")
                     with TabPane("Attention", id="tab-attention"):
                         yield RichLog(id="attention", max_lines=500, auto_scroll=True)
         yield Footer()
@@ -197,11 +214,14 @@ class DashboardScreen(Screen[None]):
     # ----------------------------------------------------- journal -> log jump
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id != "journal":
-            return
-        entry = getattr(event.option, "entry", None)
-        if entry is not None:
-            self._jump_to_log_event(entry)
+        if event.option_list.id == "journal":
+            entry = getattr(event.option, "entry", None)
+            if entry is not None:
+                self._jump_to_log_event(entry)
+        elif event.option_list.id == "deferred":
+            item = getattr(event.option, "item", None)
+            if item is not None:
+                self.app.push_screen(DeferredEntryModal(item))
 
     def _jump_to_log_event(self, entry: dict[str, Any]) -> None:
         task, pos = entry.get("log_task"), entry.get("log_pos")
@@ -270,8 +290,9 @@ class DashboardScreen(Screen[None]):
         snap = _Snapshot(generation=generation)
         if rescan:
             snap.runs = data.discover_runs(self.project)
-            snap.sprint_refreshed = True
-            snap.sprint = data.sprint_summary(self.project)
+            snap.project_refreshed = True
+            snap.sprint = data.sprint_overview(self.project)
+            snap.deferred = data.deferred_entries(self.project)
         if ctx is not None:
             snap.has_run = True
             snap.run_id = ctx.run_dir.name
@@ -312,8 +333,9 @@ class DashboardScreen(Screen[None]):
     def _apply(self, snap: _Snapshot) -> None:
         if snap.runs is not None:
             self._apply_runs(snap.runs)
-        if snap.sprint_refreshed:
-            self._apply_sprint(snap.sprint)
+        if snap.project_refreshed:
+            self._apply_sprint_tree(snap.sprint)
+            self._apply_deferred(snap.deferred)
         if not snap.has_run or snap.generation != self._generation:
             return  # selection changed mid-poll: per-run parts are stale
 
@@ -442,19 +464,32 @@ class DashboardScreen(Screen[None]):
                 table.add_row(key, *cells.values(), key=key)
                 self._task_rows.add(key)
 
-    def _apply_sprint(self, summary: data.SprintSummary | None) -> None:
-        widget = self.query_one("#sprint", Static)
-        if summary is None:
-            widget.update(
-                Text(
-                    "sprint status unavailable — is this an initialized BMAD project?",
-                    style="dim",
-                )
-            )
+    def _apply_sprint_tree(self, ss: sprintstatus.SprintStatus | None) -> None:
+        if ss is self._last_sprint:
             return
-        text = Text()
-        text.append(f"{summary.total} stories", style="bold")
-        text.append(f"  ·  {summary.actionable} actionable\n\n", style="green")
-        for status, count in sorted(summary.by_status.items(), key=lambda kv: -kv[1]):
-            text.append(f"  {status:24s} {count}\n")
-        widget.update(text)
+        self._last_sprint = ss
+        self.query_one("#sprint-tree", SprintTree).update_sprint(ss)
+
+    def _apply_deferred(self, items: list[data.DeferredItem] | None) -> None:
+        if items is self._last_deferred:
+            return
+        self._last_deferred = items
+        deferred = self.query_one("#deferred", OptionList)
+        highlighted_id: str | None = None
+        if deferred.highlighted is not None:
+            highlighted_id = deferred.get_option_at_index(deferred.highlighted).id
+        deferred.clear_options()
+        if not items:
+            label = "no deferred work" if items is not None else "deferred ledger unavailable"
+            deferred.add_option(Option(Text(label, style="dim"), disabled=True))
+            return
+        seen_ids: set[str] = set()
+        for item in items:
+            option_id = item.id if item.id not in seen_ids else None
+            seen_ids.add(item.id)
+            deferred.add_option(DeferredEntryOption(item, option_id))
+        if highlighted_id is not None:
+            try:
+                deferred.highlighted = deferred.get_option_index(highlighted_id)
+            except OptionDoesNotExist:
+                pass

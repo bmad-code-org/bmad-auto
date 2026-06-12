@@ -26,9 +26,16 @@ highest existing number. One entry per deferred item:
 
 origin: <workflow + artifact + date, e.g. "bmad-auto-dev split of spec-3-2-digest.md, 2026-06-12">
 location: <file:line or component, or "n/a" for deferred goals>
+severity: <critical | high | medium | low — how much it matters if never done>
 reason: <why this was deferred rather than done now, one or two sentences>
 status: open
 ```
+
+`severity:` is optional — entries written before this field existed have none
+and that is fine; readers must treat a missing or unrecognized value as
+"unspecified". Use `critical` for correctness/security issues, `high` for
+likely user-visible problems, `medium` for quality and robustness gaps, `low`
+for polish and nice-to-haves.
 
 When a deferred item is later completed, set its `status:` to `done` with the
 date (e.g. `status: done 2026-06-20`) — do not delete the entry.

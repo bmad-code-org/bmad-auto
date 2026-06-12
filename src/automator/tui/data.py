@@ -16,6 +16,7 @@ from __future__ import annotations
 import bisect
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections import deque
@@ -27,7 +28,7 @@ import pyte
 from rich.style import Style
 from rich.text import Text
 
-from .. import bmadconfig, sprintstatus
+from .. import bmadconfig, deferredwork, sprintstatus
 from ..gates import ATTENTION_FILE
 from ..journal import JOURNAL_FILE, LOGS_DIR, STATE_FILE, load_state
 from ..model import RunState
@@ -520,59 +521,118 @@ def pending_decision(journal_entries: list[dict[str, Any]]) -> tuple[str, str] |
     return str(last.get("dw_id", "?")), str(last.get("question", ""))
 
 
-# ------------------------------------------------------------ sprint status
-
-
-@dataclass(frozen=True)
-class SprintSummary:
-    total: int
-    actionable: int
-    by_status: dict[str, int]
-
+# --------------------------------------------- project-level artifact readers
 
 # project root -> (config.yaml sig, ProjectPaths)
 _paths_cache: dict[Path, tuple[_StatSig, bmadconfig.ProjectPaths]] = {}
-# sprint-status.yaml path -> (sig or None for missing, summary or None)
-_sprint_cache: dict[Path, tuple[_StatSig | None, SprintSummary | None]] = {}
+# sprint-status.yaml path -> (sig or None for missing, parse or None)
+_sprint_cache: dict[Path, tuple[_StatSig | None, sprintstatus.SprintStatus | None]] = {}
+# deferred-work.md path -> (sig or None for missing, items or None)
+_deferred_cache: dict[Path, tuple[_StatSig | None, list[DeferredItem] | None]] = {}
 
 
-def sprint_summary(project: Path) -> SprintSummary | None:
-    """Story counts from sprint-status.yaml, or None when unavailable
-    (uninitialized project, missing file, bad YAML). Stat-gated on both
-    config.yaml and the sprint file."""
+def _project_paths(project: Path) -> bmadconfig.ProjectPaths | None:
+    """BMAD artifact paths, stat-gated on config.yaml; None when the project
+    is not initialized (or the config is unreadable)."""
     project = project.resolve()
     config_sig = _stat_sig(project / "_bmad" / "bmm" / "config.yaml")
     cached_paths = _paths_cache.get(project)
     if config_sig is not None and cached_paths is not None and cached_paths[0] == config_sig:
-        paths = cached_paths[1]
-    else:
-        try:
-            paths = bmadconfig.load_paths(project)
-        except bmadconfig.BmadConfigError:
-            return None
-        if config_sig is not None:
-            _paths_cache[project] = (config_sig, paths)
+        return cached_paths[1]
+    try:
+        paths = bmadconfig.load_paths(project)
+    except (bmadconfig.BmadConfigError, OSError):
+        return None
+    if config_sig is not None:
+        _paths_cache[project] = (config_sig, paths)
+    return paths
 
+
+def sprint_overview(project: Path) -> sprintstatus.SprintStatus | None:
+    """Parsed sprint-status.yaml, or None when unavailable (uninitialized
+    project, missing file, bad YAML). Stat-gated on both config.yaml and the
+    sprint file; the same object is returned while the file is unchanged."""
+    paths = _project_paths(project)
+    if paths is None:
+        return None
     sprint_path = paths.sprint_status
     sig = _stat_sig(sprint_path)
     cached = _sprint_cache.get(sprint_path)
     if cached is not None and cached[0] == sig:
         return cached[1]
-    summary: SprintSummary | None = None
+    overview: sprintstatus.SprintStatus | None = None
     if sig is not None:
         try:
-            ss = sprintstatus.load(sprint_path)
-        except sprintstatus.SprintStatusError:
-            summary = None
+            overview = sprintstatus.load(sprint_path)
+        except (sprintstatus.SprintStatusError, OSError):
+            overview = None
+    _sprint_cache[sprint_path] = (sig, overview)
+    return overview
+
+
+@dataclass(frozen=True)
+class DeferredItem:
+    id: str
+    title: str
+    status: str
+    done: bool
+    severity: str | None  # normalized: critical/high/medium/low, None unknown
+    body: str
+
+
+# The ledger is LLM-written, so severity is extracted forgivingly: any
+# `severity:`/`priority:` field line, any case, common synonyms accepted.
+_SEVERITY_RE = re.compile(
+    r"^(?:severity|priority)\s*:\s*([A-Za-z][\w-]*)", re.IGNORECASE | re.MULTILINE
+)
+_SEVERITY_ALIASES = {
+    "critical": "critical",
+    "blocker": "critical",
+    "high": "high",
+    "major": "high",
+    "medium": "medium",
+    "med": "medium",
+    "moderate": "medium",
+    "low": "low",
+    "minor": "low",
+    "trivial": "low",
+}
+
+
+def _severity(body: str) -> str | None:
+    m = _SEVERITY_RE.search(body)
+    return _SEVERITY_ALIASES.get(m.group(1).lower()) if m else None
+
+
+def deferred_entries(project: Path) -> list[DeferredItem] | None:
+    """All entries from deferred-work.md in file order, or None when
+    unavailable (uninitialized project, missing/unreadable file). Stat-gated;
+    the same list object is returned while the file is unchanged."""
+    paths = _project_paths(project)
+    if paths is None:
+        return None
+    ledger_path = paths.deferred_work
+    sig = _stat_sig(ledger_path)
+    cached = _deferred_cache.get(ledger_path)
+    if cached is not None and cached[0] == sig:
+        return cached[1]
+    items: list[DeferredItem] | None = None
+    if sig is not None:
+        try:
+            text = ledger_path.read_text(encoding="utf-8")
+        except OSError:
+            items = None
         else:
-            by_status: dict[str, int] = {}
-            for story in ss.stories:
-                by_status[story.status] = by_status.get(story.status, 0) + 1
-            actionable = sum(
-                n for s, n in by_status.items() if s in sprintstatus.ACTIONABLE_STATUSES
-            )
-            summary = SprintSummary(
-                total=len(ss.stories), actionable=actionable, by_status=by_status
-            )
-    _sprint_cache[sprint_path] = (sig, summary)
-    return summary
+            items = [
+                DeferredItem(
+                    id=e.id,
+                    title=e.title,
+                    status=e.status,
+                    done=bool(e.status) and e.status.split()[0] == "done",
+                    severity=_severity(e.body),
+                    body=e.body,
+                )
+                for e in deferredwork.parse_ledger(text)
+            ]
+    _deferred_cache[ledger_path] = (sig, items)
+    return items

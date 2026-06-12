@@ -446,10 +446,10 @@ def test_pending_decision_missing_fields():
     assert data.pending_decision([{"kind": "decision-pending"}]) == ("?", "")
 
 
-# ------------------------------------------------------------- sprint summary
+# ------------------------------------------------------------ sprint overview
 
 
-def test_sprint_summary(project):
+def test_sprint_overview(project):
     install_bmad_config(project)
     write_sprint(
         project,
@@ -457,21 +457,94 @@ def test_sprint_summary(project):
             "epic-1": "in-progress",
             "1-1-a": "ready-for-dev",
             "1-2-b": "done",
-            "1-3-c": "backlog",
+            "epic-1-retrospective": "optional",
+            "epic-2": "backlog",
+            "2-1-c": "backlog",
         },
     )
-    summary = data.sprint_summary(project.project)
-    assert summary.total == 3
-    assert summary.actionable == 2
-    assert summary.by_status == {"ready-for-dev": 1, "done": 1, "backlog": 1}
+    ss = data.sprint_overview(project.project)
+    assert ss.epics == {1: "in-progress", 2: "backlog"}
+    assert [(s.key, s.status) for s in ss.stories] == [
+        ("1-1-a", "ready-for-dev"),
+        ("1-2-b", "done"),
+        ("2-1-c", "backlog"),
+    ]
+    assert ss.retros == {1: "optional"}
 
-    # cached result until the file changes, then re-parsed
-    assert data.sprint_summary(project.project) is summary
+    # cached result (same object) until the file changes, then re-parsed
+    assert data.sprint_overview(project.project) is ss
     write_sprint(project, {"1-1-a": "done"})
-    assert data.sprint_summary(project.project).total == 1
+    assert [s.status for s in data.sprint_overview(project.project).stories] == ["done"]
 
 
-def test_sprint_summary_unavailable(tmp_path, project):
-    assert data.sprint_summary(tmp_path) is None  # no _bmad config at all
+def test_sprint_overview_unavailable(tmp_path, project):
+    assert data.sprint_overview(tmp_path) is None  # no _bmad config at all
     install_bmad_config(project)  # config but no sprint file
-    assert data.sprint_summary(project.project) is None
+    assert data.sprint_overview(project.project) is None
+
+    # LLM-maintained file: malformed content must come back None, not raise
+    project.sprint_status.write_text("{ not: valid: yaml: [")
+    assert data.sprint_overview(project.project) is None
+    project.sprint_status.write_text("- just\n- a\n- list\n")
+    assert data.sprint_overview(project.project) is None
+
+
+# ------------------------------------------------------------- deferred work
+
+
+def test_deferred_entries(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(
+        "# Deferred Work\n\n"
+        "### DW-1: High severity item\n\n"
+        "origin: test, 2026-06-01\nlocation: src.txt:1\n"
+        "severity: high\nreason: test.\nstatus: open\n\n"
+        "### DW-2: Critical via priority alias\n\n"
+        "origin: test, 2026-06-01\nlocation: src.txt:2\n"
+        "Priority: CRITICAL\nreason: test.\nstatus: open\n\n"
+        "### DW-3: No severity at all\n\n"
+        "origin: test, 2026-06-01\nlocation: src.txt:3\n"
+        "reason: test.\nstatus: open\n\n"
+        "### DW-4: Junk severity, already done\n\n"
+        "origin: test, 2026-06-01\nlocation: src.txt:4\n"
+        "severity: banana\nreason: test.\nstatus: done 2026-06-10\n\n"
+        "### DW-5: No status line\n\n"
+        "origin: test, 2026-06-01\nlocation: src.txt:5\nreason: test.\n",
+        encoding="utf-8",
+    )
+    items = data.deferred_entries(project.project)
+    assert [(i.id, i.severity, i.done) for i in items] == [
+        ("DW-1", "high", False),
+        ("DW-2", "critical", False),
+        ("DW-3", None, False),
+        ("DW-4", None, True),
+        ("DW-5", None, False),
+    ]
+    assert items[0].title == "High severity item"
+    assert "origin: test" in items[0].body
+
+    # cached result (same object) until the file changes, then re-parsed
+    assert data.deferred_entries(project.project) is items
+    project.deferred_work.write_text("# Deferred Work\n\nfreeform, no entries\n")
+    assert data.deferred_entries(project.project) == []
+
+
+def test_deferred_entries_unavailable(tmp_path, project):
+    assert data.deferred_entries(tmp_path) is None  # no _bmad config at all
+    install_bmad_config(project)  # config but no ledger file
+    assert data.deferred_entries(project.project) is None
+
+
+def test_severity_extraction():
+    cases = {
+        "severity: high\n": "high",
+        "Severity: HIGH\n": "high",
+        "priority: blocker\n": "critical",
+        "severity: med\n": "medium",
+        "severity:low\n": "low",
+        "severity: banana\n": None,
+        "no field here\n": None,
+        "the word severity: high inline does not count\n": None,
+    }
+    for body, expected in cases.items():
+        assert data._severity(f"### DW-9: t\n\n{body}status: open\n") == expected, body

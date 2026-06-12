@@ -31,9 +31,10 @@ The TUI never runs an engine in-process. The two halves:
 - **Observer** — the dashboard reads only the artifacts the engine writes
   atomically into `.automator/runs/<run-id>/`: `state.json`, `journal.jsonl`,
   `logs/<task-id>.log`, `ATTENTION`, `engine.pid`. It polls the selected run
-  every second (run list and sprint status every 3 seconds) with stat-gated
-  readers, so unchanged files are never re-parsed. Runs started from a plain
-  shell show up identically — the TUI has no privileged channel.
+  every second (run list, sprint status, and the deferred-work ledger every 3
+  seconds) with stat-gated readers, so unchanged files are never re-parsed.
+  Runs started from a plain shell show up identically — the TUI has no
+  privileged channel.
 
 Fast read-only commands (`validate`, dry runs) are the exception: they are
 captured and shown in a scrollable modal instead of spawned in tmux.
@@ -45,24 +46,62 @@ captured and shown in a scrollable modal instead of spawned in tmux.
 │ st run              type │ 20260611-091500-3f2a  ▶ running             │
 │ ✔  20260610-…       story│ started 2026-06-11T09:15:00  epic 2         │
 │ ▶  20260611-…       story│ tasks 8  done 5  deferred 1  escalated 0    │
-│                          ├─────────────────────────────────────────────┤
-│        run list          │ story         phase           dev review …  │
-│                          │ 2-3-billing   review-running  ×1  ×2     …  │
-│                          ├─────────────────────────────────────────────┤
-│                          │ Journal │ Log │ Sprint │ Attention          │
-│                          │ 09:15:02 session-start   task_id=…          │
+├──────────────────────────┤─────────────────────────────────────────────┤
+│ ▼ Epic 1 · 4/4 ✓         │ story         phase           dev review …  │
+│ ▼ Epic 2 · 1/3           │ 2-3-billing   review-running  ×1  ×2     …  │
+│   ✓ 1-auth               ├─────────────────────────────────────────────┤
+│   ▶ 2-search             │ Journal │ Log │ Attention                   │
+├──────────────────────────┤ 09:15:02 session-start   task_id=…          │
+│ DW-1 Fix flaky retry     │                                             │
+│ DW-2 ✓ Polish help text  │                                             │
 ├──────────────────────────┴─────────────────────────────────────────────┤
 │ q quit  r run  s sweep  e resume  a attach  v validate  g settings  …  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Run list (left)
+### Left column
+
+Three stacked panes; `tab` / `shift+tab` move focus between them. The sprint
+and deferred panes read project-level files maintained by LLM sessions
+(`sprint-status.yaml`, `deferred-work.md`), so both parse forgivingly: a
+missing or malformed file shows a dim placeholder instead of an error, and
+the pane recovers on the next poll once the file is readable again.
+
+#### Run list (top)
 
 One row per run dir under `.automator/runs/`, oldest first (run ids are
 `YYYYMMDD-HHMMSS-<hex>` and sort chronologically). Columns: `st` (status
 glyph, see below), `run` (the id), `type` (`story` or `sweep`). On first load
 the newest run is auto-selected; arrow keys or mouse select another. A run you
 just launched is selected immediately, before its directory even exists.
+
+#### Sprint tree (middle)
+
+Sprint status from `sprint-status.yaml` as one expandable node per epic —
+`Epic N · done/total`, fully green with a `✓` once every story is done.
+Enter (or click) expands an epic to its stories and retrospective, each with
+a status glyph:
+
+| Glyph | Status                     | Color   |
+| ----- | -------------------------- | ------- |
+| `✓`   | done                       | green   |
+| `▶`   | in-progress                | cyan    |
+| `◆`   | review                     | magenta |
+| `○`   | ready-for-dev              | cyan    |
+| `·`   | backlog / optional (retro) | dim     |
+| `?`   | anything unrecognized      | dim     |
+
+Expansion state and the cursor survive the 3-second refresh — only labels are
+updated in place unless an epic's story set actually changes.
+
+#### Deferred work (bottom)
+
+Every entry from the `deferred-work.md` ledger, in file order: `DW-<n>` plus
+the title, truncated to the pane width. Done entries are green with a `✓`;
+open entries are color-coded by the entry's optional `severity:` field —
+critical (bold red), high (red), medium (yellow), low (dim), unspecified
+(plain). Arrow keys navigate; `enter` opens the full entry body in a
+scrollable modal (`escape` closes).
 
 ### Run header (top right)
 
@@ -106,9 +145,6 @@ One row per story (or sweep bundle/triage task) in the selected run:
   (falling back to the newest log file); the tab switches automatically when
   the engine moves to the next session. Only the last 64 KB of a large log is
   read on first open.
-- **Sprint** — story counts from sprint-status.yaml: total, actionable, and a
-  per-status breakdown. Shows "sprint status unavailable" in an uninitialized
-  project.
 - **Attention** — the run's `ATTENTION` file (escalations, gate
   notifications). New lines after the first poll also fire a warning toast.
 
@@ -299,7 +335,8 @@ buttons and block the save. The write itself is atomic (temp file +
 | `cannot suspend here — run manually: tmux attach …`                                 | the terminal can't suspend the TUI; run the printed command in another terminal                                                    |
 | `engine.pid is still alive — resuming would double-drive this run`                  | the original engine still runs (or its pid was recycled); attach and check before resuming                                         |
 | `policy.toml is not valid TOML: …`                                                  | hand-edited file is syntactically broken; fix it in an editor — the settings screen needs a parseable document to start from       |
-| `sprint status unavailable — is this an initialized BMAD project?`                  | missing/invalid `_bmad/bmm/config.yaml` or sprint-status.yaml; run `bmad-auto init` / `bmad-sprint-planning`                       |
+| sprint tree shows `sprint status unavailable`                                       | missing/invalid `_bmad/bmm/config.yaml` or sprint-status.yaml; run `bmad-auto init` / `bmad-sprint-planning`                       |
+| deferred pane shows `deferred ledger unavailable`                                   | missing/unreadable `deferred-work.md`; normal until the first session defers something                                             |
 | header shows `state unavailable`                                                    | the run dir exists but `state.json` is missing or never parsed; usually transient at launch                                        |
 
 Degradation is graceful by design: a mid-write or missing file never crashes a

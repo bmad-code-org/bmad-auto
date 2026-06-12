@@ -16,6 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Static
 
 from ...model import RunState
+from .. import data
 
 
 def _int_or_none(value: str) -> int | None:
@@ -175,6 +176,45 @@ class ConfirmResumeModal(ConfirmModal):
             else None
         )
         super().__init__("resume run", body, confirm_label="resume", warning=warning)
+
+
+class DeferredEntryModal(BaseDialog):
+    """Full body of one deferred-work entry. The ledger is LLM-written
+    markdown, so the body renders as plain Text, never markup."""
+
+    DEFAULT_CSS = """
+    DeferredEntryModal #dialog {
+        width: 96;
+        height: 80%;
+    }
+    DeferredEntryModal #entry {
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, item: data.DeferredItem):
+        super().__init__()
+        self._item = item
+
+    def compose(self) -> ComposeResult:
+        item = self._item
+        title = Text()
+        title.append(f"{item.id} — {item.title}", style="bold")
+        if item.done:
+            title.append("  ✓ done", style="green")
+        with Vertical(id="dialog"):
+            yield Static(title, classes="title")
+            with VerticalScroll(id="entry"):
+                body = item.body.strip()
+                if body:
+                    yield Static(Text(body))
+                else:
+                    yield Static(Text("(empty entry)", style="dim"))
+            with Horizontal(classes="buttons"):
+                yield Button("close", variant="primary", id="ok")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
 
 
 class TextOutputModal(BaseDialog):

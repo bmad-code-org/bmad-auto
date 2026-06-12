@@ -39,7 +39,7 @@ If `{spec_file}` exists and contains a Tasks/Subtasks section, append a `### Rev
 3. **`defer`** findings (checked off, marked deferred):
    `- [x] [Review][Defer] <Title> [<file>:<line>] — deferred, pre-existing`
 
-Also append each `defer` finding to `{deferred_work_file}` as a `DW-<seq>` entry following the format and dedupe rule in the `bmad-auto-dev` skill's `deferred-work-format.md` (sibling skill directory). Use `origin: code review of <spec basename>, {date}`.
+Also append each `defer` finding to `{deferred_work_file}` as a `DW-<seq>` entry following the format and dedupe rule in the `bmad-auto-dev` skill's `deferred-work-format.md` (sibling skill directory). Use `origin: code review of <spec basename>, {date}`, and set the entry's `severity:` from the finding's own severity.
 
 Then append a `#### Review Ledger ({date})` subsection recording every triaged
 finding on one line each — `<verdict>: <title> [<location>] — <one-line reason>`
