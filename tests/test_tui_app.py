@@ -281,6 +281,73 @@ async def test_journal_jump_pins_other_sessions_log(project):
         assert "(pinned" not in log_text(screen)
 
 
+async def test_journal_jump_near_tail_does_not_chase_growing_log(project):
+    # Regression for "pressing enter keeps sending me to the bottom": jumping to
+    # an entry near the end lands the view at the tail, and the old code then
+    # inferred "follow the tail" from that, dragging the view down on every poll
+    # as the live log grew. A jump must anchor the position until esc is pressed.
+    root = project.project
+    run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
+    offsets = write_numbered_log(run_dir, "story-1")
+    journal = Journal(run_dir)
+    journal.set_active_log("story-1")
+    journal.append("session-start", task_id="story-1")
+    journal.append("checkpoint", log_task="story-1", log_pos=offsets[-1])  # the last row
+    app = BmadAutoApp(root)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
+        journal_list = screen.query_one("#journal", OptionList)
+        await until(pilot, lambda: journal_list.option_count == 2)
+        journal_list.focus()
+        await pilot.press("end", "enter")  # jump to the near-tail checkpoint
+        log = screen.query_one("#log", RichLog)
+        await until(pilot, lambda: log.is_vertical_scroll_end)  # landed at the tail
+        anchored, base_max = log.scroll_y, log.max_scroll_y
+        # the live session keeps writing; a poll repaints the pane
+        with (run_dir / "logs" / "story-1.log").open("ab") as f:
+            for i in range(200, 260):
+                f.write(f"row {i:03d}\r\n".encode())
+        screen._tick(force_rescan=False)
+        await until(pilot, lambda: log.max_scroll_y > base_max)  # new lines rendered
+        assert round(log.scroll_y) == round(anchored)  # stayed put, did not chase the tail
+        assert log.scroll_y < log.max_scroll_y
+
+
+async def test_poll_skips_while_another_holds_the_lock(project):
+    # Regression: exclusive=True cannot stop a running thread worker, so the
+    # screen lock must make a second poll bail instead of mutating shared ctx
+    # (two threads feeding ctx.log's pyte stream crashed the TUI).
+    root = project.project
+    run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
+    write_numbered_log(run_dir, "story-1", count=30)
+    journal = Journal(run_dir)
+    journal.set_active_log("story-1")
+    journal.append("session-start", task_id="story-1")
+    app = BmadAutoApp(root)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
+        ctx = screen._ctx
+        assert ctx is not None
+        await until(pilot, lambda: len(ctx.entries) == 1)
+        # Stand in for an in-flight worker. Acquire without blocking and yield
+        # to the loop until we win it — a blocking acquire on the event-loop
+        # thread would deadlock against a real poll worker that holds the lock
+        # while waiting on call_from_thread(_apply).
+        await until(pilot, lambda: screen._poll_lock.acquire(blocking=False))
+        try:
+            before = list(ctx.entries)
+            journal.append("checkpoint", log_task="story-1", log_pos=0)  # new entry on disk
+            worker = screen._poll(ctx, screen._generation, False, None)
+            await worker.wait()
+            assert ctx.entries == before  # guarded body never ran
+        finally:
+            screen._poll_lock.release()
+
+
 # ----------------------------------------------------------- sprint tree pane
 
 
@@ -572,8 +639,10 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
         await pilot.click("#ok")
         await until(
             pilot,
-            lambda: isinstance(app.screen, ConfirmModal)
-            and not isinstance(app.screen, ConfirmResumeModal),
+            lambda: (
+                isinstance(app.screen, ConfirmModal)
+                and not isinstance(app.screen, ConfirmResumeModal)
+            ),
         )
         await pilot.click("#ok")
         await until(pilot, lambda: bool(calls))

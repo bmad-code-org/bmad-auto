@@ -11,6 +11,7 @@ selection-independent and is always applied.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,9 +62,13 @@ _UNAPPLIED: Any = object()  # "no snapshot applied yet" for the identity gates
 
 class _PollContext:
     """Mutable state for polling one selected run. Constructed on the UI
-    thread (constructors do no I/O), then mutated only inside the poll worker
-    — exclusive=True serializes workers, and a superseded worker holds the
-    previous context object, never this one."""
+    thread (constructors do no I/O), then mutated only inside the poll worker.
+
+    Forced ticks (journal jumps, run select) reuse self._ctx, so a superseded
+    worker can still hold THIS object — and exclusive=True cannot stop a
+    running thread, only mark it cancelled. The screen's _poll_lock therefore
+    serializes worker bodies so this state (and ctx.log's pyte stream) is never
+    mutated by two threads at once."""
 
     def __init__(self, run_dir: Path):
         self.run_dir = run_dir
@@ -120,11 +125,16 @@ class DashboardScreen(Screen[None]):
         # sentinel makes the first snapshot always paint (even a None one)
         self._last_sprint: Any = _UNAPPLIED
         self._last_deferred: Any = _UNAPPLIED
+        # serializes the poll worker body: exclusive=True marks superseded
+        # thread workers cancelled but cannot stop them, so without this two
+        # threads could feed ctx.log's pyte stream at once (crash)
+        self._poll_lock = threading.Lock()
         # journal -> log jump state, all owned by the UI thread
         self._log_index: data.LogIndex | None = None
         self._displayed_log_task: str | None = None
         self._pin_task: str | None = None  # show this task's log instead of the active one
         self._pending_jump: tuple[str, int] | None = None  # (task_id, log_pos)
+        self._log_follow_tail = True  # stick to newest log lines until a jump pins us
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -199,6 +209,7 @@ class DashboardScreen(Screen[None]):
         self._displayed_log_task = None
         self._pin_task = None
         self._pending_jump = None
+        self._log_follow_tail = True
         tasks = self.query_one("#tasks", DataTable)
         tasks.clear()
         self._task_rows.clear()
@@ -239,6 +250,7 @@ class DashboardScreen(Screen[None]):
             return
         task, pos = str(task), int(pos)
         self.query_one("#tabs", TabbedContent).active = "tab-log"
+        self._log_follow_tail = False  # anchor on the jump target, stop chasing the tail
         if task == self._displayed_log_task and self._log_index is not None:
             self._scroll_log_to(self._log_index.line_for_offset(pos))
             return
@@ -271,6 +283,7 @@ class DashboardScreen(Screen[None]):
             return
         self._pin_task = None
         self._pending_jump = None
+        self._log_follow_tail = True
         self._tick(force_rescan=False)
 
     # --------------------------------------------------------------- polling
@@ -286,6 +299,12 @@ class DashboardScreen(Screen[None]):
         if force_rescan is None:
             force_rescan = self._tick_count % _RESCAN_EVERY == 0
             self._tick_count += 1
+        if self._poll_lock.locked():
+            # a worker is still running; launching now would just bail on the
+            # lock, so retry shortly instead of dropping this tick (a forced
+            # navigation tick would otherwise wait up to a full interval)
+            self.set_timer(0.1, lambda: self._tick(force_rescan))
+            return
         # the pin is read here on the UI thread; ctx stays worker-owned
         self._poll(self._ctx, self._generation, force_rescan, self._pin_task)
 
@@ -293,46 +312,55 @@ class DashboardScreen(Screen[None]):
     def _poll(
         self, ctx: _PollContext | None, generation: int, rescan: bool, pin: str | None
     ) -> None:
-        snap = _Snapshot(generation=generation)
-        if rescan:
-            snap.runs = data.discover_runs(self.project)
-            snap.project_refreshed = True
-            snap.sprint = data.sprint_overview(self.project)
-            snap.deferred = data.deferred_entries(self.project)
-        if ctx is not None:
-            snap.has_run = True
-            snap.run_id = ctx.run_dir.name
-            snap.state = ctx.watcher.state()
-            snap.status = ctx.watcher.status()
-            snap.new_entries = ctx.journal.read_new()
-            ctx.entries.extend(snap.new_entries)
-            del ctx.entries[:-_MAX_ENTRIES]
-            snap.decision = data.pending_decision(ctx.entries)
-            if snap.decision is not None and ctx.decision_toasted != snap.decision[0]:
-                snap.toast_decision = True
-            ctx.decision_toasted = snap.decision[0] if snap.decision else None
-            task = pin or data.active_task_id(ctx.run_dir, ctx.entries)
-            snap.log_pinned = pin is not None
-            if task != ctx.log_task:
-                ctx.log_task = task
-                ctx.log = (
-                    data.LogView(ctx.run_dir / data.LOGS_DIR / f"{task}.log") if task else None
-                )
-                snap.log_reset = True
-            snap.log_task = task
-            if ctx.log is not None and (ctx.log.read_new() or snap.log_reset):
-                snap.log_lines = ctx.log.render()
-                snap.log_index = ctx.log.index()
-            attention = ctx.watcher.attention()
-            if len(attention) < ctx.attention_seen:
-                snap.attention_reset = True
-                snap.new_attention = attention
-            else:
-                snap.new_attention = attention[ctx.attention_seen :]
-            ctx.attention_seen = len(attention)
-            snap.toast_attention = bool(snap.new_attention.strip()) and not ctx.first_poll
-            ctx.first_poll = False
-        self.app.call_from_thread(self._apply, snap)
+        # A superseded thread worker keeps running until it returns, so guard
+        # the whole body: only one poll may touch ctx (and ctx.log's pyte
+        # stream) at a time. Skipped ticks are safe — _pin_task/_pending_jump
+        # persist on the screen and the next tick reapplies them.
+        if not self._poll_lock.acquire(blocking=False):
+            return
+        try:
+            snap = _Snapshot(generation=generation)
+            if rescan:
+                snap.runs = data.discover_runs(self.project)
+                snap.project_refreshed = True
+                snap.sprint = data.sprint_overview(self.project)
+                snap.deferred = data.deferred_entries(self.project)
+            if ctx is not None:
+                snap.has_run = True
+                snap.run_id = ctx.run_dir.name
+                snap.state = ctx.watcher.state()
+                snap.status = ctx.watcher.status()
+                snap.new_entries = ctx.journal.read_new()
+                ctx.entries.extend(snap.new_entries)
+                del ctx.entries[:-_MAX_ENTRIES]
+                snap.decision = data.pending_decision(ctx.entries)
+                if snap.decision is not None and ctx.decision_toasted != snap.decision[0]:
+                    snap.toast_decision = True
+                ctx.decision_toasted = snap.decision[0] if snap.decision else None
+                task = pin or data.active_task_id(ctx.run_dir, ctx.entries)
+                snap.log_pinned = pin is not None
+                if task != ctx.log_task:
+                    ctx.log_task = task
+                    ctx.log = (
+                        data.LogView(ctx.run_dir / data.LOGS_DIR / f"{task}.log") if task else None
+                    )
+                    snap.log_reset = True
+                snap.log_task = task
+                if ctx.log is not None and (ctx.log.read_new() or snap.log_reset):
+                    snap.log_lines = ctx.log.render()
+                    snap.log_index = ctx.log.index()
+                attention = ctx.watcher.attention()
+                if len(attention) < ctx.attention_seen:
+                    snap.attention_reset = True
+                    snap.new_attention = attention
+                else:
+                    snap.new_attention = attention[ctx.attention_seen :]
+                ctx.attention_seen = len(attention)
+                snap.toast_attention = bool(snap.new_attention.strip()) and not ctx.first_poll
+                ctx.first_poll = False
+            self.app.call_from_thread(self._apply, snap)
+        finally:
+            self._poll_lock.release()
 
     # ------------------------------------------------------------ applying
 
@@ -381,12 +409,15 @@ class DashboardScreen(Screen[None]):
         if snap.log_index is not None:
             self._log_index = snap.log_index
         if snap.log_reset or snap.log_lines is not None:
-            # Cursor-up repaints rewrite earlier content, so the pane is a
-            # full re-render, not an append. Content above the live screen is
-            # stable history, so preserving scroll_y keeps a scrolled-up user
-            # anchored; only follow the tail if they were already at it.
+            # Cursor-up repaints rewrite earlier content, so the pane is a full
+            # re-render, not an append; RichLog keeps scroll_y across the
+            # clear+rewrite, so only an explicit scroll_end moves the view.
+            # Follow the tail only when the user means to (no jump has pinned
+            # them off it) — inferring it from "currently at the bottom" dragged
+            # a jump that happened to land at the tail down as the log grew.
             # (Jump targets rely on wrap=False: one render line == one row.)
-            at_end = log.is_vertical_scroll_end or snap.log_reset
+            following = self._log_follow_tail and log.is_vertical_scroll_end
+            at_end = snap.log_reset or following
             log.clear()
             if snap.log_task:
                 suffix = " (pinned — esc to follow)" if snap.log_pinned else ""
