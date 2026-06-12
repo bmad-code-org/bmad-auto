@@ -10,8 +10,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from textual.widgets import Checkbox, DataTable, Input, RichLog
-
 from automator.journal import Journal, save_state
 from automator.model import Phase, RunState, StoryTask
 from automator.runs import RUNS_DIR
@@ -27,6 +25,7 @@ from automator.tui.screens.modals import (
 )
 from automator.tui.widgets import RunHeader
 from conftest import install_bmad_config, write_sprint
+from textual.widgets import Checkbox, DataTable, Input, RichLog
 
 
 def make_run(
