@@ -164,6 +164,32 @@ def mark_ledger_done(paths: ProjectPaths, dw_ids, date: str = "2026-06-11") -> N
         deferredwork.mark_done(paths.deferred_work, dw_id, date, "built in test")
 
 
+def write_legacy_ledger(paths: ProjectPaths, text: str, commit: bool = True) -> None:
+    """Write a freeform (pre-DW-format) deferred-work ledger verbatim."""
+    paths.deferred_work.write_text(text, encoding="utf-8")
+    if commit:
+        git(paths.project, "add", "-A")
+        git(paths.project, "commit", "-q", "-m", "legacy ledger")
+
+
+def migrate_effect(paths: ProjectPaths, new_ledger_text: str, mapping):
+    """Simulate a /bmad-auto-sweep --migrate session: rewrites the ledger to
+    canonical DW format and reports the manifest-key -> dw_id mapping."""
+
+    def effect(spec: SessionSpec) -> SessionResult:
+        paths.deferred_work.write_text(new_ledger_text, encoding="utf-8")
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "deferred-sweep-migrate",
+                "mapping": list(mapping),
+                "escalations": [],
+            },
+        )
+
+    return effect
+
+
 def bundle_spec_path(paths: ProjectPaths, name: str) -> Path:
     return paths.implementation_artifacts / f"spec-dw-{name}.md"
 

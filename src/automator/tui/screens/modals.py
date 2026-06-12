@@ -202,6 +202,8 @@ class DeferredEntryModal(BaseDialog):
         title.append(f"{item.id} — {item.title}", style="bold")
         if item.done:
             title.append("  ✓ done", style="green")
+        if item.legacy:
+            title.append("  · legacy — converted to DW format on next sweep", style="dim")
         with Vertical(id="dialog"):
             yield Static(title, classes="title")
             with VerticalScroll(id="entry"):

@@ -16,7 +16,6 @@ from __future__ import annotations
 import bisect
 import json
 import os
-import re
 import shutil
 import subprocess
 from collections import deque
@@ -578,36 +577,15 @@ class DeferredItem:
     done: bool
     severity: str | None  # normalized: critical/high/medium/low, None unknown
     body: str
-
-
-# The ledger is LLM-written, so severity is extracted forgivingly: any
-# `severity:`/`priority:` field line, any case, common synonyms accepted.
-_SEVERITY_RE = re.compile(
-    r"^(?:severity|priority)\s*:\s*([A-Za-z][\w-]*)", re.IGNORECASE | re.MULTILINE
-)
-_SEVERITY_ALIASES = {
-    "critical": "critical",
-    "blocker": "critical",
-    "high": "high",
-    "major": "high",
-    "medium": "medium",
-    "med": "medium",
-    "moderate": "medium",
-    "low": "low",
-    "minor": "low",
-    "trivial": "low",
-}
-
-
-def _severity(body: str) -> str | None:
-    m = _SEVERITY_RE.search(body)
-    return _SEVERITY_ALIASES.get(m.group(1).lower()) if m else None
+    legacy: bool = False  # pre-DW-format item (older BMAD-method ledgers)
+    option_key: str | None = None  # highlight-restore identity; None -> id
 
 
 def deferred_entries(project: Path) -> list[DeferredItem] | None:
-    """All entries from deferred-work.md in file order, or None when
-    unavailable (uninitialized project, missing/unreadable file). Stat-gated;
-    the same list object is returned while the file is unchanged."""
+    """All entries from deferred-work.md in file order — canonical DW entries
+    plus tolerantly-parsed legacy items — or None when unavailable
+    (uninitialized project, missing/unreadable file). Stat-gated; the same
+    list object is returned while the file is unchanged."""
     paths = _project_paths(project)
     if paths is None:
         return None
@@ -623,16 +601,38 @@ def deferred_entries(project: Path) -> list[DeferredItem] | None:
         except OSError:
             items = None
         else:
-            items = [
-                DeferredItem(
-                    id=e.id,
-                    title=e.title,
-                    status=e.status,
-                    done=bool(e.status) and e.status.split()[0] == "done",
-                    severity=_severity(e.body),
-                    body=e.body,
+            merged: list[tuple[int, DeferredItem]] = []
+            for e in deferredwork.parse_ledger(text):
+                merged.append(
+                    (
+                        e.span[0],
+                        DeferredItem(
+                            id=e.id,
+                            title=e.title,
+                            status=e.status,
+                            done=bool(e.status) and e.status.split()[0] == "done",
+                            severity=deferredwork.field_severity(e.body),
+                            body=e.body,
+                        ),
+                    )
                 )
-                for e in deferredwork.parse_ledger(text)
-            ]
+            for n, le in enumerate(deferredwork.parse_legacy(text), start=1):
+                merged.append(
+                    (
+                        le.span[0],
+                        DeferredItem(
+                            id=le.id or f"L{n}",
+                            title=le.title,
+                            status="done (legacy)" if le.done else "open (legacy)",
+                            done=le.done,
+                            severity=le.severity,
+                            body=le.body,
+                            legacy=True,
+                            option_key=f"legacy:{le.key}",
+                        ),
+                    )
+                )
+            merged.sort(key=lambda pair: pair[0])
+            items = [item for _, item in merged]
     _deferred_cache[ledger_path] = (sig, items)
     return items

@@ -416,6 +416,37 @@ async def test_deferred_pane_preserves_highlight_across_refresh(project):
         assert deferred.get_option_at_index(deferred.highlighted).id == "DW-2"
 
 
+async def test_deferred_pane_shows_legacy_items(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(
+        "# Deferred Work\n\n"
+        "## Deferred from: epic 1 review (2026-04-06)\n\n"
+        "- ~~**Old fixed thing** — was broken, then repaired~~ → fixed in 1.3\n"
+        "- **Open legacy thing here** — still pending. [MAJOR]\n\n" + _LEDGER.split("\n\n", 1)[1],
+        encoding="utf-8",
+    )
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        deferred = screen.query_one("#deferred", OptionList)
+        await until(pilot, lambda: deferred.option_count == 4)
+        rows = deferred_rows(deferred)
+        assert "L1 ✓ Old fixed thing" in rows[0] and "·legacy" in rows[0]
+        assert "Open legacy thing here" in rows[1] and "·legacy" in rows[1]
+        assert "DW-1" in rows[2] and "·legacy" not in rows[2]
+        option = deferred.get_option_at_index(1)
+        assert option.id.startswith("legacy:")
+        deferred.focus()
+        deferred.highlighted = 1
+        await pilot.press("enter")
+        await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        statics = app.screen.query("Static")
+        assert any("legacy — converted to DW format" in str(s.content) for s in statics)
+        await pilot.press("escape")
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+
+
 async def test_deferred_pane_placeholder_without_ledger(project):
     install_bmad_config(project)
     app = BmadAutoApp(project.project)

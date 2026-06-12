@@ -52,6 +52,7 @@ class SweepPolicy:
     auto: str = "never"  # never | per-epic | run-end
     max_bundles: int = 5  # bundles executed per sweep; triage excess is truncated
     max_triage_attempts: int = 2
+    max_migration_attempts: int = 2  # legacy-ledger migration retries before escalating
 
 
 @dataclass(frozen=True)
@@ -216,13 +217,19 @@ def loads(text: str) -> Policy:
         max_triage_attempts=int(
             sweep_d.get("max_triage_attempts", SweepPolicy.max_triage_attempts)
         ),
+        max_migration_attempts=int(
+            sweep_d.get("max_migration_attempts", SweepPolicy.max_migration_attempts)
+        ),
     )
     if sweep.auto not in SWEEP_AUTO_MODES:
         raise PolicyError(
             f"sweep.auto must be one of {sorted(SWEEP_AUTO_MODES)}: got {sweep.auto!r}"
         )
-    if sweep.max_bundles < 1 or sweep.max_triage_attempts < 1:
-        raise PolicyError("sweep.max_bundles and sweep.max_triage_attempts must be >= 1")
+    if min(sweep.max_bundles, sweep.max_triage_attempts, sweep.max_migration_attempts) < 1:
+        raise PolicyError(
+            "sweep.max_bundles, sweep.max_triage_attempts and "
+            "sweep.max_migration_attempts must be >= 1"
+        )
     return Policy(
         gates=gates,
         limits=limits,
@@ -280,4 +287,5 @@ model = ""                   # empty = CLI default model
 auto = "never"               # never | per-epic | run-end (auto-triggered sweeps never prompt)
 max_bundles = 5              # bundles executed per sweep; triage excess is truncated
 max_triage_attempts = 2      # triage validation retries before escalating
+max_migration_attempts = 2   # legacy-ledger migration retries before escalating
 """

@@ -485,8 +485,9 @@ class DashboardScreen(Screen[None]):
             return
         seen_ids: set[str] = set()
         for item in items:
-            option_id = item.id if item.id not in seen_ids else None
-            seen_ids.add(item.id)
+            key = item.option_key or item.id
+            option_id = key if key not in seen_ids else None
+            seen_ids.add(key)
             deferred.add_option(DeferredEntryOption(item, option_id))
         if highlighted_id is not None:
             try:

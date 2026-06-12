@@ -7,8 +7,10 @@ from conftest import (
     bundle_review_effect,
     git,
     mark_ledger_done,
+    migrate_effect,
     triage_effect,
     write_ledger,
+    write_legacy_ledger,
 )
 
 from automator import deferredwork
@@ -17,7 +19,7 @@ from automator.adapters.mock import MockAdapter
 from automator.journal import Journal, load_state
 from automator.model import Phase, RunState, TokenUsage
 from automator.policy import GatesPolicy, NotifyPolicy, Policy, SweepPolicy
-from automator.sweep import DecisionPrompter, SweepEngine, validate_triage
+from automator.sweep import DecisionPrompter, SweepEngine, validate_migration, validate_triage
 from automator.verify import worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
@@ -172,6 +174,117 @@ def test_validate_triage_unknown_id():
     plan, errors = validate_triage(rj, {"DW-1"})
     assert plan is None
     assert any("DW-42" in e for e in errors)
+
+
+# ---------------------------------------------------- validate_migration
+
+LEGACY_LEDGER = (
+    "# Deferred Work\n\n"
+    "## Deferred from: epic 1 review (2026-04-06)\n\n"
+    "- ~~**Old fixed thing** — was broken, then repaired~~ → fixed in 1.3\n"
+    "- **Open legacy thing here** — `src.txt` mishandles em-dashes\n"
+)
+
+
+def legacy_manifest(text: str = LEGACY_LEDGER) -> list[dict]:
+    return [
+        {
+            "key": e.key,
+            "id": e.id,
+            "title": e.title,
+            "section": e.section,
+            "done": e.done,
+            "severity": e.severity,
+        }
+        for e in deferredwork.parse_legacy(text)
+    ]
+
+
+def migrated_ledger(first_id: int = 1) -> str:
+    return (
+        "# Deferred Work\n\n"
+        f"### DW-{first_id}: Old fixed thing\n\n"
+        "origin: migrated from legacy ledger, 2026-06-12\nlocation: n/a\n"
+        "reason: was broken, then repaired.\nstatus: done 2026-04-06\n\n"
+        f"### DW-{first_id + 1}: Open legacy thing here\n\n"
+        "origin: migrated from legacy ledger, 2026-06-12\nlocation: src.txt\n"
+        "reason: mishandles em-dashes.\nstatus: open\n"
+    )
+
+
+def migrate_result(mapping) -> dict:
+    return {"workflow": "deferred-sweep-migrate", "mapping": list(mapping), "escalations": []}
+
+
+def test_validate_migration_happy():
+    manifest = legacy_manifest()
+    done_key, open_key = manifest[0]["key"], manifest[1]["key"]
+    rj = migrate_result([{"key": done_key, "dw_id": "DW-1"}, {"key": open_key, "dw_id": "DW-2"}])
+    assert validate_migration(rj, manifest, {}, migrated_ledger()) == []
+
+
+def test_validate_migration_rejects_leftover_legacy():
+    manifest = legacy_manifest()
+    half_done = migrated_ledger() + "\n## Deferred from: leftovers\n\n- still freeform item\n"
+    rj = migrate_result(
+        [{"key": manifest[0]["key"], "dw_id": "DW-1"}, {"key": manifest[1]["key"], "dw_id": "DW-2"}]
+    )
+    errors = validate_migration(rj, manifest, {}, half_done)
+    assert any("still parse as legacy" in e and "still freeform item" in e for e in errors)
+
+
+def test_validate_migration_guards_pre_existing_canonical():
+    manifest = legacy_manifest()
+    pre = {"DW-1": "open", "DW-9": "open"}  # DW-1 regressed to done; DW-9 vanished
+    rj = migrate_result(
+        [{"key": manifest[0]["key"], "dw_id": "DW-1"}, {"key": manifest[1]["key"], "dw_id": "DW-2"}]
+    )
+    errors = validate_migration(rj, manifest, pre, migrated_ledger())
+    joined = "; ".join(errors)
+    assert "DW-1 status changed" in joined
+    assert "DW-9 disappeared" in joined
+    # and the new DW-2 does not continue numbering past DW-9
+    assert "does not continue numbering past DW-9" in joined
+
+
+def test_validate_migration_mapping_errors():
+    manifest = legacy_manifest()
+    done_key = manifest[0]["key"]
+    rj = migrate_result(
+        [
+            {"key": done_key, "dw_id": "DW-2"},  # done-ness mismatch (DW-2 is open)
+            {"key": "no-such-key", "dw_id": "DW-1"},  # invented
+            {"key": done_key, "dw_id": "DW-77"},  # repeated key + missing entry
+        ]
+    )
+    errors = validate_migration(rj, manifest, {}, migrated_ledger())
+    joined = "; ".join(errors)
+    assert "manifest says done, ledger disagrees" in joined
+    assert "invents unknown key" in joined
+    assert "repeats key" in joined
+    assert "DW-77: no such entry" in joined
+    assert "not mapped" in joined  # the open item's key never appeared
+
+
+def test_validate_migration_allows_dedupe_merge():
+    # two legacy items of equal done-ness may merge into one DW entry
+    text = (
+        "## Deferred from: review A (2026-04-06)\n\n- same thing, worded one way\n"
+        "## Deferred from: review B (2026-04-07)\n\n- same thing, worded another way\n"
+    )
+    manifest = legacy_manifest(text)
+    merged = (
+        "# Deferred Work\n\n### DW-1: same thing\n\n"
+        "origin: migrated from legacy ledger, 2026-06-12\nlocation: n/a\n"
+        "reason: seen in review A and review B.\nstatus: open\n"
+    )
+    rj = migrate_result([{"key": m["key"], "dw_id": "DW-1"} for m in manifest])
+    assert validate_migration(rj, manifest, {}, merged) == []
+
+
+def test_validate_migration_wrong_workflow():
+    errors = validate_migration({"workflow": "quick-dev"}, [], {}, "")
+    assert errors and "workflow" in errors[0]
 
 
 # ------------------------------------------------------------ engine flow
@@ -509,3 +622,151 @@ def test_escalated_bundle_resume_skips_it_and_runs_rest(project):
     # triage was NOT re-run: only the two bundle sessions
     assert len(adapter.sessions) == 2
     assert ledger_entries(project)["DW-1"].open  # escalated bundle untouched
+
+
+# ------------------------------------------------------- legacy migration
+
+
+def test_sweep_migrates_legacy_then_triages_and_runs_bundle(project):
+    write_legacy_ledger(project, LEGACY_LEDGER)
+    manifest = legacy_manifest()
+    mapping = [
+        {"key": manifest[0]["key"], "dw_id": "DW-1"},
+        {"key": manifest[1]["key"], "dw_id": "DW-2"},
+    ]
+    plan = triage_result(
+        ["DW-2"],
+        bundles=[{"name": "fix-emdash", "dw_ids": ["DW-2"], "intent": "guard em-dashes"}],
+    )
+    engine, adapter = make_sweep(
+        project,
+        [
+            migrate_effect(project, migrated_ledger(), mapping),
+            triage_effect(plan),
+            bundle_dev_effect(project, "fix-emdash", ["DW-2"]),
+            bundle_review_effect(project, "fix-emdash"),
+        ],
+    )
+    summary = engine.run()
+
+    assert not summary.paused
+    tasks = engine.state.tasks
+    assert tasks["sweep-migrate"].phase == Phase.DONE
+    assert tasks["sweep-triage"].phase == Phase.DONE
+    assert tasks["dw-fix-emdash"].phase == Phase.DONE
+
+    text = project.deferred_work.read_text(encoding="utf-8")
+    assert not deferredwork.has_legacy(text)
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")
+    assert entries["DW-2"].status.startswith("done")  # bundle closed it
+
+    log = git(project.project, "log", "--oneline")
+    assert "chore(sweep): migrate legacy deferred-work entries to DW format" in log
+    journal = journal_text(engine)
+    assert "sweep-migrated" in journal and "sweep-nothing-open" not in journal
+
+    # the migration session was prompted with the manifest path
+    assert "--migrate" in adapter.sessions[0].prompt
+    manifest_path = adapter.sessions[0].prompt.split("--migrate ", 1)[1].split()[0]
+    written = json.loads(open(manifest_path).read())
+    assert [m["key"] for m in written] == [m["key"] for m in manifest]
+    # triage ran against the post-migration open set, strict check intact
+    assert "--migrate" not in adapter.sessions[1].prompt
+
+
+def test_migration_validation_failure_restores_ledger_then_escalates(project):
+    write_legacy_ledger(project, LEGACY_LEDGER)
+    manifest = legacy_manifest()
+    # converts only the done item; the open one remains legacy -> invalid
+    half = (
+        "# Deferred Work\n\n"
+        "### DW-1: Old fixed thing\n\norigin: migrated, 2026-06-12\nlocation: n/a\n"
+        "reason: repaired.\nstatus: done 2026-04-06\n\n"
+        "## Deferred from: epic 1 review (2026-04-06)\n\n"
+        "- **Open legacy thing here** — `src.txt` mishandles em-dashes\n"
+    )
+    bad = migrate_effect(project, half, [{"key": manifest[0]["key"], "dw_id": "DW-1"}])
+    engine, adapter = make_sweep(project, [bad, bad])
+    summary = engine.run()
+
+    assert summary.paused
+    assert engine.state.tasks["sweep-migrate"].phase == Phase.ESCALATED
+    # the broken rewrite never sticks: original ledger text restored
+    assert project.deferred_work.read_text(encoding="utf-8") == LEGACY_LEDGER
+    assert worktree_clean(project.project)
+    prompts = [s.prompt for s in adapter.sessions]
+    assert len(prompts) == 2
+    assert "--feedback" not in prompts[0] and "--feedback" in prompts[1]
+    feedback = open(prompts[1].split("--feedback ", 1)[1]).read()
+    assert "still parse as legacy" in feedback and "not mapped" in feedback
+
+
+def test_migration_escalation_resume_retries(project):
+    write_legacy_ledger(project, LEGACY_LEDGER)
+    manifest = legacy_manifest()
+    bad = migrate_effect(project, LEGACY_LEDGER, [])  # no conversion at all
+    engine, _ = make_sweep(project, [bad, bad])
+    assert engine.run().paused
+
+    mapping = [
+        {"key": manifest[0]["key"], "dw_id": "DW-1"},
+        {"key": manifest[1]["key"], "dw_id": "DW-2"},
+    ]
+    plan = triage_result(["DW-2"], skip=[{"id": "DW-2", "reason": "moot"}])
+    resumed, adapter = resume_sweep(
+        project,
+        engine,
+        [migrate_effect(project, migrated_ledger(), mapping), triage_effect(plan)],
+    )
+    summary = resumed.run()
+    assert not summary.paused
+    assert resumed.state.tasks["sweep-migrate"].phase == Phase.DONE
+    assert resumed.state.tasks["sweep-triage"].phase == Phase.DONE
+    assert len(adapter.sessions) == 2
+
+
+def test_no_legacy_skips_migration(project):
+    write_ledger(project, {"DW-1": "open"})
+    plan = triage_result(["DW-1"], skip=[{"id": "DW-1", "reason": "moot"}])
+    engine, adapter = make_sweep(project, [triage_effect(plan)])
+    assert not engine.run().paused
+    assert "sweep-migrate" not in engine.state.tasks
+    assert "--migrate" not in adapter.sessions[0].prompt
+
+
+def test_mixed_ledger_migration_preserves_canonical_open_set(project):
+    mixed = (
+        "# Deferred Work\n\n"
+        "### DW-1: item DW-1\n\norigin: test, 2026-06-01\nlocation: src.txt:1\n"
+        "reason: test entry.\nstatus: open\n\n"
+        "## Deferred from: epic 1 review (2026-04-06)\n\n"
+        "- **Open legacy thing here** — `src.txt` mishandles em-dashes\n"
+    )
+    write_legacy_ledger(project, mixed)
+    manifest = legacy_manifest(mixed)
+    assert len(manifest) == 1  # the canonical entry is not a legacy item
+    migrated = (
+        "# Deferred Work\n\n"
+        "### DW-1: item DW-1\n\norigin: test, 2026-06-01\nlocation: src.txt:1\n"
+        "reason: test entry.\nstatus: open\n\n"
+        "### DW-2: Open legacy thing here\n\n"
+        "origin: migrated from legacy ledger, 2026-06-12\nlocation: src.txt\n"
+        "reason: mishandles em-dashes.\nstatus: open\n"
+    )
+    plan = triage_result(
+        ["DW-1", "DW-2"],
+        skip=[{"id": "DW-1", "reason": "moot"}, {"id": "DW-2", "reason": "moot"}],
+    )
+    engine, _ = make_sweep(
+        project,
+        [
+            migrate_effect(project, migrated, [{"key": manifest[0]["key"], "dw_id": "DW-2"}]),
+            triage_effect(plan),
+        ],
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert engine.state.tasks["sweep-migrate"].phase == Phase.DONE
+    assert engine.state.tasks["sweep-triage"].phase == Phase.DONE
+    assert ledger_entries(project)["DW-1"].open  # skipped, untouched

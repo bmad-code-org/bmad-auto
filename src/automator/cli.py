@@ -346,14 +346,24 @@ def _sweep_dry_run(paths: bmadconfig.ProjectPaths, pol) -> int:
     if not ledger.is_file():
         print(f"no deferred-work ledger at {ledger}")
         return 0
-    entries = deferredwork.parse_ledger(ledger.read_text(encoding="utf-8"))
+    text = ledger.read_text(encoding="utf-8")
+    entries = deferredwork.parse_ledger(text)
     open_entries = [e for e in entries if e.open]
     closed = len(entries) - len(open_entries)
     print(f"{ledger}: {len(open_entries)} open, {closed} closed/non-open")
     for entry in open_entries:
         print(f"  {entry.id:8s} {entry.title}")
-    if open_entries:
-        print("a sweep would triage these in one LLM session, then run bundles")
+    legacy = deferredwork.parse_legacy(text)
+    legacy_open = [e for e in legacy if not e.done]
+    if legacy:
+        print(
+            f"plus {len(legacy)} legacy (pre-DW-format) entries, {len(legacy_open)} open"
+            " — a sweep would first migrate them to DW format"
+        )
+        for entry in legacy_open:
+            print(f"  {entry.id or '-':8s} {entry.title}")
+    if open_entries or legacy_open:
+        print("a sweep would triage the open entries in one LLM session, then run bundles")
         print(f"  triage: {_render_invocation(pol, paths.project, 'triage', '/bmad-auto-sweep')}")
     return 0
 

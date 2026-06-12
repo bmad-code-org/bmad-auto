@@ -64,6 +64,25 @@ def test_sweep_dry_run_lists_open_entries(project, capsys):
     assert "bmad-auto-sweep" in triage_line
 
 
+def test_sweep_dry_run_reports_legacy_entries(project, capsys):
+    from conftest import write_legacy_ledger
+
+    write_legacy_ledger(
+        project,
+        "# Deferred Work\n\n## Deferred from: epic 1 review (2026-04-06)\n\n"
+        "- ~~**Old fixed thing** — repaired~~ → fixed in 1.3\n"
+        "- **Open legacy thing here** — still pending\n",
+        commit=False,
+    )
+    assert cli._sweep_dry_run(project, policy_mod.load(None)) == 0
+    out = capsys.readouterr().out
+    assert "0 open" in out  # canonical view
+    assert "2 legacy (pre-DW-format) entries, 1 open" in out
+    assert "would first migrate them" in out
+    assert "Open legacy thing here" in out and "Old fixed thing" not in out
+    assert "triage:" in out  # a sweep still runs even with zero canonical opens
+
+
 def test_sweep_dry_run_renders_triage_adapter_from_policy(project, capsys):
     from conftest import write_ledger
 

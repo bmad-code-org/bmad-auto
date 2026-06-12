@@ -10,6 +10,7 @@ from pathlib import Path
 
 from conftest import install_bmad_config, write_sprint
 
+from automator import deferredwork
 from automator.journal import Journal, save_state
 from automator.model import RunState
 from automator.runs import RUNS_DIR, write_pid
@@ -547,4 +548,44 @@ def test_severity_extraction():
         "the word severity: high inline does not count\n": None,
     }
     for body, expected in cases.items():
-        assert data._severity(f"### DW-9: t\n\n{body}status: open\n") == expected, body
+        assert deferredwork.field_severity(f"### DW-9: t\n\n{body}status: open\n") == expected, body
+
+
+def test_deferred_entries_legacy_ledger(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(
+        "# Deferred Work\n\n"
+        "## Deferred from: code review of story 1.2 (2026-04-06)\n\n"
+        "- ~~**Old fixed thing** — was broken, then repaired~~ → fixed in 1.3\n"
+        "- W9 — open item with a bracket severity. [MAJOR]\n"
+        "- **Open bold-titled thing here** — details that run on and on\n",
+        encoding="utf-8",
+    )
+    items = data.deferred_entries(project.project)
+    assert [(i.id, i.done, i.severity, i.legacy) for i in items] == [
+        ("L1", True, None, True),
+        ("W9", False, "high", True),
+        ("L3", False, None, True),
+    ]
+    assert items[0].status == "done (legacy)"
+    assert items[1].status == "open (legacy)"
+    assert items[2].title == "Open bold-titled thing here"
+    assert all(i.option_key and i.option_key.startswith("legacy:") for i in items)
+    # option keys never collide with DW ids and stay stable across refreshes
+    assert data.deferred_entries(project.project) is items
+
+
+def test_deferred_entries_mixed_ledger_in_file_order(project):
+    install_bmad_config(project)
+    project.deferred_work.write_text(
+        "# Deferred Work\n\n"
+        "## Deferred from: epic 1 review (2026-04-06)\n\n"
+        "- legacy item first in the file\n\n"
+        "### DW-1: Canonical entry\n\n"
+        "origin: test, 2026-06-01\nseverity: high\nreason: t.\nstatus: open\n",
+        encoding="utf-8",
+    )
+    items = data.deferred_entries(project.project)
+    assert [(i.id, i.legacy) for i in items] == [("L1", True), ("DW-1", False)]
+    assert items[1].option_key is None  # canonical rows key on the DW id
+    assert items[1].severity == "high"

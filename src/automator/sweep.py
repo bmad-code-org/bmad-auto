@@ -31,6 +31,8 @@ def _read_json(path: Path) -> Any:
 
 TRIAGE_KEY = "sweep-triage"
 TRIAGE_WORKFLOW = "deferred-sweep-triage"
+MIGRATE_KEY = "sweep-migrate"
+MIGRATE_WORKFLOW = "deferred-sweep-migrate"
 BUNDLE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,39}$")
 DECISION_EFFECTS = ("build", "close", "keep-open")
 
@@ -232,6 +234,84 @@ def validate_triage(
     )
 
 
+# ---------------------------------------------------------- migration plan
+
+
+def validate_migration(
+    rj: dict[str, Any] | None,
+    manifest: list[dict[str, Any]],
+    pre_canonical: dict[str, str],
+    new_text: str,
+) -> list[str]:
+    """Deterministic validation of a legacy-ledger migration session: the
+    rewritten ledger must contain zero legacy items, preserve every
+    pre-existing canonical entry's status, continue DW numbering, and the
+    result.json mapping must cover the manifest exactly. Returns errors,
+    empty on success."""
+    rj = rj or {}
+    if rj.get("workflow") != MIGRATE_WORKFLOW:
+        return [f"workflow must be {MIGRATE_WORKFLOW!r}: got {rj.get('workflow')!r}"]
+    errors: list[str] = []
+
+    leftovers = deferredwork.parse_legacy(new_text)
+    if leftovers:
+        listed = "; ".join(f"{e.section or 'top level'}: {e.title[:60]}" for e in leftovers[:10])
+        errors.append(f"{len(leftovers)} legacy item(s) still parse as legacy: {listed}")
+
+    entries: dict[str, deferredwork.DWEntry] = {}
+    dupes: set[str] = set()
+    for e in deferredwork.parse_ledger(new_text):
+        if e.id in entries:
+            dupes.add(e.id)
+        entries[e.id] = e
+    if dupes:
+        errors.append("duplicate DW ids: " + ", ".join(sorted(dupes)))
+
+    def first_word(status: str) -> str:
+        return status.split()[0] if status.split() else ""
+
+    pre_max = max((int(i.split("-")[1]) for i in pre_canonical), default=0)
+    for dw_id, status in pre_canonical.items():
+        e = entries.get(dw_id)
+        if e is None:
+            errors.append(f"pre-existing {dw_id} disappeared")
+        elif first_word(e.status) != first_word(status):
+            errors.append(f"pre-existing {dw_id} status changed: {status!r} -> {e.status!r}")
+    for dw_id, e in entries.items():
+        if dw_id in pre_canonical:
+            continue
+        if int(dw_id.split("-")[1]) <= pre_max:
+            errors.append(f"new entry {dw_id} does not continue numbering past DW-{pre_max}")
+        if first_word(e.status) not in ("open", "done"):
+            errors.append(f"new entry {dw_id} has status {e.status!r}; want open or done")
+
+    manifest_by_key = {str(m["key"]): m for m in manifest}
+    mapping = rj.get("mapping", [])
+    if not isinstance(mapping, list):
+        return errors + ["mapping must be a list of {key, dw_id}"]
+    seen_keys: set[str] = set()
+    for item in mapping:
+        key = str(item.get("key", "")) if isinstance(item, dict) else ""
+        dw_id = str(item.get("dw_id", "")) if isinstance(item, dict) else ""
+        source = manifest_by_key.get(key)
+        if source is None:
+            errors.append(f"mapping invents unknown key {key!r}")
+            continue
+        if key in seen_keys:
+            errors.append(f"mapping repeats key {key!r}")
+        seen_keys.add(key)
+        target = entries.get(dw_id)
+        if target is None:
+            errors.append(f"mapping {key} -> {dw_id}: no such entry in the ledger")
+        elif (first_word(target.status) == "done") != bool(source["done"]):
+            want = "done" if source["done"] else "open"
+            errors.append(f"mapping {key} -> {dw_id}: manifest says {want}, ledger disagrees")
+    missing = sorted(set(manifest_by_key) - seen_keys)
+    if missing:
+        errors.append("manifest keys not mapped: " + ", ".join(missing))
+    return errors
+
+
 # --------------------------------------------------------------- prompting
 
 
@@ -319,6 +399,9 @@ class SweepEngine(Engine):
     def _loop(self) -> None:
         ledger = self.paths.deferred_work
         text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
+        if deferredwork.has_legacy(text):
+            self._ensure_migration(text)
+            text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
         open_now = deferredwork.open_ids(text)
         if not open_now:
             self.journal.append("sweep-nothing-open", ledger=str(ledger))
@@ -362,6 +445,116 @@ class SweepEngine(Engine):
         task.bundle_file = str(self._write_intent(bundle))
         self._save()
         self._run_story(task)
+
+    # ------------------------------------------------------------ migration
+
+    def _ensure_migration(self, text: str) -> None:
+        """Pre-DW-format ledger content (older BMAD-method projects) blocks a
+        sweep: open_ids() cannot see it and mark_done() cannot flip it. One
+        LLM session rewrites the legacy items into canonical DW entries; the
+        orchestrator pins exactly what to convert (a manifest from
+        parse_legacy), validates the rewrite deterministically, and restores
+        the original ledger before any retry."""
+        ledger = self.paths.deferred_work
+        task = self.state.tasks.get(MIGRATE_KEY)
+        if task is None:
+            task = StoryTask(story_key=MIGRATE_KEY, epic=0)
+            self.state.tasks[MIGRATE_KEY] = task
+        elif task.phase != Phase.PENDING:
+            # resumed mid-migration or retrying after an escalation: restart
+            self.journal.append("resume-restart", story_key=MIGRATE_KEY, phase=str(task.phase))
+            if task.phase == Phase.ESCALATED:
+                task.attempt = 0  # the human resumed deliberately; fresh budget
+            if task.baseline_commit and not verify.worktree_clean(self.paths.project):
+                self._reset_to(task.baseline_commit)  # a session died mid-rewrite
+                text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
+            task.phase = Phase.PENDING  # deliberate reset, not a normal transition
+        if not task.baseline_commit:
+            task.baseline_commit = verify.rev_parse_head(self.paths.project)
+
+        legacy = deferredwork.parse_legacy(text)
+        pre_canonical = {e.id: e.status for e in deferredwork.parse_ledger(text)}
+        manifest = [
+            {
+                "key": e.key,
+                "id": e.id,
+                "title": e.title,
+                "section": e.section,
+                "done": e.done,
+                "severity": e.severity,
+            }
+            for e in legacy
+        ]
+        manifest_path = self.run_dir / "migrate-manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        feedback: Path | None = None
+        while True:
+            task.attempt += 1
+            advance(task, Phase.TRIAGE_RUNNING)
+            self._save()
+            result = self._run_session(
+                task,
+                role="triage",
+                prompt=self._migrate_prompt(manifest_path, feedback),
+                seq=task.attempt,
+            )
+            advance(task, Phase.TRIAGE_VERIFY)
+            self._save()
+            crits = critical_escalations(result.result_json)
+            if crits:
+                details = "; ".join(str(e.get("detail", e.get("type", "?"))) for e in crits)
+                self._escalate(task, f"CRITICAL escalation from migration session: {details}")
+            new_text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
+            if result.status != "completed":
+                errors = [f"migration session {result.status}"]
+            else:
+                errors = validate_migration(result.result_json, manifest, pre_canonical, new_text)
+            self.journal.append(
+                "migrate-decision",
+                attempt=task.attempt,
+                session_status=result.status,
+                ok=not errors,
+                errors=errors,
+            )
+            if not errors:
+                advance(task, Phase.DONE)
+                self._save()
+                (self.run_dir / "migrate-result.json").write_text(
+                    json.dumps(result.result_json, indent=2), encoding="utf-8"
+                )
+                self._commit_ledger(
+                    "chore(sweep): migrate legacy deferred-work entries to DW format"
+                )
+                post = deferredwork.parse_ledger(new_text)
+                self.journal.append(
+                    "sweep-migrated",
+                    converted=len(manifest),
+                    entries_now=len(post),
+                    open_now=sum(1 for e in post if e.open),
+                )
+                return
+            # never re-prompt over a half-broken rewrite; the baseline reset
+            # covers tracked files, the explicit write covers an untracked
+            # ledger that `git reset` cannot restore
+            self._reset_to(task.baseline_commit)
+            ledger.parent.mkdir(parents=True, exist_ok=True)
+            ledger.write_text(text, encoding="utf-8")
+            if task.attempt >= self.policy.sweep.max_migration_attempts:
+                self._escalate(
+                    task, "migration failed deterministic validation: " + "; ".join(errors)
+                )
+            feedback = self._write_feedback(
+                task,
+                "The legacy-ledger migration failed deterministic validation:\n- "
+                + "\n- ".join(errors),
+            )
+
+    def _migrate_prompt(self, manifest: Path, feedback: Path | None) -> str:
+        prompt = f"/bmad-auto-sweep --migrate {manifest}"
+        if feedback is not None:
+            prompt += f" --feedback {feedback}"
+        return prompt
 
     # --------------------------------------------------------------- triage
 

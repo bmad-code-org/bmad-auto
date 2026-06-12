@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
-from automator.deferredwork import append_decision, mark_done, open_ids, parse_ledger
+from automator.deferredwork import (
+    append_decision,
+    field_severity,
+    has_legacy,
+    mark_done,
+    open_ids,
+    parse_ledger,
+    parse_legacy,
+)
 
 LEDGER = """\
 # Deferred Work
@@ -123,3 +131,206 @@ def test_append_decision_then_mark_done(tmp_path):
 def test_append_decision_missing_file(tmp_path):
     assert not append_decision(tmp_path / "nope.md", "DW-1", "2026-06-11", "x", "y")
     assert not mark_done(tmp_path / "nope.md", "DW-1", "2026-06-11", "x")
+
+
+# ------------------------------------------------------------------- legacy
+#
+# Fixtures are condensed verbatim from four real pre-DW project ledgers,
+# one per shape the parser must handle.
+
+# id'd bullets under "## Deferred from:" sections; bold/bracket done markers
+LIGHTS_OUT = """\
+
+## Deferred from: code review of gdd.md (2026-06-08)
+
+- W1 — **RESOLVED 2026-06-09**: Validate the dual-clock squeeze is mathematically survivable. Epic-0 tuning gate. [MAJOR] — harness PASS and human **GO** decision. [CLOSED]
+- W2 — Gloom engagement/retention once Top-Gloom is out of reach. Playtest watch (already a Success Metric). [MINOR]
+
+## Deferred from: code review of story 0.3 (2026-06-08)
+
+- W1 — duplicate native id in another section. [MINOR→MAJOR if missed]
+- **W-1.2-c** — CLOSED: `moveSpeed` finite > 0 law (+ test).
+
+## 2026-06-09 — epics-review absorb, 3-layer code review (spec-apply-epics-review)
+
+- D-1 — `ShouldForceReturnToPool` cap-equality boundary unpinned. [MINOR]
+"""
+
+# "### D-CAP-001: title — RESOLVED" entry headings with field bullets
+STORY_MAKER = """\
+# Deferred Work
+
+## From Epic 8 capstone live run (2026-06-11)
+
+### D-CAP-001: claim entity references never resolved to canonical bible entity_ids — RESOLVED
+- **Severity:** high (V0-blocker — broke approve→merge)
+- **Detail:** Story 7.1 `extract_claims` derives references from draft text alone.
+- **Resolution:** `spec-dw-cap-001-entity-id-resolution` — deterministic resolver added.
+
+### D-CAP-002: an *ambiguous* claim reference is labeled `[NEW]` to the proposal composer
+- **Severity:** low (rare — needs two bible entities sharing a slug)
+- **Detail:** the label set is binary (KNOWN/NEW).
+
+---
+
+## D-8.6-001 — fact_key prefix not enforced against the character's entity_id (Story 8.6)
+
+- **Surfaced by:** Story 8.6 retro review (Blind Hunter), 2026-06-04.
+- **Severity:** low — a mis-prefixed key still lands in this character's own delta file.
+"""
+
+# strikethrough sections/bullets, bold-titled open bullets, no native ids
+NOTEY = """\
+# Deferred Work
+
+## ~~Deferred from: Epic 1 — Instant Note Capture (2026-04-03)~~ DONE
+
+### ~~Cluster 2: Frontend Core (Stories 1.6–1.10)~~ DONE
+
+~~Depends on: Backend Foundation (Stories 1.1–1.5)~~
+
+- ~~**Story 1.6** — Design Token System (CSS Custom Properties)~~
+
+### ~~Cluster 3: Window & Daemon (Stories 1.11–1.14)~~ DONE
+
+### Deferred from: code review of 3-2-full-text-search-tauri-command (2026-04-06) — 1 open item remaining
+
+- ~~**Snippet `<mark>` HTML tags — XSS risk** — raw `<mark>` HTML injected.~~ → Verified safe: rendered as React text nodes
+- **`i64`-to-`number` precision loss** — Specta maps Rust `i64` to JS `number`. IDs beyond 2^53 lose precision silently.
+"""
+
+# topic sections with status-suffixed headings and marker-suffixed bullets
+MUDCEPTION = """\
+# Deferred Work
+
+## Epic 0: Validation (remaining stories)
+
+- ~~**0-1**: Project scaffold — monorepo structure, workspace initialization~~ DONE
+- ~~**0-2**: Hello-world SpacetimeDB module — room/exit tables~~ DONE
+
+## Auth Improvements (deferred from 0-6 review)
+
+- ~~OIDC id_token stored as plaintext in user:// — consider OS keychain~~ DOCUMENTED
+- Add client_disconnected reducer to clean up orphaned player rows
+
+## Notification Table Visibility (deferred from Story 1.5 review — RESOLVED)
+
+## Config Externalization (split from Epic 0 deferred — DONE)
+
+- ~~Move OIDC client ID to external config file~~ DONE (web already had .env)
+"""
+
+
+def test_legacy_lights_out_shape():
+    entries = parse_legacy(LIGHTS_OUT)
+    assert [e.id for e in entries] == ["W1", "W2", "W1", "W-1.2-c", "D-1"]
+    w1, w2, w1_dup, w12c, d1 = entries
+    assert w1.done and w1.severity == "high"  # [MAJOR], **RESOLVED**/[CLOSED]
+    assert w1.title.startswith("Validate the dual-clock squeeze")
+    assert not w2.done and w2.severity == "low"  # [MINOR]
+    assert not w1_dup.done and w1_dup.severity == "low"  # [MINOR→MAJOR ...]
+    assert w1.key != w1_dup.key  # same native id, different sections
+    assert w12c.done  # plain "CLOSED:" prefix after the bold id
+    assert w12c.title.startswith("`moveSpeed` finite > 0 law")
+    assert not d1.done
+    assert "epics-review absorb" in d1.section  # dated heading is a section
+
+
+def test_legacy_story_maker_shape():
+    entries = parse_legacy(STORY_MAKER)
+    assert [e.id for e in entries] == ["D-CAP-001", "D-CAP-002", "D-8.6-001"]
+    cap1, cap2, d86 = entries
+    assert cap1.done  # "— RESOLVED" heading suffix
+    assert cap1.title.endswith("bible entity_ids")  # suffix trimmed
+    assert cap1.severity == "high"  # from "- **Severity:** high"
+    assert not cap2.done and cap2.severity == "low"  # [NEW] is not a severity
+    assert not d86.done and d86.severity == "low"  # "—"-separated heading id
+    # field bullets are entry body, not standalone items
+    assert "Surfaced by" in d86.body
+    assert "**Detail:**" in cap1.body
+
+
+def test_legacy_notey_shape():
+    entries = parse_legacy(NOTEY)
+    assert len(entries) == 4
+    story16, cluster3, xss, i64 = entries
+    assert story16.done  # struck bullet under a struck section
+    assert story16.title == "Story 1.6 — Design Token System (CSS Custom Properties)"
+    # item-less done section emits itself; the parent epic heading (which has
+    # child headings) does not
+    assert cluster3.done and "Cluster 3" in cluster3.title
+    assert not any("Epic 1" in e.title for e in entries)
+    assert xss.done and xss.title == "Snippet `<mark>` HTML tags — XSS risk"
+    assert not i64.done  # the one open bullet in a "1 open item remaining" section
+    assert i64.title == "`i64`-to-`number` precision loss"
+    assert i64.id == ""
+
+
+def test_legacy_mudception_shape():
+    entries = parse_legacy(MUDCEPTION)
+    assert len(entries) == 6
+    assert [e.id for e in entries[:2]] == ["0-1", "0-2"]
+    assert all(e.done for e in entries[:2])  # "Epic 0:" is a section, not an id
+    oidc, reducer, notif, config = entries[2:]
+    assert oidc.done  # ~~...~~ DOCUMENTED
+    assert not reducer.done  # plain bullet in an open section
+    assert notif.done and "Notification Table Visibility" in notif.title
+    assert config.done  # bullet under a "(... — DONE)" section
+
+
+def test_legacy_ignores_canonical_ledger():
+    assert parse_legacy(LEDGER) == []
+    assert not has_legacy(LEDGER)
+    assert has_legacy(NOTEY)
+
+
+def test_mixed_ledger_keeps_both_views_separate():
+    mixed = (
+        LEDGER + "\n## Deferred from: code review of spec-9-9 (2026-06-12)\n\n"
+        "- ~~**Old fixed thing** — was broken, now fixed~~ → fixed in 9.9\n"
+        "- **New open thing** — `parser.py` mishandles em-dashes — needs a guard\n"
+    )
+    assert open_ids(mixed) == {"DW-1", "DW-3"}  # strict view unchanged
+    entries = parse_legacy(mixed)
+    assert [e.done for e in entries] == [True, False]
+    assert all("DW-" not in e.body for e in entries)
+
+
+def test_legacy_item_does_not_swallow_masked_canonical_neighbor():
+    text = (
+        "## Deferred from: somewhere (2026-06-01)\n\n"
+        "- open legacy item directly above a DW entry\n"
+        "### DW-9: Canonical\n\nstatus: open\n"
+    )
+    entries = parse_legacy(text)
+    assert len(entries) == 1
+    assert "DW-9" not in entries[0].body and "status:" not in entries[0].body
+    assert open_ids(text) == {"DW-9"}
+
+
+def test_legacy_keys_stable_under_unrelated_edits():
+    before = {e.title: e.key for e in parse_legacy(MUDCEPTION)}
+    edited = MUDCEPTION.replace(
+        "- ~~**0-1**: Project scaffold — monorepo structure, workspace initialization~~ DONE\n",
+        "",
+    )
+    after = {e.title: e.key for e in parse_legacy(edited)}
+    for title, key in after.items():
+        assert before[title] == key
+
+
+def test_legacy_prose_and_rules_are_not_items():
+    text = (
+        "# Deferred Work\n\nSome intro prose, not an item.\n\n---\n\n"
+        "## Open section\n\nNarrative paragraph under a section.\n\n- real item one\n"
+    )
+    entries = parse_legacy(text)
+    assert [e.title for e in entries] == ["real item one"]
+
+
+def test_field_severity_forms():
+    assert field_severity("severity: HIGH") == "high"
+    assert field_severity("- **Severity:** medium (scoped)") == "medium"
+    assert field_severity("priority: blocker") == "critical"
+    assert field_severity("severity: n/a") is None
+    assert field_severity("no field here") is None

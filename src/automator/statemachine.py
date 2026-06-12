@@ -10,7 +10,9 @@ class IllegalTransition(Exception):
 
 
 TRANSITIONS: dict[Phase, frozenset[Phase]] = {
-    # TRIAGE_RUNNING: a sweep run's triage task; story tasks go to DEV_RUNNING
+    # TRIAGE_RUNNING: a sweep run's triage task — also reused by the sweep's
+    # legacy-ledger migration task (same lifecycle, its own task key);
+    # story tasks go to DEV_RUNNING
     Phase.PENDING: frozenset({Phase.DEV_RUNNING, Phase.TRIAGE_RUNNING}),
     Phase.DEV_RUNNING: frozenset({Phase.DEV_VERIFY}),
     Phase.DEV_VERIFY: frozenset(

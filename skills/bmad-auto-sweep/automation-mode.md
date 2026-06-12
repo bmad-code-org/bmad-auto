@@ -69,6 +69,24 @@ field-by-field, and will kill this session after your final turn.
     `build|close|keep-open`, `intent` required when effect is `build`,
     `recommendation` must be one of the option keys.
 
+- **Migration sessions** (`--migrate`, see `./migration-mode.md`) use this
+  result schema instead:
+
+  ```json
+  {
+    "workflow": "deferred-sweep-migrate",
+    "mapping": [{ "key": "<manifest key>", "dw_id": "DW-12" }],
+    "escalations": []
+  }
+  ```
+
+  Validation rules: the rewritten ledger parses with ZERO legacy items;
+  pre-existing `### DW-<n>:` entries keep their ids and status; new entries
+  continue numbering past the highest existing number with `status: open` or
+  `status: done <date>`; `mapping` covers every manifest key exactly once and
+  each `dw_id` exists with the manifest's open/done state (two keys may share
+  a `dw_id` when merging duplicates of equal done-ness).
+
 - Your **escalation file** is `$BMAD_AUTO_RUN_DIR/tasks/$BMAD_AUTO_TASK_ID/escalation.json`.
   Use it only for blockers no rule resolves (e.g. the ledger is missing or
   unreadable: `type: missing-ledger`, severity `CRITICAL`), then include the
@@ -90,9 +108,11 @@ field-by-field, and will kill this session after your final turn.
 
 1. **Never HALT for input. Never ask the user anything.** No greeting, no
    menus, no "what next" offers.
-2. **Read-only.** Never edit the ledger, code, specs, or sprint-status. The
-   orchestrator performs all ledger edits deterministically and runs the
-   bundles you propose through separate dev/review sessions.
+2. **Read-only — except migration mode.** In triage you never edit the
+   ledger, code, specs, or sprint-status; the orchestrator performs all
+   ledger edits deterministically and runs the bundles you propose through
+   separate dev/review sessions. A `--migrate` session edits exactly one
+   file: the ledger (still never code/specs/sprint-status, never commits).
 3. **Verify before classifying.** Never trust an entry's own status or wording;
    check the code. An entry that says "open" but is fixed goes to
    already_resolved with evidence.

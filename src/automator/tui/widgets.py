@@ -315,6 +315,8 @@ def deferred_line(item: data.DeferredItem) -> Text:
     else:
         text.append(f"{item.id} ", style="dim")
         text.append(item.title, style=_SEVERITY_STYLES.get(item.severity or "", ""))
+    if item.legacy:
+        text.append(" ·legacy", style="dim italic")
     return text
 
 

@@ -3,7 +3,10 @@
 Canonical entry format for `{implementation_artifacts}/deferred-work.md`.
 Used by bmad-auto-dev (multi-goal splits, token splits, review defers) and
 bmad-auto-review (defer findings). The file is append-only — never rewrite or
-delete existing entries.
+delete existing entries. (One exception: freeform pre-DW-format content from
+older projects is rewritten wholesale into canonical entries by a
+`bmad-auto sweep` migration session — see `bmad-auto-sweep/migration-mode.md`;
+the TUI displays such legacy items read-only until that happens.)
 
 ## Before appending: dedupe check
 
