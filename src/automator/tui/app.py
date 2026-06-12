@@ -56,7 +56,11 @@ class BmadAutoApp(App[None]):
     #deferred {
         height: 2fr;
         min-height: 4;
+        /* strip OptionList's default tall border + padding so the pane sits
+           flush with the runs table and sprint tree above it */
+        border: none;
         border-top: solid $primary-darken-2;
+        padding: 0;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
