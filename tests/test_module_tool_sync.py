@@ -1,9 +1,9 @@
-"""Drift guard: module/tool/ is a vendored copy of the orchestrator package.
+"""Drift guard: skills/tool/ is a vendored copy of the orchestrator package.
 
-The bauto BMAD module ships the bmad-auto tool inside it (module/tool/) so the
+The bauto BMAD module ships the bmad-auto tool inside it (skills/tool/) so the
 plugin is self-contained — `bmad-auto-setup` pip-installs it at setup time. The
 canonical source stays at the repo root (src/automator, pyproject.toml,
-README.md) where development + `pip install -e .` happen; module/tool/ must
+README.md) where development + `pip install -e .` happen; skills/tool/ must
 mirror it byte-for-byte. This test turns drift into a CI failure.
 
 To refresh the vendored copy after editing the tool, run:
@@ -18,7 +18,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 CANONICAL_PKG = REPO / "src" / "automator"
-VENDORED_PKG = REPO / "module" / "tool" / "src" / "automator"
+VENDORED_PKG = REPO / "skills" / "tool" / "src" / "automator"
 MIRRORED_FILES = ["pyproject.toml", "README.md"]
 
 
@@ -54,7 +54,7 @@ def test_vendored_package_matches_source() -> None:
 @pytest.mark.parametrize("name", MIRRORED_FILES)
 def test_vendored_metadata_file_matches_source(name: str) -> None:
     canonical = REPO / name
-    vendored = REPO / "module" / "tool" / name
+    vendored = REPO / "skills" / "tool" / name
     assert canonical.is_file(), f"canonical file missing: {canonical}"
     assert vendored.is_file(), f"vendored file missing: {vendored}"
     assert filecmp.cmp(

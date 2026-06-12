@@ -10,17 +10,17 @@
   "plugins": [
     {
       "name": "bauto",
-      "source": "./module",
+      "source": "./skills",
       "description": "Automation-mode skills driven by the bmad-auto orchestrator: unattended dev (bmad-auto-dev), adversarial review (bmad-auto-review), and deferred-work sweep triage (bmad-auto-sweep)",
       "version": "1.0.0",
       "author": {
         "name": "pinkyd"
       },
       "skills": [
-        "./module/bmad-auto-setup",
-        "./module/bmad-auto-dev",
-        "./module/bmad-auto-review",
-        "./module/bmad-auto-sweep"
+        "./skills/bmad-auto-setup",
+        "./skills/bmad-auto-dev",
+        "./skills/bmad-auto-review",
+        "./skills/bmad-auto-sweep"
       ]
     }
   ]

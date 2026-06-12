@@ -61,7 +61,7 @@ dialogs, and a pending dialog reads as a session timeout to the orchestrator.
 ## Installing the skill module
 
 The orchestrator drives its own forks of the BMAD dev/review skills — your
-standard BMAD install is never modified. The module lives in `module/`
+standard BMAD install is never modified. The module lives in `skills/`
 (BMAD module code `bauto`) and contains four skills:
 
 | Skill              | Role                                                       |
@@ -76,8 +76,8 @@ CLIs read (`.claude/skills/` for Claude Code, `.agents/skills/` for
 codex/gemini), then optionally running the setup skill to register the module:
 
 ```bash
-cp -r module/bmad-auto-* /path/to/project/.claude/skills/
-cp -r module/bmad-auto-* /path/to/project/.agents/skills/   # codex/gemini only
+cp -r skills/bmad-auto-* /path/to/project/.claude/skills/
+cp -r skills/bmad-auto-* /path/to/project/.agents/skills/   # codex/gemini only
 claude "/bmad-auto-setup accept all defaults"               # optional registration
 ```
 
@@ -88,7 +88,7 @@ customization overrides, duplicate them as `bmad-auto-dev.toml` /
 `bmad-auto-review.toml` — overrides are keyed by skill directory name.
 
 To pull in upstream BMAD improvements, diff the upstream skill against the
-fork (`diff -r <bmad-install>/bmad-quick-dev module/bmad-auto-dev`) and merge
+fork (`diff -r <bmad-install>/bmad-quick-dev skills/bmad-auto-dev`) and merge
 manually; the forks keep the upstream file structure to make this easy.
 
 ## How a story flows

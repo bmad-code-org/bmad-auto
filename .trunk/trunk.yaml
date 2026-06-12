@@ -30,12 +30,12 @@ lint:
     - trufflehog@3.95.5
     - yamllint@1.38.0
   ignore:
-    # module/tool/ is a generated copy of the canonical source (src/, pyproject.toml,
+    # skills/tool/ is a generated copy of the canonical source (src/, pyproject.toml,
     # README.md), produced by scripts/sync-tool.py and verified in CI. Lint the source,
     # not the copy.
     - linters: [ALL]
       paths:
-        - module/tool/**
+        - skills/tool/**
     # Test code legitimately uses asserts, temp paths, and subprocess helpers; security
     # scanning them only produces noise.
     - linters: [bandit]

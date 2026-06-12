@@ -31,7 +31,7 @@ asyncio_mode = "auto"
 line-length = 100
 target-version = "py311"
 # skill assets contain template placeholders that are not valid Python
-extend-exclude = [".agents", ".claude", "module"]
+extend-exclude = [".agents", ".claude", "skills"]
 
 [tool.black]
 line-length = 100
