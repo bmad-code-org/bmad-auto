@@ -130,9 +130,15 @@ class DashboardScreen(Screen[None]):
         yield Header()
         with Horizontal():
             with Vertical(id="left"):
-                yield DataTable(id="runs", cursor_type="row")
-                yield SprintTree("sprint", id="sprint-tree")
-                yield OptionList(id="deferred")
+                runs = DataTable(id="runs", cursor_type="row")
+                runs.border_title = "Runs"
+                yield runs
+                tree = SprintTree("sprint", id="sprint-tree")
+                tree.border_title = "Sprint"
+                yield tree
+                deferred = OptionList(id="deferred")
+                deferred.border_title = "Deferred Work"
+                yield deferred
             with Vertical(id="detail"):
                 yield RunHeader(id="runheader")
                 yield DataTable(id="tasks", cursor_type="row")

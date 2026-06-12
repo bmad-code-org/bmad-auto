@@ -47,6 +47,11 @@ class BmadAutoApp(App[None]):
     #runs {
         height: 2fr;
         min-height: 4;
+        border-top: solid $primary-darken-2;
+    }
+    #runs, #sprint-tree, #deferred {
+        border-title-color: $text;
+        border-title-style: bold;
     }
     #sprint-tree {
         height: 3fr;
