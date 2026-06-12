@@ -387,6 +387,7 @@ class Engine:
             model=cfg.model,
             timeout_s=self.policy.limits.session_timeout_min * 60,
         )
+        self.journal.set_active_log(task_id)
         self.journal.append("session-start", task_id=task_id, role=role, prompt=prompt)
         result = adapter.run(spec)
         usage = adapter.read_usage(result)

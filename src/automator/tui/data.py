@@ -13,10 +13,12 @@ changes no file, so the pid is re-checked on every call.
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import shutil
 import subprocess
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,11 +29,9 @@ from rich.text import Text
 
 from .. import bmadconfig, sprintstatus
 from ..gates import ATTENTION_FILE
-from ..journal import JOURNAL_FILE, STATE_FILE, load_state
+from ..journal import JOURNAL_FILE, LOGS_DIR, STATE_FILE, load_state
 from ..model import RunState
 from ..runs import PID_FILE, list_run_dirs, session_name
-
-LOGS_DIR = "logs"
 
 # Run statuses shown by the dashboard.
 RUNNING = "running"
@@ -314,6 +314,61 @@ def _render_row(row: dict) -> Text:
     return text
 
 
+class _CountingDeque(deque):
+    """history.top replacement that counts rows permanently gone above the
+    window: maxlen evictions plus the clear() from pyte's reset()/ED-3.
+    Lets checkpoints live in absolute line coordinates while the deque
+    slides (indices into the deque itself shift on every eviction)."""
+
+    def __init__(self, maxlen: int | None = None):
+        super().__init__(maxlen=maxlen)
+        self.dropped = 0
+
+    def append(self, item: Any) -> None:
+        if self.maxlen is not None and len(self) == self.maxlen:
+            self.dropped += 1
+        super().append(item)
+
+    def clear(self) -> None:
+        self.dropped += len(self)
+        super().clear()
+
+
+@dataclass(frozen=True)
+class LogIndex:
+    """Maps journal log_pos byte offsets to rendered-line indices.
+
+    Built by the poll worker right after render() and handed across to the
+    UI thread, so it is frozen. Line indices match render() output rows
+    one-to-one — which equals RichLog scroll lines while the log pane keeps
+    wrap=False (the textual default)."""
+
+    checkpoints: tuple[tuple[int, int], ...]  # ascending (file_offset, absolute_line)
+    render_base: int  # absolute line index of render() row 0
+    render_len: int  # rows in the last render()
+
+    def line_for_offset(self, offset: int) -> int | None:
+        """Rendered-line index for a byte offset into the log file; None
+        when nothing is rendered. Between checkpoints the line is
+        interpolated by byte fraction — exact for plain streaming output,
+        bounded by the surrounding checkpoints for repaint-heavy segments.
+        Offsets below the tail seek or evicted history clamp to the first
+        row, offsets past EOF to the last."""
+        if self.render_len <= 0:
+            return None
+        cps = self.checkpoints
+        i = bisect.bisect_right(cps, (offset, float("inf"))) - 1
+        if i < 0:
+            absolute = 0
+        elif i + 1 < len(cps) and cps[i + 1][0] > cps[i][0]:
+            o0, l0 = cps[i]
+            o1, l1 = cps[i + 1]
+            absolute = l0 + round((offset - o0) * (l1 - l0) / (o1 - o0))
+        else:
+            absolute = cps[i][1]
+        return max(0, min(absolute - self.render_base, self.render_len - 1))
+
+
 class LogView:
     """Terminal-emulated view of a pane log (a raw pipe-pane capture full of
     cursor-addressed repaints). Bytes are fed through pyte so the stream
@@ -321,6 +376,12 @@ class LogView:
     land in history, so a finished run shows more than the final screen.
     Same stat-gated incremental contract as JournalTail: the first read seeks
     to the last max_bytes, truncation resets — the emulator included.
+
+    Bytes are fed in checkpoint_bytes slices, recording (file offset,
+    absolute cursor line) pairs so journal log_pos offsets map back to
+    rendered lines (see LogIndex). Cursor-addressed repaints make the
+    mapping approximate — the cursor sits wherever the CLI left it — but
+    it is exact for plain streaming output.
 
     Known degradations, all strictly better than rendering the raw stream:
     a mid-stream first frame may be partial until the next repaint; altscreen
@@ -334,18 +395,26 @@ class LogView:
         columns: int = _PANE_COLUMNS,
         lines: int = _PANE_LINES,
         history: int = _HISTORY_LINES,
+        checkpoint_bytes: int = 4096,
     ):
         self.path = path
         self.max_bytes = max_bytes
         self._columns, self._lines, self._history = columns, lines, history
+        self._checkpoint_bytes = checkpoint_bytes
         self._offset: int | None = None  # None until the file first appears
         self._row_cache: dict[int, Text] = {}  # id(history row) -> rendered
         self._reset_screen()
 
     def _reset_screen(self) -> None:
         self._screen = pyte.HistoryScreen(self._columns, self._lines, history=self._history)
+        self._screen.history = self._screen.history._replace(
+            top=_CountingDeque(maxlen=self._history)
+        )
         self._stream = pyte.ByteStream(self._screen)
         self._row_cache.clear()
+        self._checkpoints: list[tuple[int, int]] = []
+        self._render_base = 0
+        self._render_len = 0
 
     def read_new(self) -> bool:
         """Feed any new bytes into the emulator; True when content changed."""
@@ -359,17 +428,35 @@ class LogView:
         size = sig[1]
         if self._offset is None:
             self._offset = max(0, size - self.max_bytes)
+            # offsets at or before the tail seek clamp to the first line
+            self._checkpoints = [(self._offset, 0)]
         elif size < self._offset:
             self._offset = 0
             self._reset_screen()
+            self._checkpoints = [(0, 0)]
         if size == self._offset:
             return False
         with self.path.open("rb") as f:
             f.seek(self._offset)
             chunk = f.read(size - self._offset)
-        self._offset += len(chunk)
-        self._stream.feed(chunk)
+        top = self._screen.history.top
+        for start in range(0, len(chunk), self._checkpoint_bytes):
+            piece = chunk[start : start + self._checkpoint_bytes]
+            # ByteStream buffers escape sequences split across feeds
+            self._stream.feed(piece)
+            self._offset += len(piece)
+            line = top.dropped + len(top) + self._screen.cursor.y
+            self._checkpoints.append((self._offset, line))
+        # drop checkpoints whose lines evicted past the history horizon;
+        # their offsets would clamp to line 0 anyway
+        while len(self._checkpoints) > 1 and self._checkpoints[1][1] <= top.dropped:
+            self._checkpoints.pop(0)
         return True
+
+    def index(self) -> LogIndex:
+        """Snapshot for log_pos -> rendered-line lookups; reflects the most
+        recent render() (render_base/render_len are set there)."""
+        return LogIndex(tuple(self._checkpoints), self._render_base, self._render_len)
 
     def render(self) -> Text:
         """History + current screen as one styled Text, trailing blank rows
@@ -390,7 +477,10 @@ class LogView:
         rows += [_render_row(screen.buffer[y]) for y in range(screen.lines)]
         while rows and not rows[-1].plain:
             rows.pop()
-        del rows[: max(0, len(rows) - self._history)]
+        front_drop = max(0, len(rows) - self._history)
+        del rows[:front_drop]
+        self._render_base = screen.history.top.dropped + front_drop
+        self._render_len = len(rows)
         return Text("\n").join(rows)
 
 

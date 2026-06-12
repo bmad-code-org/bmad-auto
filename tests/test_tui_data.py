@@ -295,6 +295,115 @@ def test_log_view_history_beyond_screen(tmp_path):
     assert "row 080" in plain
 
 
+# ------------------------------------------------------------------ LogIndex
+
+
+def numbered_log(path: Path, count: int = 40) -> list[int]:
+    """`line NN\\r\\n` rows; returns each line's starting byte offset."""
+    offsets = []
+    buf = b""
+    for i in range(count):
+        offsets.append(len(buf))
+        buf += f"line {i:02d}\r\n".encode()
+    path.write_bytes(buf)
+    return offsets
+
+
+def test_log_index_maps_offsets(tmp_path):
+    path = tmp_path / "task.log"
+    offs = numbered_log(path)
+    view = data.LogView(path, checkpoint_bytes=1)
+    assert view.read_new() is True
+    plain = view.render().plain.splitlines()
+    idx = view.index()
+    for k in (0, 7, 23, 39):
+        # mid-line offset: the cursor is exactly on row k at that byte
+        assert plain[idx.line_for_offset(offs[k] + 3)] == f"line {k:02d}"
+
+
+def test_log_index_interpolates_between_coarse_checkpoints(tmp_path):
+    """A whole small file fits in one checkpoint slice; mid-file offsets must
+    interpolate by byte fraction, not collapse to the slice's start line."""
+    path = tmp_path / "task.log"
+    offs = numbered_log(path, count=100)  # uniform 9-byte lines
+    view = data.LogView(path)  # default checkpoint_bytes far above file size
+    view.read_new()
+    plain = view.render().plain.splitlines()
+    line = view.index().line_for_offset(offs[50])
+    assert plain[line] == "line 50"
+
+
+def test_log_index_clamps_to_render_window(tmp_path):
+    path = tmp_path / "task.log"
+    numbered_log(path)
+    view = data.LogView(path, checkpoint_bytes=16)
+    view.read_new()
+    last = len(view.render().plain.splitlines()) - 1
+    idx = view.index()
+    assert idx.line_for_offset(0) == 0
+    assert idx.line_for_offset(10**9) == last  # beyond EOF
+
+
+def test_log_index_none_when_nothing_rendered(tmp_path):
+    view = data.LogView(tmp_path / "task.log")
+    view.read_new()
+    view.render()
+    assert view.index().line_for_offset(0) is None
+
+
+def test_log_index_clamps_before_tail_seek(tmp_path):
+    path = tmp_path / "task.log"
+    path.write_bytes(b"filler\r\n" * 12_000 + b"THE-END\r\n")
+    view = data.LogView(path, max_bytes=1024)
+    view.read_new()
+    view.render()
+    assert view.index().line_for_offset(0) == 0  # long before the seek point
+
+
+def test_log_index_survives_history_eviction(tmp_path):
+    path = tmp_path / "task.log"
+    offs = numbered_log(path, count=40)
+    view = data.LogView(path, checkpoint_bytes=1, lines=5, history=10)
+    view.read_new()
+    plain = view.render().plain.splitlines()
+    idx = view.index()
+    assert len(plain) == 10  # render capped to the newest history rows
+    assert idx.line_for_offset(offs[0] + 3) == 0  # evicted line clamps to top
+    assert plain[idx.line_for_offset(offs[36] + 3)] == "line 36"
+    assert idx.line_for_offset(offs[39] + 3) == len(plain) - 1
+
+
+def test_log_index_truncation_resets(tmp_path):
+    path = tmp_path / "task.log"
+    numbered_log(path)
+    view = data.LogView(path, checkpoint_bytes=1)
+    view.read_new()
+    view.render()
+
+    path.write_bytes(b"fresh 0\r\nfresh 1\r\n")  # shrank: rewritten log
+    assert view.read_new() is True
+    plain = view.render().plain.splitlines()
+    idx = view.index()
+    assert plain[idx.line_for_offset(9 + 3)] == "fresh 1"  # mid second line
+    assert idx.line_for_offset(10**6) == len(plain) - 1
+
+
+def test_log_index_incremental_reads_match_single_read(tmp_path):
+    path = tmp_path / "task.log"
+    offs = numbered_log(path, count=20)
+    whole = path.read_bytes()
+    path.write_bytes(whole[: offs[10]])
+    view = data.LogView(path, checkpoint_bytes=1)
+    view.read_new()
+    with path.open("ab") as f:
+        f.write(whole[offs[10] :])
+    assert view.read_new() is True
+    plain = view.render().plain.splitlines()
+    idx = view.index()
+    for k in (0, 9, 10, 19):
+        assert plain[idx.line_for_offset(offs[k] + 3)] == f"line {k:02d}"
+
+
 # ------------------------------------------------------------ active task id
 
 

@@ -22,6 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from ..journal import LOGS_DIR
 from ..model import TokenUsage
 from ..policy import Policy
 from ..signals import SignalWatcher
@@ -70,7 +71,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
         self.session_name = f"bmad-auto-{run_dir.name}"
         self.watcher = SignalWatcher(run_dir / "events")
         self.tasks_dir = run_dir / "tasks"
-        self.logs_dir = run_dir / "logs"
+        self.logs_dir = run_dir / LOGS_DIR
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 

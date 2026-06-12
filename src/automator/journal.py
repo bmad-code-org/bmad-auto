@@ -12,16 +12,34 @@ from .model import RunState
 
 STATE_FILE = "state.json"
 JOURNAL_FILE = "journal.jsonl"
+LOGS_DIR = "logs"
 
 
 class Journal:
     def __init__(self, run_dir: Path):
         self.run_dir = run_dir
         self.path = run_dir / JOURNAL_FILE
+        self._log_task: str | None = None
+        self._log_path: Path | None = None
         run_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_active_log(self, task_id: str) -> None:
+        """Entries from now on carry log_task/log_pos: the pane log of this
+        task and its byte size at append time. Deliberately not cleared on
+        session end — post-session entries (decisions, story-done) point at
+        the end of the log they are about; the next session replaces it."""
+        self._log_task = task_id
+        self._log_path = self.run_dir / LOGS_DIR / f"{task_id}.log"
 
     def append(self, kind: str, **fields: Any) -> None:
         entry = {"ts": time.time(), "kind": kind, **fields}
+        if self._log_path is not None:
+            try:
+                size = self._log_path.stat().st_size
+            except OSError:
+                size = 0  # pipe-pane has not created the file yet
+            entry.setdefault("log_task", self._log_task)
+            entry.setdefault("log_pos", size)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
 

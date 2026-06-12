@@ -641,3 +641,44 @@ def test_journal_records_decisions(project):
         "run-complete",
     ):
         assert expected in kinds
+
+
+def test_journal_stamps_log_position(tmp_path):
+    journal = Journal(tmp_path)
+    journal.append("run-start")
+    journal.set_active_log("t-dev-1")
+    journal.append("session-start", task_id="t-dev-1")  # log file not created yet
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "t-dev-1.log").write_bytes(b"x" * 37)
+    journal.append("dev-decision", story_key="1-1-a")
+    journal.append("custom", log_task="elsewhere", log_pos=5)  # caller fields win
+
+    entries = journal.entries()
+    assert "log_task" not in entries[0] and "log_pos" not in entries[0]
+    assert entries[1]["log_task"] == "t-dev-1" and entries[1]["log_pos"] == 0
+    assert entries[2]["log_task"] == "t-dev-1" and entries[2]["log_pos"] == 37
+    assert entries[3]["log_task"] == "elsewhere" and entries[3]["log_pos"] == 5
+
+
+def test_journal_log_position_covers_post_session_entries(project):
+    """The active log is set at session-start and deliberately not cleared:
+    post-session entries (decisions, story-done) point at the end of the log
+    of the session they are about."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    engine, _ = make_engine(
+        project,
+        [dev_effect(project, "1-1-a"), review_effect(project, "1-1-a", clean=True)],
+    )
+    engine.run()
+    entries = engine.journal.entries()
+    starts = [e for e in entries if e["kind"] == "session-start"]
+    assert len(starts) == 2  # dev + review
+    assert all(e["log_task"] == e["task_id"] for e in starts)
+    assert all(isinstance(e["log_pos"], int) for e in starts)
+    story_start = next(e for e in entries if e["kind"] == "story-start")
+    assert "log_task" not in story_start  # written before any session
+    dev_decision = next(e for e in entries if e["kind"] == "dev-decision")
+    assert dev_decision["log_task"] == starts[0]["task_id"]
+    story_done = next(e for e in entries if e["kind"] == "story-done")
+    assert story_done["log_task"] == starts[-1]["task_id"]

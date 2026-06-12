@@ -60,6 +60,9 @@ class BmadAutoApp(App[None]):
     #tabs {
         height: 1fr;
     }
+    #journal {
+        height: 1fr;
+    }
     #sprint {
         padding: 1 2;
     }

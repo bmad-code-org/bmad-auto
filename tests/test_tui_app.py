@@ -11,7 +11,14 @@ import os
 from pathlib import Path
 
 from conftest import install_bmad_config, write_sprint
-from textual.widgets import Checkbox, DataTable, Input, RichLog, TabbedContent
+from textual.widgets import (
+    Checkbox,
+    DataTable,
+    Input,
+    OptionList,
+    RichLog,
+    TabbedContent,
+)
 
 from automator.journal import Journal, save_state
 from automator.model import Phase, RunState, StoryTask
@@ -132,6 +139,14 @@ async def test_selection_switches_task_table(project):
         assert tasks_table.get_row_at(0)[0] == "1-1-login"
 
 
+def journal_rows(journal: OptionList) -> list[str]:
+    return [str(journal.get_option_at_index(i).prompt) for i in range(journal.option_count)]
+
+
+def log_text(screen: DashboardScreen) -> str:
+    return "\n".join(strip.text for strip in screen.query_one("#log", RichLog).lines)
+
+
 async def test_journal_pane_updates_after_poll(project):
     root = project.project
     run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
@@ -142,13 +157,13 @@ async def test_journal_pane_updates_after_poll(project):
         await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
         Journal(run_dir).append("story-start", story_key="1-2-search")
         screen._tick(force_rescan=False)  # manual poll, no 1s wait
-        journal = screen.query_one("#journal", RichLog)
+        journal = screen.query_one("#journal", OptionList)
 
-        def has_line() -> bool:
-            return any("story-start" in strip.text for strip in journal.lines)
+        def has_entry() -> bool:
+            return any("story-start" in row for row in journal_rows(journal))
 
-        await until(pilot, has_line)
-        assert any("1-2-search" in strip.text for strip in journal.lines)
+        await until(pilot, has_entry)
+        assert any("1-2-search" in row for row in journal_rows(journal))
 
 
 async def test_log_pane_shows_emulated_content(project):
@@ -178,6 +193,91 @@ async def test_log_pane_shows_emulated_content(project):
         assert "— story-1.log —" in text
         assert "thinking" not in text  # repaint frames collapsed away
         assert "\x1b" not in text
+
+
+# ------------------------------------------------------- journal -> log jump
+
+
+def write_numbered_log(run_dir: Path, task_id: str, count: int = 200) -> list[int]:
+    """`row NNN\\r\\n` lines; returns each row's starting byte offset."""
+    (run_dir / "logs").mkdir(exist_ok=True)
+    offsets, buf = [], b""
+    for i in range(count):
+        offsets.append(len(buf))
+        buf += f"row {i:03d}\r\n".encode()
+    (run_dir / "logs" / f"{task_id}.log").write_bytes(buf)
+    return offsets
+
+
+async def test_journal_enter_jumps_to_log_position(project):
+    root = project.project
+    run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
+    offsets = write_numbered_log(run_dir, "story-1")
+    journal = Journal(run_dir)
+    journal.set_active_log("story-1")
+    journal.append("session-start", task_id="story-1")
+    # a mid-log event: explicit log_pos wins over the stamped file size
+    journal.append("checkpoint", log_task="story-1", log_pos=offsets[100])
+    app = BmadAutoApp(root)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
+        journal_list = screen.query_one("#journal", OptionList)
+        await until(pilot, lambda: journal_list.option_count == 2)
+        journal_list.focus()
+        await pilot.press("end", "enter")  # select the checkpoint entry
+        tabs = screen.query_one("#tabs", TabbedContent)
+        await until(pilot, lambda: tabs.active == "tab-log")
+        log = screen.query_one("#log", RichLog)
+        # scrolled into the middle of the log, not snapped to either end
+        await until(pilot, lambda: 0 < log.scroll_y < log.max_scroll_y)
+        assert "row 100" in log_text(screen)
+
+
+async def test_journal_enter_without_position_notifies(project):
+    root = project.project
+    run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
+    Journal(run_dir).append("story-start", story_key="1-2-search")  # no session yet
+    app = BmadAutoApp(root)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
+        journal_list = screen.query_one("#journal", OptionList)
+        await until(pilot, lambda: journal_list.option_count == 1)
+        journal_list.focus()
+        await pilot.press("end", "enter")
+        await until(pilot, lambda: any("no log position" in m for m in notifications(app)))
+        assert screen.query_one("#tabs", TabbedContent).active == "tab-journal"
+
+
+async def test_journal_jump_pins_other_sessions_log(project):
+    root = project.project
+    run_dir = make_run(root, "20260611-100000-aaaa", alive=True)
+    write_numbered_log(run_dir, "story-1", count=30)
+    write_numbered_log(run_dir, "story-2", count=30)
+    journal = Journal(run_dir)
+    journal.set_active_log("story-1")
+    journal.append("session-start", task_id="story-1")
+    journal.append("session-end", task_id="story-1")
+    journal.set_active_log("story-2")
+    journal.append("session-start", task_id="story-2")  # active session: story-2
+    app = BmadAutoApp(root)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.selected_run_id == "20260611-100000-aaaa")
+        await until(pilot, lambda: screen._displayed_log_task == "story-2")
+        journal_list = screen.query_one("#journal", OptionList)
+        await until(pilot, lambda: journal_list.option_count == 3)
+        journal_list.focus()
+        journal_list.highlighted = 1  # session-end of story-1
+        await pilot.press("enter")
+        await until(pilot, lambda: "— story-1.log — (pinned" in log_text(screen))
+        await pilot.press("escape")  # unpin: back to following the active log
+        await until(pilot, lambda: "— story-2.log —" in log_text(screen))
+        assert "(pinned" not in log_text(screen)
 
 
 async def test_sprint_tab_shows_counts(project):

@@ -19,12 +19,14 @@ from typing import Any
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     DataTable,
     Footer,
     Header,
+    OptionList,
     RichLog,
     Static,
     TabbedContent,
@@ -34,11 +36,13 @@ from textual.widgets import (
 from ...model import RunState
 from ...runs import RUNS_DIR
 from .. import data
-from ..widgets import RunHeader, journal_line, status_cell
+from ..widgets import JournalEntryOption, RunHeader, status_cell
 
 # Keep at most this many parsed journal entries per run for active-task
-# tracking; the visible pane is bounded separately by RichLog max_lines.
+# tracking; the visible pane is bounded separately per widget.
 _MAX_ENTRIES = 500
+
+_MAX_JOURNAL_OPTIONS = 2000  # visible journal rows kept in the OptionList
 
 _RESCAN_EVERY = 3  # run-list + sprint rescan cadence, in 1s ticks
 
@@ -77,6 +81,8 @@ class _Snapshot:
     log_task: str | None = None
     log_reset: bool = False
     log_lines: Text | None = None  # full re-render; None = unchanged this tick
+    log_index: data.LogIndex | None = None  # rebuilt alongside log_lines
+    log_pinned: bool = False
     attention_reset: bool = False
     new_attention: str = ""
     toast_attention: bool = False
@@ -85,6 +91,8 @@ class _Snapshot:
 
 
 class DashboardScreen(Screen[None]):
+    BINDINGS = [Binding("escape", "unpin_log", "follow log", show=False)]
+
     def __init__(self, project: Path):
         super().__init__()
         self.project = project
@@ -96,6 +104,11 @@ class DashboardScreen(Screen[None]):
         self._pending_run: str | None = None  # just-launched run, no state.json yet
         self._pending_deadline = 0.0
         self._decision: tuple[str, str] | None = None
+        # journal -> log jump state, all owned by the UI thread
+        self._log_index: data.LogIndex | None = None
+        self._displayed_log_task: str | None = None
+        self._pin_task: str | None = None  # show this task's log instead of the active one
+        self._pending_jump: tuple[str, int] | None = None  # (task_id, log_pos)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -106,9 +119,11 @@ class DashboardScreen(Screen[None]):
                 yield DataTable(id="tasks", cursor_type="row")
                 with TabbedContent(id="tabs"):
                     with TabPane("Journal", id="tab-journal"):
-                        yield RichLog(id="journal", max_lines=2000, auto_scroll=True)
+                        yield OptionList(id="journal")
                     with TabPane("Log", id="tab-log"):
-                        yield RichLog(id="log", max_lines=2000, auto_scroll=True)
+                        # headroom over the render's 2000-line history cap so
+                        # the header row is never silently dropped at capacity
+                        yield RichLog(id="log", max_lines=2048, auto_scroll=True)
                     with TabPane("Sprint", id="tab-sprint"):
                         yield Static(id="sprint")
                     with TabPane("Attention", id="tab-attention"):
@@ -157,10 +172,15 @@ class DashboardScreen(Screen[None]):
         self._generation += 1
         self._ctx = _PollContext(self.project / RUNS_DIR / run_id)
         self._decision = None
+        self._log_index = None
+        self._displayed_log_task = None
+        self._pin_task = None
+        self._pending_jump = None
         tasks = self.query_one("#tasks", DataTable)
         tasks.clear()
         self._task_rows.clear()
-        for log_id in ("#journal", "#log", "#attention"):
+        self.query_one("#journal", OptionList).clear_options()
+        for log_id in ("#log", "#attention"):
             self.query_one(log_id, RichLog).clear()
         self.query_one("#runheader", RunHeader).show_run(run_id, data.UNKNOWN, None)
         self._tick(force_rescan=False)
@@ -173,6 +193,59 @@ class DashboardScreen(Screen[None]):
         self._pending_deadline = time.monotonic() + _LAUNCH_TIMEOUT
         self._select_run(run_id)
         self.query_one("#runheader", RunHeader).show_starting(run_id)
+
+    # ----------------------------------------------------- journal -> log jump
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "journal":
+            return
+        entry = getattr(event.option, "entry", None)
+        if entry is not None:
+            self._jump_to_log_event(entry)
+
+    def _jump_to_log_event(self, entry: dict[str, Any]) -> None:
+        task, pos = entry.get("log_task"), entry.get("log_pos")
+        if not task or not isinstance(pos, (int, float)):
+            self.notify(
+                "no log position recorded for this entry (older run?)",
+                severity="warning",
+            )
+            return
+        task, pos = str(task), int(pos)
+        self.query_one("#tabs", TabbedContent).active = "tab-log"
+        if task == self._displayed_log_task and self._log_index is not None:
+            self._scroll_log_to(self._log_index.line_for_offset(pos))
+            return
+        # another session's log (or this one not rendered yet): pin it and
+        # finish the jump once a poll has fed and rendered that file
+        self._pending_jump = (task, pos)
+        if task != self._displayed_log_task:
+            self._pin_task = task
+        self._tick(force_rescan=False)
+
+    def _scroll_log_to(self, line: int | None, attempts: int = 20) -> None:
+        if line is None:
+            self.notify("log is empty or not loaded yet", severity="warning")
+            return
+        log = self.query_one("#log", RichLog)
+        target = line + 1  # the '— task.log —' header row above the render
+        if log.virtual_size.height <= target:
+            # A previously hidden RichLog defers writes until the tab switch
+            # gives it a size, and that flush applies its own scroll_end.
+            # Wait for the flush (content taller than the target proves it)
+            # so our scroll lands after it instead of being stomped.
+            if attempts > 0:
+                self.set_timer(0.05, lambda: self._scroll_log_to(line, attempts - 1))
+            return
+        viewport = max(1, log.scrollable_content_region.height)
+        log.scroll_to(y=max(0, target - viewport // 2), animate=False)
+
+    def action_unpin_log(self) -> None:
+        if self._pin_task is None and self._pending_jump is None:
+            return
+        self._pin_task = None
+        self._pending_jump = None
+        self._tick(force_rescan=False)
 
     # --------------------------------------------------------------- polling
 
@@ -187,10 +260,13 @@ class DashboardScreen(Screen[None]):
         if force_rescan is None:
             force_rescan = self._tick_count % _RESCAN_EVERY == 0
             self._tick_count += 1
-        self._poll(self._ctx, self._generation, force_rescan)
+        # the pin is read here on the UI thread; ctx stays worker-owned
+        self._poll(self._ctx, self._generation, force_rescan, self._pin_task)
 
     @work(thread=True, exclusive=True, group="poll")
-    def _poll(self, ctx: _PollContext | None, generation: int, rescan: bool) -> None:
+    def _poll(
+        self, ctx: _PollContext | None, generation: int, rescan: bool, pin: str | None
+    ) -> None:
         snap = _Snapshot(generation=generation)
         if rescan:
             snap.runs = data.discover_runs(self.project)
@@ -208,7 +284,8 @@ class DashboardScreen(Screen[None]):
             if snap.decision is not None and ctx.decision_toasted != snap.decision[0]:
                 snap.toast_decision = True
             ctx.decision_toasted = snap.decision[0] if snap.decision else None
-            task = data.active_task_id(ctx.run_dir, ctx.entries)
+            task = pin or data.active_task_id(ctx.run_dir, ctx.entries)
+            snap.log_pinned = pin is not None
             if task != ctx.log_task:
                 ctx.log_task = task
                 ctx.log = (
@@ -218,6 +295,7 @@ class DashboardScreen(Screen[None]):
             snap.log_task = task
             if ctx.log is not None and (ctx.log.read_new() or snap.log_reset):
                 snap.log_lines = ctx.log.render()
+                snap.log_index = ctx.log.index()
             attention = ctx.watcher.attention()
             if len(attention) < ctx.attention_seen:
                 snap.attention_reset = True
@@ -257,22 +335,44 @@ class DashboardScreen(Screen[None]):
                 timeout=30,
             )
 
-        journal = self.query_one("#journal", RichLog)
-        for entry in snap.new_entries:
-            journal.write(journal_line(entry))
+        journal = self.query_one("#journal", OptionList)
+        if snap.new_entries:
+            at_end = journal.is_vertical_scroll_end
+            journal.add_options(JournalEntryOption(e) for e in snap.new_entries)
+            for _ in range(max(0, journal.option_count - _MAX_JOURNAL_OPTIONS)):
+                journal.remove_option_at_index(0)
+            if at_end:
+                # follow the tail like the old RichLog did, but leave the
+                # highlight alone so a user browsing upward is not yanked down
+                journal.scroll_end(animate=False)
 
         log = self.query_one("#log", RichLog)
+        self._displayed_log_task = snap.log_task
+        if snap.log_reset:
+            self._log_index = None
+        if snap.log_index is not None:
+            self._log_index = snap.log_index
         if snap.log_reset or snap.log_lines is not None:
             # Cursor-up repaints rewrite earlier content, so the pane is a
             # full re-render, not an append. Content above the live screen is
             # stable history, so preserving scroll_y keeps a scrolled-up user
             # anchored; only follow the tail if they were already at it.
+            # (Jump targets rely on wrap=False: one render line == one row.)
             at_end = log.is_vertical_scroll_end or snap.log_reset
             log.clear()
             if snap.log_task:
-                log.write(Text(f"— {snap.log_task}.log —", style="dim"), scroll_end=False)
+                suffix = " (pinned — esc to follow)" if snap.log_pinned else ""
+                log.write(Text(f"— {snap.log_task}.log —{suffix}", style="dim"), scroll_end=False)
             if snap.log_lines is not None and snap.log_lines.plain:
                 log.write(snap.log_lines, scroll_end=at_end)
+        if (
+            self._pending_jump is not None
+            and snap.log_task == self._pending_jump[0]
+            and self._log_index is not None
+        ):
+            _, pos = self._pending_jump
+            self._pending_jump = None
+            self._scroll_log_to(self._log_index.line_for_offset(pos))
 
         attention = self.query_one("#attention", RichLog)
         if snap.attention_reset:

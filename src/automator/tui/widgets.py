@@ -13,6 +13,7 @@ from typing import Any
 
 from rich.text import Text
 from textual.widgets import Static
+from textual.widgets.option_list import Option
 
 from ..model import Phase, RunState
 from . import data
@@ -140,6 +141,11 @@ _JOURNAL_STYLES = (
 )
 
 
+# metadata fields not worth a column on every line; log_task/log_pos drive
+# the journal -> log jump, not the human
+_JOURNAL_HIDDEN_FIELDS = ("ts", "kind", "log_task", "log_pos")
+
+
 def journal_line(entry: dict[str, Any]) -> Text:
     kind = str(entry.get("kind", "?"))
     style = next((s for sub, s in _JOURNAL_STYLES if sub in kind), "dim")
@@ -150,10 +156,21 @@ def journal_line(entry: dict[str, Any]) -> Text:
     text = Text()
     text.append(f"{clock:8s} ", style="dim")
     text.append(f"{kind:24s}", style=style)
-    fields = "  ".join(f"{k}={_short(v)}" for k, v in entry.items() if k not in ("ts", "kind"))
+    fields = "  ".join(
+        f"{k}={_short(v)}" for k, v in entry.items() if k not in _JOURNAL_HIDDEN_FIELDS
+    )
     if fields:
         text.append(" " + fields)
     return text
+
+
+class JournalEntryOption(Option):
+    """One journal entry as an OptionList row; carries the raw entry so
+    selecting it can jump to the entry's position in the pane log."""
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        super().__init__(journal_line(entry))
+        self.entry = entry
 
 
 def _short(value: Any, limit: int = 60) -> str:
