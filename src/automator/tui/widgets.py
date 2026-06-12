@@ -52,6 +52,17 @@ class RunHeader(Static):
         )
         self.update(text)
 
+    def show_starting(self, run_id: str) -> None:
+        text = Text()
+        text.append(run_id, style="bold")
+        text.append("  ⧗ starting…", style="yellow")
+        text.append(
+            "\nwaiting for the engine to write state.json"
+            " — if nothing appears, attach to tmux session bmad-auto-ctl",
+            style="dim",
+        )
+        self.update(text)
+
     def show_run(self, run_id: str, status: str, state: RunState | None) -> None:
         text = Text()
         text.append(run_id, style="bold")

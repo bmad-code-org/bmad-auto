@@ -1,0 +1,212 @@
+"""Run-control modal dialogs.
+
+Results come back through ModalScreen.dismiss(): a dict of options from the
+start modals, True from confirmations, None on cancel/escape. Pause reasons
+and captured command output are arbitrary engine text and are rendered as
+rich Text, never markup.
+"""
+
+from __future__ import annotations
+
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Checkbox, Input, Label, Static
+
+from ...model import RunState
+
+
+def _int_or_none(value: str) -> int | None:
+    value = value.strip()
+    return int(value) if value else None
+
+
+class BaseDialog(ModalScreen):
+    """Shared chrome: centered bordered box, escape cancels."""
+
+    DEFAULT_CSS = """
+    BaseDialog {
+        align: center middle;
+    }
+    BaseDialog #dialog {
+        width: 64;
+        height: auto;
+        max-height: 90%;
+        padding: 1 2;
+        background: $surface;
+        border: thick $primary-darken-2;
+    }
+    BaseDialog .title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    BaseDialog .buttons {
+        height: auto;
+        align-horizontal: right;
+        margin-top: 1;
+    }
+    BaseDialog .buttons Button {
+        margin-left: 2;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class StartRunModal(BaseDialog):
+    """Options for `bmad-auto run` → {epic, story, max_stories, dry_run}."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("start run", classes="title")
+            yield Input(placeholder="epic — blank for all", type="integer", id="epic")
+            yield Input(placeholder="story key — blank for all", id="story")
+            yield Input(
+                placeholder="max stories — blank for no limit",
+                type="integer",
+                id="max-stories",
+            )
+            yield Checkbox("dry run (print the plan, spawn nothing)", id="dry-run")
+            with Horizontal(classes="buttons"):
+                yield Button("start", variant="primary", id="ok")
+                yield Button("cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "ok":
+            self.dismiss(None)
+            return
+        self.dismiss(
+            {
+                "epic": _int_or_none(self.query_one("#epic", Input).value),
+                "story": self.query_one("#story", Input).value.strip() or None,
+                "max_stories": _int_or_none(self.query_one("#max-stories", Input).value),
+                "dry_run": self.query_one("#dry-run", Checkbox).value,
+            }
+        )
+
+
+class StartSweepModal(BaseDialog):
+    """Options for `bmad-auto sweep` → {no_prompt, decisions_only,
+    max_bundles, dry_run}."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("start sweep", classes="title")
+            yield Checkbox("unattended (--no-prompt): skip decisions", id="no-prompt")
+            yield Checkbox("decisions only: triage + answer, no bundles", id="decisions-only")
+            yield Input(
+                placeholder="max bundles — blank for policy default",
+                type="integer",
+                id="max-bundles",
+            )
+            yield Checkbox("dry run (list open entries, spawn nothing)", id="dry-run")
+            with Horizontal(classes="buttons"):
+                yield Button("start", variant="primary", id="ok")
+                yield Button("cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "ok":
+            self.dismiss(None)
+            return
+        self.dismiss(
+            {
+                "no_prompt": self.query_one("#no-prompt", Checkbox).value,
+                "decisions_only": self.query_one("#decisions-only", Checkbox).value,
+                "max_bundles": _int_or_none(self.query_one("#max-bundles", Input).value),
+                "dry_run": self.query_one("#dry-run", Checkbox).value,
+            }
+        )
+
+
+class ConfirmModal(BaseDialog):
+    """Generic confirmation → dismiss(True) on confirm, None otherwise."""
+
+    def __init__(
+        self,
+        title: str,
+        body: str | Text,
+        *,
+        confirm_label: str = "confirm",
+        warning: str | None = None,
+    ):
+        super().__init__()
+        self._title = title
+        self._body = body if isinstance(body, Text) else Text(body)
+        self._confirm_label = confirm_label
+        self._warning = warning
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._title, classes="title")
+            yield Static(self._body)
+            if self._warning:
+                yield Static(Text(f"⚠ {self._warning}", style="bold red"))
+            with Horizontal(classes="buttons"):
+                yield Button(self._confirm_label, variant="warning", id="ok")
+                yield Button("cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(True if event.button.id == "ok" else None)
+
+
+class ConfirmResumeModal(ConfirmModal):
+    """Resume confirmation with pause details and a double-drive warning when
+    the recorded engine pid is still alive."""
+
+    def __init__(self, run_id: str, state: RunState, engine_alive: bool):
+        body = Text()
+        body.append("resume run ")
+        body.append(run_id, style="bold")
+        body.append("?\n")
+        if state.paused:
+            body.append(f"paused at {state.paused_stage or '?'}", style="yellow")
+            if state.paused_reason:
+                body.append(f" — {state.paused_reason}", style="yellow")
+        else:
+            body.append("run is not paused — it looks interrupted", style="dim")
+        warning = (
+            "engine.pid is still alive — resuming would double-drive this run"
+            if engine_alive
+            else None
+        )
+        super().__init__("resume run", body, confirm_label="resume", warning=warning)
+
+
+class TextOutputModal(BaseDialog):
+    """Scrollable captured command output (validate, dry runs)."""
+
+    DEFAULT_CSS = """
+    TextOutputModal #dialog {
+        width: 96;
+        height: 80%;
+    }
+    TextOutputModal #output {
+        height: 1fr;
+    }
+    """
+
+    def __init__(self, title: str, returncode: int, output: str):
+        super().__init__()
+        self._title = title
+        self._returncode = returncode
+        self._output = output
+
+    def compose(self) -> ComposeResult:
+        status = "ok" if self._returncode == 0 else f"exit {self._returncode}"
+        with Vertical(id="dialog"):
+            yield Label(f"{self._title} — {status}", classes="title")
+            with VerticalScroll(id="output"):
+                if self._output.strip():
+                    yield Static(Text.from_ansi(self._output))
+                else:
+                    yield Static(Text("(no output)", style="dim"))
+            with Horizontal(classes="buttons"):
+                yield Button("close", variant="primary", id="ok")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)

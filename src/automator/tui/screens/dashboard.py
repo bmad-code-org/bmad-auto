@@ -11,6 +11,7 @@ selection-independent and is always applied.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,8 @@ from ..widgets import RunHeader, journal_line, status_cell
 _MAX_ENTRIES = 500
 
 _RESCAN_EVERY = 3  # run-list + sprint rescan cadence, in 1s ticks
+
+_LAUNCH_TIMEOUT = 10.0  # seconds before a pending launch is presumed failed
 
 
 class _PollContext:
@@ -79,6 +82,8 @@ class DashboardScreen(Screen[None]):
         self._tick_count = 0
         self._run_rows: list[str] = []  # row keys, table order (oldest first)
         self._task_rows: set[str] = set()
+        self._pending_run: str | None = None  # just-launched run, no state.json yet
+        self._pending_deadline = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -141,9 +146,25 @@ class DashboardScreen(Screen[None]):
         self.query_one("#runheader", RunHeader).show_run(run_id, data.UNKNOWN, None)
         self._tick(force_rescan=False)
 
+    def expect_run(self, run_id: str) -> None:
+        """A launch just happened: select the run before its dir exists, show
+        a 'starting' header until state.json appears, and complain past the
+        launch timeout."""
+        self._pending_run = run_id
+        self._pending_deadline = time.monotonic() + _LAUNCH_TIMEOUT
+        self._select_run(run_id)
+        self.query_one("#runheader", RunHeader).show_starting(run_id)
+
     # --------------------------------------------------------------- polling
 
     def _tick(self, force_rescan: bool | None = None) -> None:
+        if self._pending_run is not None and time.monotonic() > self._pending_deadline:
+            self._pending_run = None
+            self.notify(
+                "launch may have failed — attach to tmux session bmad-auto-ctl",
+                severity="error",
+                timeout=15,
+            )
         if force_rescan is None:
             force_rescan = self._tick_count % _RESCAN_EVERY == 0
             self._tick_count += 1
@@ -197,9 +218,13 @@ class DashboardScreen(Screen[None]):
         if not snap.has_run or snap.generation != self._generation:
             return  # selection changed mid-poll: per-run parts are stale
 
-        self.query_one("#runheader", RunHeader).show_run(
-            snap.run_id, snap.status, snap.state
-        )
+        header = self.query_one("#runheader", RunHeader)
+        if snap.run_id == self._pending_run and snap.state is None:
+            header.show_starting(snap.run_id)  # launched, state.json not yet written
+        else:
+            if snap.run_id == self._pending_run:
+                self._pending_run = None  # the engine is up
+            header.show_run(snap.run_id, snap.status, snap.state)
         if snap.state is not None:
             self._apply_tasks(snap.state)
 
@@ -239,6 +264,7 @@ class DashboardScreen(Screen[None]):
             table.clear()
             self._run_rows.clear()
         first_populate = not self._run_rows
+        added: list[str] = []
         for run in runs:
             if run.run_id in self._run_rows:
                 table.update_cell(run.run_id, "st", status_cell(run.status))
@@ -250,9 +276,18 @@ class DashboardScreen(Screen[None]):
                     key=run.run_id,
                 )
                 self._run_rows.append(run.run_id)
+                added.append(run.run_id)
         if first_populate:
-            table.move_cursor(row=len(ids) - 1)  # newest; RowHighlighted selects
-            self._select_run(ids[-1])
+            if self.selected_run_id in ids:
+                # a pre-selected (just-launched) run beats auto-select-newest
+                table.move_cursor(row=ids.index(self.selected_run_id))
+            else:
+                table.move_cursor(row=len(ids) - 1)  # newest; RowHighlighted selects
+                self._select_run(ids[-1])
+        elif self.selected_run_id in added:
+            # the selected run was launched before its dir existed; its row
+            # just appeared — bring the cursor to it
+            table.move_cursor(row=self._run_rows.index(self.selected_run_id))
 
     def _apply_tasks(self, state: RunState) -> None:
         table = self.query_one("#tasks", DataTable)
