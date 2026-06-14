@@ -5,6 +5,43 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.3.1] — 2026-06-14
+
+Maintenance release. Also backfills the previously-undocumented `[0.3.0]` notes below.
+
+### Changed
+
+- `scripts/sync_version.py` now runs `uv lock` as part of the version stamp, so a
+  version bump regenerates the pinned lock in one command. CI runs `uv sync --locked`,
+  which fails the install step on a stale lock (hit while cutting 0.3.0); folding the
+  relock into the stamp keeps a bump a single command. Idempotent, with a loud non-zero
+  exit if `uv` is missing or the lock fails.
+
+## [0.3.0] — 2026-06-14
+
+First release carrying the optional review toggle.
+
+### Added
+
+- **Optional review pass** — new policy `[review] enabled` toggle (default `true`). When
+  disabled, a run skips the separate fresh-context `bmad-auto-review` session: the dev pass
+  runs quick-dev's own internal triple-review unattended and finalizes the story straight to
+  `done` — one session per story instead of two, with verify commands still gating the
+  commit. The flag flows to the dev session via `BMAD_AUTO_SKIP_REVIEW=1`; the dev skill (not
+  the engine) writes the `done` status, preserving the engine-never-writes-status invariant.
+  Global scope: also governs deferred-work sweep bundles. Exposed as a switch in the TUI
+  settings screen.
+
+### Changed
+
+- **Install / upgrade docs** — the README install block now offers main-tracking vs.
+  pinned-tag installs, and a new "Upgrading" section documents the two-step ritual
+  (`uv tool upgrade --reinstall` — required for a git source — then re-lay per-project skills
+  with `init --force-skills`). The `bmad-auto-setup` skill is corrected to use `--reinstall`
+  (plain `uv tool upgrade` reuses the cached git commit and won't pull new code) and notes the
+  skill re-lay step plus tag pinning.
+- Regenerated `uv.lock` for the 0.3.0 version pin.
+
 ## [0.2.0] — 2026-06-14
 
 First versioned release since the initial `0.1.0`. Consolidates everything built since then and
@@ -56,5 +93,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.3.1]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.1
+[0.3.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.1.0
