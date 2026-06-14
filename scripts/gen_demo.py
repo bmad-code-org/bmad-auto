@@ -14,8 +14,8 @@ each frame held for its own delay (so motion is smooth and rests linger).
 No engine, no tmux, no coding-agent sessions, no tokens. Deterministic and
 re-runnable whenever the TUI changes.
 
-    pip install -e ".[tui]"          # textual, tomlkit, pyte
-    python scripts/gen_demo.py       # needs resvg + ffmpeg on PATH
+    uv sync --extra tui              # textual, tomlkit, pyte
+    uv run python scripts/gen_demo.py  # needs resvg + ffmpeg on PATH
 
 Output: docs/images/demo.gif
 """

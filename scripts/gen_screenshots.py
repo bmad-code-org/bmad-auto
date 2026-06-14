@@ -11,8 +11,8 @@ with ``resvg`` for hosts that do not render SVG.
 
 Run it from a checkout that has the TUI extra installed::
 
-    pip install -e ".[tui]"          # textual, tomlkit, pyte
-    python scripts/gen_screenshots.py
+    uv sync --extra tui              # textual, tomlkit, pyte
+    uv run python scripts/gen_screenshots.py
 
 Output lands in ``docs/images/`` as ``<view>.svg`` + ``<view>.png``. The script
 is idempotent — re-run it whenever the TUI changes so the docs stay honest.

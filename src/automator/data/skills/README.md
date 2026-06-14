@@ -24,7 +24,7 @@ The orchestrator tool now bundles these skills, so `bmad-auto init` lays them
 down for you:
 
 ```bash
-pip install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
 bmad-auto init --project /path/to/project --cli claude   # add --cli codex/gemini as needed
 claude "/bmad-auto-setup accept all defaults"            # registers _bmad/ config + help
 ```

@@ -50,14 +50,14 @@ Run `/bmad-auto-setup` with plain prompts if you want to choose interactively �
 
 ## Manual install (repo clone / dev setup)
 
-If you are working from a clone of this repo, install the tool in editable mode and let
+If you are working from a clone of this repo, sync the project env and let
 `bmad-auto init` lay down the skills (the canonical skills live at
 `src/automator/data/skills/` and are bundled into the package):
 
 ```bash
-pip install -e ".[tui]"                                  # the orchestrator tool + TUI
-bmad-auto init --project /path/to/project --cli claude   # installs skills + hooks + policy
-claude "/bmad-auto-setup accept all defaults"            # register _bmad/ config + help
+uv sync --extra tui                                             # the orchestrator tool + TUI
+uv run bmad-auto init --project /path/to/project --cli claude   # installs skills + hooks + policy
+claude "/bmad-auto-setup accept all defaults"                   # register _bmad/ config + help
 ```
 
 Add `--cli codex --cli gemini` to also populate `.agents/skills/`. The skills must be
@@ -101,7 +101,7 @@ The `[tui]` extra pulls in the Textual dashboard (`textual` + `tomlkit` + `pyte`
 **Together (recommended):**
 
 ```bash
-python3 -m pip install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
 ```
 
 **Tool first, TUI later (separately):** install the core without the extra, then add the
@@ -109,25 +109,19 @@ dashboard whenever you want it by re-running the same command **with** `[tui]`:
 
 ```bash
 # core tool only
-python3 -m pip install --upgrade "bmad-automator @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-automator @ git+https://github.com/pbean/bmad-automator.git"
 
-# add the TUI later — pip installs the extra's deps in place, no reinstall of the core
-python3 -m pip install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+# add the TUI later — re-run with the extra (uv upgrades the install in place)
+uv tool install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
 ```
 
 Until the extra is present, `bmad-auto tui` prints a clear error
-(`the TUI requires optional dependencies — pip install 'bmad-automator[tui]'`) rather than
+(`the TUI requires optional dependencies — uv tool install 'bmad-automator[tui]'`) rather than
 failing obscurely.
 
-If pip reports an **externally-managed environment** (PEP 668) or a permission error, do
-**not** force it with `--break-system-packages`. Instead install into an activated virtualenv,
-or:
-
-```bash
-python3 -m pip install --user "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
-# or, isolated (the [tui] extra is included):
-pipx install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
-```
+`uv tool install` drops `bmad-auto` into uv's own managed tool environment, so there's no
+PEP 668 externally-managed conflict and no need for a virtualenv, `--user`, or `--break-system-packages`.
+To update later, run `uv tool upgrade bmad-automator`.
 
 Confirm with `bmad-auto --version`.
 

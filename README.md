@@ -42,7 +42,7 @@ Inspired by the official [bmad-automator](https://github.com/bmad-code-org/bmad-
 ## Quick start
 
 ```bash
-pip install -e ".[tui]"          # core is pyyaml-only; [tui] adds the dashboard
+uv sync --extra tui              # core is pyyaml-only; [tui] adds the dashboard
 
 cd /path/to/your/bmad/project
 bmad-auto init                   # installs bmad-auto-* skills + hooks + .automator/policy.toml + gitignore
@@ -75,7 +75,7 @@ Every command takes `--project <dir>` (default: the current directory).
 ## The TUI
 
 ```bash
-pip install -e ".[tui]"   # textual + tomlkit + pyte
+uv sync --extra tui       # textual + tomlkit + pyte
 bmad-auto tui
 ```
 
@@ -205,10 +205,10 @@ The orchestrator drives its own forks of the BMAD dev/review skills — your sta
 | `bmad-auto-sweep`  | deferred-work ledger triage (automation-only)              |
 | `bmad-auto-setup`  | registers the module in `_bmad/` config + help             |
 
-**Via pip + `bmad-auto init` (self-sufficient).** Installing the tool and running `init` is all you need — `init` installs the `bmad-auto-*` skills into `.claude/skills/` (claude) and/or `.agents/skills/` (codex/gemini) for the CLIs you select, alongside the hooks and policy:
+**Via uv + `bmad-auto init` (self-sufficient).** Installing the tool and running `init` is all you need — `init` installs the `bmad-auto-*` skills into `.claude/skills/` (claude) and/or `.agents/skills/` (codex/gemini) for the CLIs you select, alongside the hooks and policy:
 
 ```bash
-pip install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
 bmad-auto init --project /path/to/project --cli claude   # add --cli codex/gemini as needed
 claude "/bmad-auto-setup accept all defaults"            # registers _bmad/ config + help
 ```
@@ -312,17 +312,17 @@ Cursor CLI is currently blocked on two gaps, for whoever picks it up: token usag
 ## Development
 
 ```bash
-pip install -e ".[dev]"          # adds pytest, ruff, pytest-asyncio (+ the [tui] extra)
-pytest -q                        # unit + engine scenarios (mock adapter) + tmux integration
-ruff check src tests scripts
+uv sync --all-extras             # adds pytest, ruff, pytest-asyncio (+ the [tui] extra)
+uv run pytest -q                 # unit + engine scenarios (mock adapter) + tmux integration
+uv run ruff check src tests scripts
 ```
 
 **Regenerating the screenshots** in this README: they're rendered headlessly from a populated mock project (no live engine needed) — see [`scripts/gen_screenshots.py`](scripts/gen_screenshots.py).
 
 ```bash
-pip install -e ".[tui]"
-python scripts/gen_screenshots.py   # writes docs/images/*.svg + *.png (PNG needs `resvg` on PATH)
-python scripts/gen_demo.py          # writes docs/images/demo.gif  (needs `resvg` + `ffmpeg`)
+uv sync --extra tui
+uv run python scripts/gen_screenshots.py   # writes docs/images/*.svg + *.png (PNG needs `resvg` on PATH)
+uv run python scripts/gen_demo.py          # writes docs/images/demo.gif  (needs `resvg` + `ffmpeg`)
 ```
 
 The hero **demo GIF** (`docs/images/demo.gif`) is generated the same headless way — `gen_demo.py` drives the read-only TUI through a scripted walkthrough and stitches the frames with `ffmpeg`. ([`scripts/record-demo.sh`](scripts/record-demo.sh) is an alternative that records a _real_ live run via VHS or asciinema, if you'd rather show actual agent sessions.)

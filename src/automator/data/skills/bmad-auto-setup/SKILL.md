@@ -67,20 +67,15 @@ This module ships the **bmad-auto orchestrator** — the Python program that act
 
 Unless the user explicitly asked to skip it (e.g. `skills only` / `--no-tool`), install and bootstrap now. In the commands below, resolve `{project-root}` to the real project path before running.
 
-1. **Check what's already on PATH:** run `bmad-auto --version`. A version printing here does **not** mean this project is set up — it only means _some_ `bmad-auto` is importable in the current environment. Before trusting it, run `python3 -m pip show bmad-automator` and look at `Location`: if it points into a **source checkout** (an editable/dev install) or an unrelated virtualenv, warn the user that the active environment is shadowing the install and that the project would be relying on that checkout. Unless the user explicitly declines, install/upgrade from the canonical source below so the project doesn't depend on an incidental dev environment. Only skip the install if the user confirms the on-PATH copy is the one they want this project to use.
+1. **Check what's already on PATH:** run `bmad-auto --version`. A version printing here does **not** mean this project is set up — it only means _some_ `bmad-auto` is importable in the current environment. Before trusting it, run `uv tool list` and look for `bmad-automator`: if it's absent (the on-PATH copy comes from a source checkout or an unrelated virtualenv), warn the user that the active environment is shadowing a clean install and that the project would be relying on that checkout. Unless the user explicitly declines, install/upgrade from the canonical source below so the project doesn't depend on an incidental dev environment. Only skip the install if the user confirms the on-PATH copy is the one they want this project to use.
 
 2. **Install from the Git repository** (the `[tui]` extra pulls in the Textual dashboard so `bmad-auto tui` works):
 
    ```bash
-   python3 -m pip install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+   uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
    ```
 
-   If pip reports an **externally-managed environment** (PEP 668) or a permission error, do **not** force or `--break-system-packages` it. Surface the message and let the user pick one of:
-   - install into their active virtualenv (recommended if they have one activated), or
-   - `python3 -m pip install --user "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"`, or
-   - `pipx install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"` (isolated; includes the TUI extra).
-
-   Re-run with their choice, then confirm with `bmad-auto --version`.
+   `uv tool install` puts `bmad-auto` in uv's own managed environment, so there's no PEP 668 externally-managed conflict and no need for `--user`, an activated virtualenv, or `--break-system-packages`. If a `bmad-automator` is already installed, re-run with `uv tool install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"` (or `uv tool upgrade bmad-automator`). Confirm with `bmad-auto --version`.
 
 3. **Bootstrap the project** — install the coding-CLI hooks, the bundled `bmad-auto-*` skills, the `.automator/policy.toml` template, and the gitignore entry (idempotent).
 

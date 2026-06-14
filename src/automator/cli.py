@@ -699,7 +699,7 @@ def cmd_tui(args: argparse.Namespace) -> int:
         if (e.name or "").partition(".")[0] in ("textual", "tomlkit"):
             print(
                 "error: the TUI requires optional dependencies — "
-                "pip install 'bmad-automator[tui]'",
+                "uv tool install 'bmad-automator[tui]'",
                 file=sys.stderr,
             )
             return 1
@@ -855,7 +855,7 @@ def main(argv: list[str] | None = None) -> int:
     add(
         "tui",
         cmd_tui,
-        "interactive dashboard (needs `pip install 'bmad-automator[tui]'`)",
+        "interactive dashboard (needs `uv tool install 'bmad-automator[tui]'`)",
     )
 
     args = parser.parse_args(argv)
