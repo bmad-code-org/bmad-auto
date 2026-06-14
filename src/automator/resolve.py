@@ -101,7 +101,12 @@ def run_session(adapter, project: Path, run_dir: Path, story_key: str, *, model:
         },
         model=model,
     )
+    # Drop any marker from a previous resolve of this story: otherwise the agent
+    # sees it and reports "already resolved", and a session that records nothing
+    # would still look like it produced a resolution.
+    marker = resolution_path(run_dir, story_key)
+    marker.unlink(missing_ok=True)
     argv = adapter.interactive_argv(spec)
     env = {**os.environ, **adapter.interactive_env(spec)}
     subprocess.run(argv, cwd=str(project), env=env)  # noqa: S603 - attached, inherited stdio
-    return resolution_path(run_dir, story_key).is_file()
+    return marker.is_file()

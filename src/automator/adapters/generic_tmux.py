@@ -132,11 +132,18 @@ class GenericTmuxAdapter(CodingCLIAdapter):
         task_dir = self.tasks_dir / spec.task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         (task_dir / "prompt.txt").write_text(spec.prompt + "\n", encoding="utf-8")
+        # A re-armed/resumed run reuses task_ids; drop any prior cycle's result
+        # so a session that writes nothing can't be read as a stale completion.
+        (task_dir / "result.json").unlink(missing_ok=True)
 
         self._ensure_session(spec.cwd)
         env_args: list[str] = []
         for key, value in {**self.profile.env, **spec.env}.items():
             env_args += ["-e", f"{key}={value}"]
+        # Stamped before launch: hook events carry wall-clock ns, and
+        # wait_for_completion ignores anything older than this floor so a reused
+        # task_id's earlier Stop event cannot replay.
+        launched_ns = time.time_ns()
         window_id = self._tmux(
             "new-window",
             "-t",
@@ -166,7 +173,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             )
         except TmuxError:
             pass
-        return SessionHandle(task_id=spec.task_id, native_id=window_id)
+        return SessionHandle(task_id=spec.task_id, native_id=window_id, launched_ns=launched_ns)
 
     def wait_for_completion(self, handle: SessionHandle, spec: SessionSpec) -> SessionResult:
         deadline = time.monotonic() + spec.timeout_s
@@ -183,7 +190,10 @@ class GenericTmuxAdapter(CodingCLIAdapter):
                     transcript_path=transcript_path,
                 )
             event = self.watcher.wait_for(
-                handle.task_id, EVENT_KINDS, timeout_s=min(remaining, 5.0)
+                handle.task_id,
+                EVENT_KINDS,
+                timeout_s=min(remaining, 5.0),
+                since_ns=handle.launched_ns,
             )
             if event is None:
                 if not self._window_alive(handle):

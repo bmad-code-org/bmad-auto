@@ -37,6 +37,7 @@ class SessionSpec:
 class SessionHandle:
     task_id: str
     native_id: str  # tmux window id, HTTP session id, ...
+    launched_ns: int = 0  # wall-clock ns just before launch; floor for hook events
 
 
 @dataclass(frozen=True)

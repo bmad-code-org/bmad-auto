@@ -49,6 +49,34 @@ def test_wait_for_buffers_batched_events(tmp_path):
     assert (first.event, second.event) == ("SessionStart", "Stop")
 
 
+def test_wait_for_ignores_events_before_since_ns(tmp_path):
+    """A re-armed run reuses the task_id; a fresh watcher must not replay the
+    previous cycle's Stop (which would read a stale result.json)."""
+    watcher = SignalWatcher(tmp_path / "events")
+    write_event(watcher.events_dir, 100, "t1", "Stop", session_id="old")  # prior cycle
+    write_event(watcher.events_dir, 200, "t1", "Stop", session_id="new")  # this launch
+
+    event = watcher.wait_for("t1", {"Stop"}, timeout_s=1, since_ns=150)
+    assert event is not None and event.session_id == "new"
+
+
+def test_wait_for_since_ns_times_out_when_only_stale(tmp_path):
+    """When the only matching event predates the floor, wait_for must not return
+    it — the session is still running, so this is a timeout."""
+    watcher = SignalWatcher(tmp_path / "events")
+    write_event(watcher.events_dir, 100, "t1", "Stop", session_id="old")
+    now = {"t": 0.0}
+
+    def clock():
+        return now["t"]
+
+    def sleep(seconds):
+        now["t"] += seconds
+
+    out = watcher.wait_for("t1", {"Stop"}, timeout_s=5, clock=clock, sleep=sleep, since_ns=150)
+    assert out is None
+
+
 def test_wait_for_timeout_with_fake_clock(tmp_path):
     watcher = SignalWatcher(tmp_path / "events")
     now = {"t": 0.0}

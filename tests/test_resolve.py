@@ -206,3 +206,18 @@ def test_run_session_no_resolution(tmp_path, monkeypatch):
     assert (
         resolve.run_session(_FakeAdapter(None), tmp_path, run_dir, "6-4-cli-list-command") is False
     )
+
+
+def test_run_session_clears_stale_marker(tmp_path, monkeypatch):
+    """A marker left by a previous resolve of this story must not be read as
+    this session's output (the agent that says 'already resolved' writes none)."""
+    run_dir, state, _ = _escalated_run(tmp_path)
+    resolve.build_context(state, run_dir, "6-4-cli-list-command")
+    stale = resolve.resolution_path(run_dir, "6-4-cli-list-command")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text('{"from": "last time"}', encoding="utf-8")
+    monkeypatch.setattr(resolve.subprocess, "run", lambda *a, **k: None)  # agent records nothing
+    assert (
+        resolve.run_session(_FakeAdapter(None), tmp_path, run_dir, "6-4-cli-list-command") is False
+    )
+    assert not stale.exists()  # stale marker was removed, not reused

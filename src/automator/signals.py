@@ -65,16 +65,26 @@ class SignalWatcher:
         poll_interval: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        since_ns: int = 0,
     ) -> HookEvent | None:
         """Block until an event for task_id with kind in `kinds` arrives, or timeout.
 
         Events polled but not matched stay buffered for later wait_for calls —
         several events often land in one poll (e.g. SessionStart + Stop) and
         none may be lost.
+
+        Events older than `since_ns` (wall-clock ns, the session's launch time)
+        are dropped: a resumed/re-armed run reuses task_ids, and a fresh watcher
+        re-sees the events directory from scratch, so a prior cycle's Stop event
+        would otherwise replay instantly and the old result.json be read as a
+        bogus completion. Sessions run sequentially, so since_ns only advances;
+        anything below the current floor is genuinely stale and safe to discard.
         """
         deadline = clock() + timeout_s
         while True:
             self._pending.extend(self.poll())
+            if since_ns:
+                self._pending = [e for e in self._pending if e.ts >= since_ns]
             for i, event in enumerate(self._pending):
                 if event.task_id == task_id and event.event in kinds:
                     return self._pending.pop(i)

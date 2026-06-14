@@ -159,6 +159,42 @@ def test_tmux_end_to_end_with_fake_cli(tmp_path, profile_name):
 
 
 @pytest.mark.skipif(not HAVE_TMUX, reason="tmux not available")
+def test_tmux_reused_task_id_ignores_stale_artifacts(tmp_path):
+    """A re-armed run reuses the task_id. A prior cycle's Stop event + result.json
+    must NOT replay: start_session clears the stale result, and the launch-time
+    floor makes wait_for skip the old Stop so only the fresh session counts."""
+    fake = _write_fake_cli(tmp_path)
+    adapter = make_adapter(tmp_path, binary=str(fake), extra_args=())
+    task_id = "t-reused-1"
+    # seed last cycle's leftovers, with an obviously old ts and a stale marker
+    task_dir = adapter.tasks_dir / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "result.json").write_text('{"workflow": "STALE"}', encoding="utf-8")
+    events_dir = adapter.watcher.events_dir
+    events_dir.mkdir(parents=True, exist_ok=True)
+    (events_dir / f"1-{task_id}-Stop.json").write_text(
+        '{"ts": 1, "event": "Stop", "task_id": "' + task_id + '", "session_id": "old"}',
+        encoding="utf-8",
+    )
+    spec = SessionSpec(
+        task_id=task_id,
+        role="dev",
+        prompt="/bmad-auto-dev 1-1-a",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_RUN_DIR": str(adapter.run_dir), "BMAD_AUTO_TASK_ID": task_id},
+        timeout_s=30.0,
+    )
+    try:
+        result = adapter.run(spec)
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", adapter.session_name], capture_output=True)
+
+    assert result.status == "completed"
+    assert result.result_json["workflow"] == "quick-dev"  # fresh, not "STALE"
+    assert result.session_id == "fake-1"  # fresh session, not "old"
+
+
+@pytest.mark.skipif(not HAVE_TMUX, reason="tmux not available")
 def test_tmux_crash_detected(tmp_path):
     """A session that dies without writing result.json -> crashed. Also the
     SessionEnd-less path (codex profile) relies on this window-death check."""
