@@ -69,8 +69,13 @@ def notifications(app: BmadAutoApp) -> list[str]:
     return [n.message for n in app._notifications]
 
 
-async def until(pilot, condition, timeout: float = 5.0) -> None:
-    """Wait for a predicate across thread-worker polls and their callbacks."""
+async def until(pilot, condition, timeout: float = 15.0) -> None:
+    """Wait for a predicate across thread-worker polls and their callbacks.
+
+    The dashboard polls on a 1.0s interval and each tick hops through a thread
+    worker and a UI callback, so several sequential waits can each need a few
+    ticks. The timeout is generous (returns the instant the predicate holds)
+    to stay reliable on slow/contended CI runners — a tight budget flakes."""
     waited = 0.0
     while not condition():
         if waited >= timeout:

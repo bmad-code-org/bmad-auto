@@ -15,6 +15,7 @@ import yaml
 
 EPIC_RE = re.compile(r"^epic-(\d+)$")
 RETRO_RE = re.compile(r"^epic-(\d+)-retrospective$")
+RETRO_ITEM_RE = re.compile(r"^epic-(\d+)-retro-item-(\d+)-(.+)$")
 STORY_RE = re.compile(r"^(\d+)-(\d+)-(.+)$")
 
 STORY_STATUSES = {"backlog", "ready-for-dev", "in-progress", "review", "done"}
@@ -36,11 +37,28 @@ class Story:
 
 
 @dataclass(frozen=True)
+class RetroItem:
+    """A retrospective action item tracked in sprint-status under the
+    RETRO ACTION ITEMS section: ``epic-{epic}-retro-item-{num}-{slug}``.
+
+    Recognized so they no longer fall into ``unknown_keys``; the orchestrator
+    does not yet drive them as work (see roadmap: retro-item automation).
+    """
+
+    key: str
+    epic: int
+    num: int
+    slug: str
+    status: str
+
+
+@dataclass(frozen=True)
 class SprintStatus:
     path: Path
     epics: dict[int, str]
     stories: tuple[Story, ...]
     retros: dict[int, str]
+    retro_items: tuple[RetroItem, ...]
     unknown_keys: tuple[str, ...]
 
 
@@ -60,11 +78,22 @@ def load(path: Path) -> SprintStatus:
     epics: dict[int, str] = {}
     stories: list[Story] = []
     retros: dict[int, str] = {}
+    retro_items: list[RetroItem] = []
     unknown: list[str] = []
     for key, raw_status in dev.items():
         key = str(key)
         status = str(raw_status).strip()
-        if m := RETRO_RE.match(key):
+        if m := RETRO_ITEM_RE.match(key):
+            retro_items.append(
+                RetroItem(
+                    key=key,
+                    epic=int(m.group(1)),
+                    num=int(m.group(2)),
+                    slug=m.group(3),
+                    status=status,
+                )
+            )
+        elif m := RETRO_RE.match(key):
             retros[int(m.group(1))] = status
         elif m := EPIC_RE.match(key):
             epics[int(m.group(1))] = status
@@ -87,6 +116,7 @@ def load(path: Path) -> SprintStatus:
         epics=epics,
         stories=tuple(stories),
         retros=retros,
+        retro_items=tuple(retro_items),
         unknown_keys=tuple(unknown),
     )
 

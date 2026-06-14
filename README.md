@@ -313,3 +313,4 @@ python scripts/gen_screenshots.py   # writes docs/images/*.svg + *.png (PNG need
 - **[docs/setup-guide.md](docs/setup-guide.md)** — installing the module + the `/bmad-auto-setup` walkthrough.
 - **[docs/tui-guide.md](docs/tui-guide.md)** — the complete TUI reference.
 - **[src/automator/data/skills/README.md](src/automator/data/skills/README.md)** — the `bauto` skill module overview.
+- **[docs/ROADMAP.md](docs/ROADMAP.md)** — planned/deferred orchestrator work and the rationale behind it.
