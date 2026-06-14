@@ -15,6 +15,8 @@ def test_load_classifies_keys(project):
             "epic-2": "backlog",
             "2-1-personality": "backlog",
             "epic-2-retrospective": "optional",
+            "epic-1-retro-item-1-test-design": "done",
+            "epic-2-retro-item-3-fts5-research": "backlog",
             "weird-key": "huh",
         },
     )
@@ -28,6 +30,39 @@ def test_load_classifies_keys(project):
     assert ss.stories[1].epic == 1 and ss.stories[1].num == 2
     assert ss.retros == {1: "optional", 2: "optional"}
     assert ss.unknown_keys == ("weird-key",)
+
+
+def test_load_classifies_retro_items(project):
+    write_sprint(
+        project,
+        {
+            "epic-1-retrospective": "done",
+            "epic-1-retro-item-1-test-design-in-stories": "done",
+            "epic-5-retro-item-2-singleflight-inflight-guard-helper": "backlog",
+        },
+    )
+    ss = sprintstatus.load(project.sprint_status)
+    # retro action items are recognized, not dumped into unknown_keys
+    assert ss.unknown_keys == ()
+    assert ss.retros == {1: "done"}  # plain retrospective key is unaffected
+    assert [(r.key, r.epic, r.num, r.slug, r.status) for r in ss.retro_items] == [
+        ("epic-1-retro-item-1-test-design-in-stories", 1, 1, "test-design-in-stories", "done"),
+        (
+            "epic-5-retro-item-2-singleflight-inflight-guard-helper",
+            5,
+            2,
+            "singleflight-inflight-guard-helper",
+            "backlog",
+        ),
+    ]
+
+
+def test_retro_items_do_not_become_actionable_stories(project):
+    # recognition only: retro items must not leak into story selection
+    write_sprint(project, {"epic-3-retro-item-1-do-a-thing": "backlog"})
+    ss = sprintstatus.load(project.sprint_status)
+    assert ss.stories == ()
+    assert sprintstatus.next_actionable(ss) is None
 
 
 def test_legacy_drafted_maps_to_ready(project):
