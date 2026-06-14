@@ -15,7 +15,13 @@ bmad-auto = "automator.cli:main"
 
 [project.optional-dependencies]
 tui = ["textual>=8.0,<9", "tomlkit>=0.13", "pyte>=0.8.2"]
-dev = ["pytest>=8.0", "ruff>=0.4", "pytest-asyncio>=1.0", "bmad-automator[tui]"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "pytest-asyncio>=1.0",
+  "pytest-rerunfailures>=16.0",
+  "bmad-automator[tui]",
+]
 
 [tool.setuptools]
 include-package-data = true
