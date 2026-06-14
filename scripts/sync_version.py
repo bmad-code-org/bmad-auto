@@ -19,9 +19,13 @@ Every other field is derived from it:
   copy under ``src/automator/data/skills/...`` is too deep, so this root mirror
   is what lets the installer locate the ``bauto`` module.
 
+Stamping also runs ``uv lock`` to refresh ``uv.lock`` (which pins the project
+version); CI's ``uv sync --locked`` fails the install step on a stale lock, so
+the relock is part of the stamp rather than a manual follow-up.
+
 Usage::
 
-    uv run python scripts/sync_version.py 0.2.0   # stamp a new version everywhere
+    uv run python scripts/sync_version.py 0.2.0   # stamp a new version everywhere (+ uv lock)
     uv run python scripts/sync_version.py --check  # verify all fields agree (CI)
 """
 
@@ -30,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -94,6 +99,21 @@ def stamp(version: str) -> None:
     shutil.copyfile(CANONICAL_MODULE_YAML, ROOT_MODULE_YAML)
 
     print(f"stamped version {version} across all files + regenerated {ROOT_MODULE_YAML.name}")
+    _relock()
+
+
+def _relock() -> None:
+    """Refresh uv.lock so the pinned project version tracks the bump. CI runs
+    `uv sync --locked`, which fails the install step on a stale lock — so this is
+    part of the stamp, not an optional follow-up. Loud non-zero exit (the files
+    are already stamped; re-running is idempotent) beats a silent drift."""
+    try:
+        subprocess.run(["uv", "lock"], cwd=ROOT, check=True)
+    except FileNotFoundError:
+        sys.exit("error: `uv` not found — run `uv lock` manually before committing")
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"error: `uv lock` failed (exit {e.returncode}) — fix and commit uv.lock")
+    print("regenerated uv.lock")
 
 
 def _field(pat: re.Pattern[str], text: str, group_split: str = '"') -> str | None:
