@@ -221,11 +221,19 @@ def test_triage_client_switch_uses_profile_defaults(tmp_path):
     assert pol.adapter.resolved("dev") == policy.ResolvedAdapter("claude", "opus", ("--foo",))
 
 
+def test_review_enabled_default_and_override(tmp_path):
+    assert policy.load(None).review.enabled is True
+    p = tmp_path / "policy.toml"
+    p.write_text("[review]\nenabled = false\n")
+    assert policy.load(p).review.enabled is False
+
+
 def test_template_parses():
     import tomllib
 
     doc = tomllib.loads(policy.POLICY_TEMPLATE)
     assert doc["gates"]["mode"] == "per-epic"
+    assert doc["review"]["enabled"] is True
 
 
 def test_to_dict_roundtrips_for_snapshot():

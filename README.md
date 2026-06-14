@@ -251,6 +251,10 @@ commands = ["pytest -q", "ruff check ."]
 desktop = true             # desktop notification on gate pauses / escalations
 file = true                # append the same alerts to the run's ATTENTION file
 
+[review]
+enabled = true             # false = skip the separate review session; the dev pass
+                           # runs quick-dev's own internal triple-review and finalizes to done
+
 [adapter]
 name = "claude"            # CLI profile: claude | codex | gemini | custom
 model = ""                 # empty = CLI default
@@ -280,6 +284,8 @@ max_cycles = 5             # safety cap on cycles per sweep run when repeat = tr
 ```
 
 **Gate modes:** `none` runs everything unattended; `per-epic` (default) pauses at epic boundaries; `per-story-spec-approval` pauses after each spec is written so you approve it before implementation is reviewed.
+
+**Review:** `[review].enabled = false` drops the separate fresh-context review session; the dev pass instead runs `bmad-quick-dev`'s own internal triple-review (Blind Hunter / Edge Case Hunter / Acceptance Auditor) and finalizes the story straight to `done` — one session per story instead of two, verify commands still gating the commit. Governs deferred-work sweeps too.
 
 `bmad-auto init` (without `--cli`) registers hooks for every CLI profile the policy references, so a dual-client setup needs no extra flags.
 

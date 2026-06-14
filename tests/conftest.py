@@ -89,8 +89,11 @@ def dev_effect(paths: ProjectPaths, story_key: str):
         source = paths.project / "src.txt"
         source.write_text(source.read_text() + f"change for {story_key}\n")
         sp = spec_path(paths, story_key)
-        write_spec(sp, "in-review", baseline)
-        set_sprint(paths, story_key, "review")
+        # mirror the skill: with review disabled the dev finalizes straight to done
+        skip_review = spec.env.get("BMAD_AUTO_SKIP_REVIEW") == "1"
+        final = "done" if skip_review else "in-review"
+        write_spec(sp, final, baseline)
+        set_sprint(paths, story_key, final if skip_review else "review")
         return SessionResult(
             status="completed",
             result_json={
@@ -213,7 +216,9 @@ def bundle_dev_effect(paths: ProjectPaths, name: str, dw_ids, mark_ledger: bool 
         source = paths.project / "src.txt"
         source.write_text(source.read_text() + f"change for dw-{name}\n")
         sp = bundle_spec_path(paths, name)
-        write_spec(sp, "in-review", baseline)
+        # mirror the skill: review disabled -> finalize the bundle to done
+        final = "done" if spec.env.get("BMAD_AUTO_SKIP_REVIEW") == "1" else "in-review"
+        write_spec(sp, final, baseline)
         if mark_ledger:
             mark_ledger_done(paths, dw_ids)
         return SessionResult(

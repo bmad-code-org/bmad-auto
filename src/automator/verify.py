@@ -169,7 +169,10 @@ def resolve_spec_path(spec_file: str, paths: ProjectPaths) -> Path:
 
 
 def verify_dev(
-    task: StoryTask, paths: ProjectPaths, result_json: dict[str, Any] | None
+    task: StoryTask,
+    paths: ProjectPaths,
+    result_json: dict[str, Any] | None,
+    review_enabled: bool = True,
 ) -> VerifyOutcome:
     rj = result_json or {}
     spec_file = rj.get("spec_file")
@@ -179,10 +182,13 @@ def verify_dev(
     if not spec_path.is_file():
         return VerifyOutcome.retry(f"claimed spec file does not exist: {spec_path}")
 
+    # With review disabled, the dev session runs its own internal review and
+    # finalizes straight to done; otherwise it hands off at in-review.
+    expected = "in-review" if review_enabled else "done"
     fm = read_frontmatter(spec_path)
     status = str(fm.get("status", "")).strip()
-    if status != "in-review":
-        return VerifyOutcome.retry(f"spec status is {status!r}, expected 'in-review': {spec_path}")
+    if status != expected:
+        return VerifyOutcome.retry(f"spec status is {status!r}, expected {expected!r}: {spec_path}")
 
     claimed_baseline = str(fm.get("baseline_commit", "")).strip()
     if task.baseline_commit and claimed_baseline not in ("", "NO_VCS"):
@@ -210,7 +216,10 @@ def verify_dev(
 
 
 def verify_dev_bundle(
-    task: StoryTask, paths: ProjectPaths, result_json: dict[str, Any] | None
+    task: StoryTask,
+    paths: ProjectPaths,
+    result_json: dict[str, Any] | None,
+    review_enabled: bool = True,
 ) -> VerifyOutcome:
     """verify_dev for a deferred-work bundle: bundles have no sprint-status
     entry, but the session must claim exactly the dw ids the bundle owns."""
@@ -222,10 +231,12 @@ def verify_dev_bundle(
     if not spec_path.is_file():
         return VerifyOutcome.retry(f"claimed spec file does not exist: {spec_path}")
 
+    # With review disabled, the dev session finalizes the bundle straight to done.
+    expected = "in-review" if review_enabled else "done"
     fm = read_frontmatter(spec_path)
     status = str(fm.get("status", "")).strip()
-    if status != "in-review":
-        return VerifyOutcome.retry(f"spec status is {status!r}, expected 'in-review': {spec_path}")
+    if status != expected:
+        return VerifyOutcome.retry(f"spec status is {status!r}, expected {expected!r}: {spec_path}")
 
     claimed_baseline = str(fm.get("baseline_commit", "")).strip()
     if task.baseline_commit and claimed_baseline not in ("", "NO_VCS"):

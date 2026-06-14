@@ -68,26 +68,38 @@ These rules override conversational behavior everywhere in this workflow.
      `CRITICAL` (`type: bundle-item-blocked`). Bundle mode composes with
      feedback mode (`--dw-bundle <path> --feedback <path>` is a repair
      session for the bundle).
-4. **Always route plan-code-review.** Never one-shot — review runs as a separate
-   orchestrated session with fresh context.
-5. **Never run step-04-review or step-05-present.** After step-03-implement,
-   read fully and follow `./step-auto-finalize.md` (step-03's NEXT section
-   handles this). The orchestrator runs review and commits; you do neither.
+4. **Review depends on `$BMAD_AUTO_SKIP_REVIEW`.** Never one-shot.
+   - **Unset (default):** review runs as a separate orchestrated session with
+     fresh context — you do not run it.
+   - **Set (= `1`):** the orchestrator runs **no** separate review session. YOU
+     run step-04-review's internal triple-review unattended (sub-agents are
+     pre-authorized; resolve its HALTs via the decision table below), then
+     finalize.
+5. **Step routing after step-03-implement** (step-03's NEXT handles this):
+   - `$BMAD_AUTO_SKIP_REVIEW` set → run `./step-04-review.md` (internal
+     triple-review), then `./step-auto-finalize.md` (which sets status `done`).
+   - `$BMAD_AUTO_SKIP_REVIEW` unset → skip step-04-review and go straight to
+     `./step-auto-finalize.md` (status `in-review`; orchestrator reviews).
+   - **Never run step-05-present** in either case — the orchestrator commits.
 6. **Never open an editor, never commit, never push, never offer follow-ups.**
 
 ## Decision table (replaces HALTs)
 
-| Step file HALT                                       | Automation decision                                                                                                                                                                  |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| step-01 active-specs menu                            | If a spec for `{story_key}` already exists: status `draft` → resume into step-02; `ready-for-dev`/`in-progress` → resume into step-03. Ignore unrelated specs.                       |
-| step-01 prior `in-review` spec "ask whether to load" | Load it.                                                                                                                                                                             |
-| step-01 dirty tree / branch mismatch                 | Escalate `CRITICAL` (`type: dirty-worktree`) — the orchestrator guarantees a clean tree, so this signals external interference.                                                      |
-| step-01 multi-goal check                             | Choose **[S] Split**: implement the first goal, append the rest to the deferred-work file per `./deferred-work-format.md`.                                                           |
-| step-01/02 unclear intent after investigation        | Escalate `CRITICAL` (`type: intent-gap`). Do not fantasize requirements.                                                                                                             |
-| step-02 token budget exceeded                        | Choose **[S] Split** (defer secondary scope per `./deferred-work-format.md`).                                                                                                        |
-| step-02 CHECKPOINT 1                                 | Perform the self-review against the READY FOR DEVELOPMENT standard, fix what it surfaces, then auto-approve: set status `ready-for-dev`, lock the frozen block, continue to step-03. |
-| step-03 missing/empty spec precondition              | Escalate `CRITICAL` (`type: missing-spec`).                                                                                                                                          |
-| Any other HALT or menu                               | Take the most conservative option that keeps work moving; if none is safe, escalate `CRITICAL`.                                                                                      |
+| Step file HALT                                         | Automation decision                                                                                                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| step-01 active-specs menu                              | If a spec for `{story_key}` already exists: status `draft` → resume into step-02; `ready-for-dev`/`in-progress` → resume into step-03. Ignore unrelated specs.                       |
+| step-01 prior `in-review` spec "ask whether to load"   | Load it.                                                                                                                                                                             |
+| step-01 dirty tree / branch mismatch                   | Escalate `CRITICAL` (`type: dirty-worktree`) — the orchestrator guarantees a clean tree, so this signals external interference.                                                      |
+| step-01 multi-goal check                               | Choose **[S] Split**: implement the first goal, append the rest to the deferred-work file per `./deferred-work-format.md`.                                                           |
+| step-01/02 unclear intent after investigation          | Escalate `CRITICAL` (`type: intent-gap`). Do not fantasize requirements.                                                                                                             |
+| step-02 token budget exceeded                          | Choose **[S] Split** (defer secondary scope per `./deferred-work-format.md`).                                                                                                        |
+| step-02 CHECKPOINT 1                                   | Perform the self-review against the READY FOR DEVELOPMENT standard, fix what it surfaces, then auto-approve: set status `ready-for-dev`, lock the frozen block, continue to step-03. |
+| step-03 missing/empty spec precondition                | Escalate `CRITICAL` (`type: missing-spec`).                                                                                                                                          |
+| step-04 no sub-agents → "generate prompt files & HALT" | Only reachable when `$BMAD_AUTO_SKIP_REVIEW` is set. Sub-agents are pre-authorized — run the three reviewers inline; never generate prompt files or HALT.                            |
+| step-04 `intent_gap` finding (loop back to human)      | Revert the code changes, then escalate `CRITICAL` (`type: intent-gap`). Do not infer intent.                                                                                         |
+| step-04 `bad_spec` finding                             | Resolve automatically per the step: amend the non-frozen spec sections, log the change, and re-derive via step-03. No human, no escalation.                                          |
+| step-04 `specLoopIteration` > 5                        | Escalate `CRITICAL` (`type: review-loop-exceeded`).                                                                                                                                  |
+| Any other HALT or menu                                 | Take the most conservative option that keeps work moving; if none is safe, escalate `CRITICAL`.                                                                                      |
 
 ## Sub-agent note
 

@@ -47,6 +47,21 @@ def test_verify_dev_wrong_status(project):
     assert not out.ok and "expected 'in-review'" in out.reason
 
 
+def test_verify_dev_review_disabled_expects_done(project):
+    write_sprint(project, {"1-1-a": "done"})
+    task = make_task(project)
+    sp = spec_path(project, "1-1-a")
+    write_spec(sp, "done", task.baseline_commit)
+    (project.project / "src.txt").write_text("changed\n")
+
+    out = verify.verify_dev(task, project, dev_result(sp), review_enabled=False)
+    assert out.ok
+    # the in-review handoff status is now rejected
+    write_spec(sp, "in-review", task.baseline_commit)
+    out = verify.verify_dev(task, project, dev_result(sp), review_enabled=False)
+    assert not out.ok and "expected 'done'" in out.reason
+
+
 def test_verify_dev_lying_baseline(project):
     task = make_task(project)
     sp = spec_path(project, "1-1-a")

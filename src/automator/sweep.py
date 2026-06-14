@@ -922,7 +922,9 @@ class SweepEngine(Engine):
         return prompt
 
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
-        return verify.verify_dev_bundle(task, self.paths, result_json)
+        return verify.verify_dev_bundle(
+            task, self.paths, result_json, review_enabled=self.policy.review.enabled
+        )
 
     def _verify_review(self, task: StoryTask):
         return verify.verify_review_bundle(task, self.paths, self.policy)

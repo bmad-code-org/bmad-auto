@@ -3,13 +3,22 @@
 
 # Step Auto-Finalize (automation mode only)
 
-Terminal step when `{auto_mode}` is set. Replaces step-04-review and
-step-05-present: the orchestrator runs code review in a separate fresh-context
-session and creates the commit itself.
+Terminal step when `{auto_mode}` is set. The orchestrator creates the commit
+itself.
+
+- **Default** (`$BMAD_AUTO_SKIP_REVIEW` unset): replaces step-04-review and
+  step-05-present — the orchestrator runs code review in a separate
+  fresh-context session, so this step finalizes the spec at `in-review`.
+- **Skip-review** (`$BMAD_AUTO_SKIP_REVIEW` = `1`): the orchestrator runs **no**
+  separate review session. You have already run step-04-review's internal
+  triple-review, so this step finalizes the spec straight to `done`.
 
 ## RULES
 
-- No commit. No push. No editor. No review subagents.
+- No commit. No push. No editor.
+- Default mode: no review subagents (review is the orchestrator's job). In
+  skip-review mode the triple-review already ran in step-04-review — do not
+  re-run it here.
 - Do not generate a Suggested Review Order.
 
 ## INSTRUCTIONS
@@ -24,8 +33,10 @@ session and creates the commit itself.
    here just burns a retry. If a command fails: fix the code and re-run until
    it passes. If you cannot make it pass without violating the frozen intent,
    escalate `CRITICAL` (`type: verification-failure`) instead of finalizing.
-3. Change `{spec_file}` status to `in-review` in the frontmatter.
-4. Follow `./sync-sprint-status.md` with `{target_status}` = `review`.
+3. Change `{spec_file}` status in the frontmatter. If `$BMAD_AUTO_SKIP_REVIEW`
+   is set, use `done` (no review session follows); otherwise use `in-review`.
+4. Follow `./sync-sprint-status.md` with `{target_status}` = `done` when
+   `$BMAD_AUTO_SKIP_REVIEW` is set, else `review`.
    **Bundle mode** (`{story_key}` starts with `dw-`): bundles have no
    sprint-status entry — skip the sync. Instead, update the deferred-work
    file: for EACH dw id listed in the bundle file, set its entry's `status:`

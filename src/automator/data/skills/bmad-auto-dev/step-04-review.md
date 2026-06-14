@@ -47,4 +47,6 @@ Launch three subagents without conversation context. If no sub-agents are availa
 
 ## NEXT
 
-Read fully and follow `./step-05-present.md`
+If `{auto_mode}`: read fully and follow `./step-auto-finalize.md` — the orchestrator commits, so step-05-present (commit/push/present) is skipped.
+
+Otherwise: read fully and follow `./step-05-present.md`

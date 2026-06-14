@@ -15,8 +15,10 @@ TRANSITIONS: dict[Phase, frozenset[Phase]] = {
     # story tasks go to DEV_RUNNING
     Phase.PENDING: frozenset({Phase.DEV_RUNNING, Phase.TRIAGE_RUNNING}),
     Phase.DEV_RUNNING: frozenset({Phase.DEV_VERIFY}),
+    # COMMITTING: review.enabled = false skips the review loop entirely, so a
+    # verified dev pass commits straight from DEV_VERIFY
     Phase.DEV_VERIFY: frozenset(
-        {Phase.DEV_RUNNING, Phase.REVIEW_RUNNING, Phase.DEFERRED, Phase.ESCALATED}
+        {Phase.DEV_RUNNING, Phase.REVIEW_RUNNING, Phase.COMMITTING, Phase.DEFERRED, Phase.ESCALATED}
     ),
     Phase.REVIEW_RUNNING: frozenset({Phase.REVIEW_VERIFY}),
     Phase.REVIEW_VERIFY: frozenset(

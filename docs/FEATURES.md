@@ -49,6 +49,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - Drives `bmad-auto-review` (fork of `bmad-code-review`) in a separate, fresh-context session — no anchoring bias from the implementer.
 - Static prefilter → 3 parallel layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor) → verify findings against code → triage → auto-apply patches → log → defer ambiguity.
 - Bounded review loop (default 3 cycles); done when clean.
+- Optional (`[review].enabled`, default `true`): set `false` to skip the separate review session. The dev pass then runs `bmad-quick-dev`'s own internal triple-review (same three layers, in-context) and finalizes the story to `done` — one session per story instead of two. Verify commands still gate the commit. Applies to story runs and deferred-work sweeps alike.
 
 ### Failure handling & resilience
 
@@ -97,7 +98,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 ### Configuration (`.automator/policy.toml`)
 
 - Single policy file written by `init`, snapshotted at run start (applies to new runs and resumes; editable live from the TUI).
-- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[adapter]` (+ per-stage), `[sweep]`.
+- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`.
 - Tunable limits: `max_review_cycles`, `max_dev_attempts`, `session_timeout_min`, `stop_without_result_nudges`, `max_tokens_per_story`.
 
 ### TUI dashboard

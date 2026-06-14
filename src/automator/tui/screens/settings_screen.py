@@ -45,6 +45,7 @@ from ...policy import (
     GatesPolicy,
     LimitsPolicy,
     NotifyPolicy,
+    ReviewPolicy,
     SweepPolicy,
 )
 from ..settings import STAGES, PolicyDoc
@@ -90,6 +91,7 @@ _FIELDS: tuple[_Field, ...] = (
         options=tuple(sorted(RETRO_MODES)),
         default=GatesPolicy.retrospective,
     ),
+    _Field("review", "enabled", "switch", default=ReviewPolicy.enabled),
     _Field(
         "limits",
         "max_review_cycles",

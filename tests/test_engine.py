@@ -147,6 +147,44 @@ def test_happy_path(project):
     assert adapter.sessions[1].prompt.startswith("/bmad-auto-review ")
 
 
+def test_review_disabled_skips_review_session(project):
+    from automator.policy import ReviewPolicy
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+    )
+    # only a dev session is scripted — no review_effect at all
+    engine, adapter = make_engine(project, [dev_effect(project, "1-1-a")], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert task.phase == Phase.DONE and task.commit_sha
+    assert task.review_cycle == 0
+    # exactly one session, and it carries the skip-review signal
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    assert adapter.sessions[0].env["BMAD_AUTO_SKIP_REVIEW"] == "1"
+    kinds = {e["kind"] for e in Journal(engine.run_dir).entries()}
+    assert "review-skipped" in kinds
+    msg = _head_commit_message(project.project)
+    assert "implemented via bmad-auto" in msg and "reviewed" not in msg
+
+
+def _head_commit_message(repo: Path) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "log", "-1", "--pretty=%B"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
 def test_finish_kills_session_when_enabled(project, monkeypatch):
     import automator.engine as engine_mod
 

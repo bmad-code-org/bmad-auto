@@ -343,6 +343,9 @@ class Engine:
             self._escalate(task, decision.reason)
 
     def _review_and_commit(self, task: StoryTask) -> None:
+        if not self.policy.review.enabled:
+            self._skip_review_and_commit(task)
+            return
         clean = False
         while task.review_cycle < self.policy.limits.max_review_cycles:
             task.review_cycle += 1
@@ -404,6 +407,23 @@ class Engine:
             self._defer(task, "review did not converge to clean within budget")
             return
 
+        self._commit(task)
+
+    def _skip_review_and_commit(self, task: StoryTask) -> None:
+        """review.enabled = false: the dev session ran quick-dev's own internal
+        triple-review and finalized the story to done. No separate review
+        session runs — validate the deterministic gates (verify commands,
+        spec/sprint = done) and commit, repairing once if verify is fixable."""
+        self.journal.append("review-skipped", story_key=task.story_key)
+        outcome = self._verify_review(task)
+        if not outcome.ok and outcome.fixable and self._fix_phase(task, outcome.reason):
+            outcome = self._verify_review(task)
+        if not outcome.ok:
+            self._defer(task, f"verify failed with review disabled: {outcome.reason}")
+            return
+        self._commit(task)
+
+    def _commit(self, task: StoryTask) -> None:
         advance(task, Phase.COMMITTING)
         self._save()
         try:
@@ -427,7 +447,9 @@ class Engine:
     # overriding these (bundles have no sprint-status entry).
 
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
-        return verify.verify_dev(task, self.paths, result_json)
+        return verify.verify_dev(
+            task, self.paths, result_json, review_enabled=self.policy.review.enabled
+        )
 
     def _verify_review(self, task: StoryTask):
         return verify.verify_review(task, self.paths, self.policy)
@@ -436,7 +458,9 @@ class Engine:
         return f"/bmad-auto-review {task.spec_file}"
 
     def _commit_message(self, task: StoryTask) -> str:
-        return f"story {task.story_key}: implemented and reviewed via bmad-auto"
+        if self.policy.review.enabled:
+            return f"story {task.story_key}: implemented and reviewed via bmad-auto"
+        return f"story {task.story_key}: implemented via bmad-auto"
 
     # ------------------------------------------------------------- helpers
 
@@ -444,17 +468,22 @@ class Engine:
         task_id = f"{task.story_key}-{role}-{seq}"
         adapter = self.adapters[role]
         cfg = self.policy.adapter.resolved(role)
+        env = {
+            "BMAD_AUTO_MODE": "1",
+            "BMAD_AUTO_RUN_DIR": str(self.run_dir),
+            "BMAD_AUTO_TASK_ID": task_id,
+            "BMAD_AUTO_STORY_KEY": task.story_key,
+        }
+        if role == "dev" and not self.policy.review.enabled:
+            # tells the dev skill to run its own internal triple-review and
+            # finalize straight to done (the orchestrator runs no review session)
+            env["BMAD_AUTO_SKIP_REVIEW"] = "1"
         spec = SessionSpec(
             task_id=task_id,
             role=role,
             prompt=prompt,
             cwd=self.paths.project,
-            env={
-                "BMAD_AUTO_MODE": "1",
-                "BMAD_AUTO_RUN_DIR": str(self.run_dir),
-                "BMAD_AUTO_TASK_ID": task_id,
-                "BMAD_AUTO_STORY_KEY": task.story_key,
-            },
+            env=env,
             model=cfg.model,
             timeout_s=self.policy.limits.session_timeout_min * 60,
         )

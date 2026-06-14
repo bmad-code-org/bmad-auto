@@ -48,6 +48,14 @@ class NotifyPolicy:
 
 
 @dataclass(frozen=True)
+class ReviewPolicy:
+    # When False, the orchestrator skips the separate bmad-auto-review session;
+    # the dev session runs quick-dev's own internal triple-review instead and
+    # finalizes the story straight to done.
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class SweepPolicy:
     auto: str = "never"  # never | per-epic | run-end
     max_bundles: int = 5  # bundles executed per sweep; triage excess is truncated
@@ -113,6 +121,7 @@ class Policy:
     limits: LimitsPolicy = field(default_factory=LimitsPolicy)
     verify: VerifyPolicy = field(default_factory=VerifyPolicy)
     notify: NotifyPolicy = field(default_factory=NotifyPolicy)
+    review: ReviewPolicy = field(default_factory=ReviewPolicy)
     adapter: AdapterPolicy = field(default_factory=AdapterPolicy)
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
 
@@ -160,6 +169,7 @@ def loads(text: str) -> Policy:
     limits_d = _section(doc, "limits")
     verify_d = _section(doc, "verify")
     notify_d = _section(doc, "notify")
+    review_d = _section(doc, "review")
     adapter_d = _section(doc, "adapter")
     sweep_d = _section(doc, "sweep")
 
@@ -201,6 +211,7 @@ def loads(text: str) -> Policy:
         desktop=bool(notify_d.get("desktop", NotifyPolicy.desktop)),
         file=bool(notify_d.get("file", NotifyPolicy.file)),
     )
+    review = ReviewPolicy(enabled=bool(review_d.get("enabled", ReviewPolicy.enabled)))
     for legacy, replacement in (
         ("model_dev", "[adapter.dev] model"),
         ("model_review", "[adapter.review] model"),
@@ -253,6 +264,7 @@ def loads(text: str) -> Policy:
         limits=limits,
         verify=verify,
         notify=notify,
+        review=review,
         adapter=adapter,
         sweep=sweep,
     )
@@ -280,6 +292,13 @@ commands = []                # e.g. ["pytest -q", "ruff check ."]
 [notify]
 desktop = true               # notify-send, best-effort
 file = true                  # ATTENTION file in the run dir
+
+[review]
+# enabled = true  -> run the separate bmad-auto-review session after each dev pass
+#                    (quick-dev's own internal triple-review is skipped in this mode).
+# enabled = false -> skip that session; the dev pass runs quick-dev's internal
+#                    triple-review instead and finalizes the story straight to done.
+enabled = true
 
 [adapter]
 name = "claude"              # claude | codex | gemini | <custom .automator/profiles/*.toml>

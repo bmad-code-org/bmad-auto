@@ -18,7 +18,14 @@ from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
 from automator.journal import Journal, load_state
 from automator.model import Phase, RunState, TokenUsage
-from automator.policy import GatesPolicy, LimitsPolicy, NotifyPolicy, Policy, SweepPolicy
+from automator.policy import (
+    GatesPolicy,
+    LimitsPolicy,
+    NotifyPolicy,
+    Policy,
+    ReviewPolicy,
+    SweepPolicy,
+)
 from automator.sweep import DecisionPrompter, SweepEngine, validate_migration, validate_triage
 from automator.verify import worktree_clean
 
@@ -478,6 +485,31 @@ def test_unattended_skips_decisions(project):
     assert entries["DW-1"].open  # untouched, waits for an interactive sweep
     assert entries["DW-2"].status.startswith("done")
     assert not (engine.run_dir / "decisions.json").is_file()
+
+
+def test_bundle_review_disabled_skips_review_session(project):
+    """review.enabled = false: a bundle's dev session finalizes to done and the
+    sweep commits with no separate bundle-review session."""
+    write_ledger(project, {"DW-1": "open"})
+    plan = triage_result(
+        ["DW-1"],
+        bundles=[{"name": "some-fix", "dw_ids": ["DW-1"], "intent": "fix it"}],
+    )
+    engine, adapter = make_sweep(
+        project,
+        [triage_effect(plan), bundle_dev_effect(project, "some-fix", ["DW-1"])],
+        policy=Policy(
+            gates=GatesPolicy(mode="none"),
+            notify=QUIET,
+            review=ReviewPolicy(enabled=False),
+        ),
+    )
+    summary = engine.run()
+    assert not summary.paused
+    assert [s.role for s in adapter.sessions] == ["triage", "dev"]  # no review
+    assert engine.state.tasks["dw-some-fix"].phase == Phase.DONE
+    assert ledger_entries(project)["DW-1"].status.startswith("done")
+    assert "review-skipped" in journal_text(engine)
 
 
 def test_decisions_only_runs_no_bundles(project):
