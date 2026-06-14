@@ -39,6 +39,18 @@ jobs:
       - name: Run tests
         run: uv run pytest -q
 
+  version-sync:
+    name: version-sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Check every version field agrees
+        run: uv run --no-project python scripts/sync_version.py --check
+
   lint:
     name: lint (trunk)
     runs-on: ubuntu-latest
