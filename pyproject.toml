@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.30"]
+build-backend = "hatchling.build"
 
 [project]
 name = "bmad-automator"
@@ -15,25 +15,18 @@ bmad-auto = "automator.cli:main"
 
 [project.optional-dependencies]
 tui = ["textual>=8.0,<9", "tomlkit>=0.13", "pyte>=0.8.2"]
-dev = [
-  "pytest>=8.0",
-  "ruff>=0.4",
-  "pytest-asyncio>=1.0",
-  "pytest-rerunfailures>=16.0",
-  "bmad-automator[tui]",
-]
 
-[tool.setuptools]
-include-package-data = true
+[dependency-groups]
+# dev gets tui via `uv sync --all-extras` (groups can't self-reference an extra).
+dev = ["pytest>=8.0", "ruff>=0.4", "pytest-asyncio>=1.0", "pytest-rerunfailures>=16.0"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/automator"]
 
-[tool.setuptools.package-data]
-# bmad_auto_hook.py + CLI profiles + the bundled bmad-auto-* skills that
-# `bmad-auto init` lays down into a project (skills/** recurses into steps/,
-# assets/, scripts/).
-"automator.data" = ["profiles/*.toml", "skills/**/*"]
+[tool.hatch.build.targets.sdist]
+# .trunk/tools holds an absolute external symlink (trunk launcher) that breaks
+# sdist packing; it is dev tooling and irrelevant to the source distribution.
+exclude = ["/.trunk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
