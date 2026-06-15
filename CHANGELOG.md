@@ -5,7 +5,7 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [0.3.2] — 2026-06-14
+## [0.3.2] — 2026-06-15
 
 ### Added
 
@@ -19,6 +19,16 @@ breaking changes may land in a minor release.
 
 ### Fixed
 
+- **Attaching to answer a deferred-work decision now returns you where you came from.**
+  When a prompting sweep blocks on a decision (or you open a resolve session), pressing
+  `a`/`R` switches a tmux client into the orchestrator's control window so you can answer
+  there — but on exit it left you stranded in the control session on the parked
+  exit-status prompt instead of back at the TUI. The control window now records where the
+  attach came from and, once you press enter, returns you: it switches the client back to
+  the TUI's own pane when the TUI runs inside tmux (i.e. your original session), or
+  detaches the throwaway attach client so the suspended TUI resumes when it runs outside
+  tmux. Windows nobody attached to interactively still park unchanged.
+
 - **Empty optional numeric fields no longer flash a red "invalid" outline.** The start-run
   and start-sweep modals draw their numeric inputs (`epic`, `max stories`, `max bundles`)
   with `type="integer"`, which under Textual validates on blur and — with the default
@@ -28,6 +38,12 @@ breaking changes may land in a minor release.
   leaving them blank is accepted silently while a typed integer still validates.
 
 ### Changed
+
+- **Clearer review toggle on the settings screen.** The `[review]` switch showed only the
+  raw key `enabled`, with no hint about what it controls. It is now relabelled "separate
+  review session" and carries a muted caption spelling out both states (ON: triple review
+  runs in a dedicated 2nd session · OFF: quick-dev runs its own tri-review inline). The
+  change is display-only — the config key and save logic are unchanged.
 
 - **`bmad-auto-setup` now upgrades, not just installs.** Re-running the skill (or invoking
   it with `upgrade`) on an already-installed project is detected as an upgrade — it runs
