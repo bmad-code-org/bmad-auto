@@ -194,3 +194,100 @@ async def test_settings_screen_stage_override_roundtrip(project):
         pol = policy_mod.load(project.project / POLICY_FILE)
         assert pol.adapter.review.model == "gpt-5-codex"
         assert pol.adapter.extra_args == ("--permission-mode", "bypassPermissions")
+
+
+# -------------------------------------------------- arrow nav + enter-to-edit
+
+
+async def test_arrow_keys_navigate_fields(project):
+    write_policy(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test(size=(100, 40)) as pilot:
+        screen = await open_settings(app, pilot)
+        screen.query_one("#limits-max_review_cycles", Input).focus()
+        await pilot.pause()
+        before = app.focused
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.focused is not before  # arrow advanced focus
+        await pilot.press("up")
+        await pilot.pause()
+        assert app.focused is before  # and back again
+
+
+async def test_arrow_down_skips_disabled_args_input(project):
+    write_policy(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test(size=(100, 40)) as pilot:
+        screen = await open_settings(app, pilot)
+        # override off -> the args Input is disabled and out of the focus chain
+        args_box = screen.query_one("#adapter-extra_args", Input)
+        assert args_box.disabled
+        screen.query_one("#adapter-extra_args-override", Switch).focus()
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.focused is not args_box
+
+
+async def test_enter_opens_select_and_arrows_pick(project):
+    write_policy(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test(size=(100, 40)) as pilot:
+        from textual.widgets import Select
+
+        screen = await open_settings(app, pilot)
+        select = screen.query_one("#gates-mode", Select)
+        start = select.value
+        select.focus()
+        await pilot.pause()
+        await pilot.press("enter")  # open the dropdown
+        await pilot.pause()
+        assert select.expanded
+        await pilot.press("down")  # dropdown owns up/down while open
+        await pilot.press("enter")  # pick the highlighted option
+        await pilot.pause()
+        assert not select.expanded
+        assert select.value != start
+
+
+async def test_textarea_enter_edit_mode_and_escape(project):
+    write_policy(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test(size=(100, 40)) as pilot:
+        from textual.widgets import TextArea
+
+        screen = await open_settings(app, pilot)
+        area = screen.query_one("#verify-commands", TextArea)
+
+        # nav mode: down leaves the TextArea
+        area.focus()
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.focused is not area
+
+        # enter -> edit mode: down keeps focus (cursor moves within the box)
+        area.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert area.has_class("-editing")
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.focused is area
+
+        # escape exits edit mode without leaving the screen
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not area.has_class("-editing")
+        assert isinstance(app.screen, SettingsScreen)
+
+
+async def test_escape_in_nav_mode_pops_screen(project):
+    write_policy(project)
+    app = BmadAutoApp(project.project)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await open_settings(app, pilot)
+        await pilot.press("escape")
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))

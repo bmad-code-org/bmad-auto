@@ -7,6 +7,16 @@ breaking changes may land in a minor release.
 
 ## [0.3.2] — 2026-06-14
 
+### Added
+
+- **Arrow-key navigation and Enter-to-edit on the settings screen.** Up/Down now move focus
+  between fields (additive — Tab/Shift+Tab still work), and Enter activates the focused field
+  by type: it opens a dropdown (`Select`), toggles a switch, or enters cursor-edit mode on the
+  multi-line box (`TextArea`), where the box's own Up/Down then move the cursor; Escape leaves
+  edit mode without leaving the screen. Plain text/number inputs stay editable on focus, so
+  Enter is a no-op there. Implemented with priority bindings gated by `check_action` so an open
+  dropdown or an editing TextArea keeps Up/Down, and Escape still pops the screen in nav mode.
+
 ### Fixed
 
 - **Empty optional numeric fields no longer flash a red "invalid" outline.** The start-run
