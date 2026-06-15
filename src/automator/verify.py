@@ -107,6 +107,145 @@ def reset_hard(repo: Path, baseline: str, keep: tuple[str, ...] = (".automator",
         raise GitError(f"git clean failed: {out}")
 
 
+# --------------------------------------------------------------------------
+# git worktree / branch / merge / diff primitives (Phase 2)
+#
+# Low-level helpers for the worktree-isolation pipeline. Each raises GitError
+# on failure. No engine wiring yet — these are unit-tested in isolation and
+# wired into open/close_unit_workspace + merge-back in Phase 3.
+# --------------------------------------------------------------------------
+
+
+def current_branch(repo: Path) -> str:
+    """The branch name HEAD points at, or "HEAD" when detached."""
+    rc, out = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    if rc != 0:
+        raise GitError(f"git rev-parse --abbrev-ref HEAD failed in {repo}: {out}")
+    return out
+
+
+def branch_exists(repo: Path, name: str) -> bool:
+    rc, _ = _git(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{name}")
+    return rc == 0
+
+
+def create_branch(repo: Path, name: str, base: str) -> None:
+    """Create branch `name` at `base` without checking it out."""
+    rc, out = _git(repo, "branch", name, base)
+    if rc != 0:
+        raise GitError(f"git branch {name} {base} failed in {repo}: {out}")
+
+
+def delete_branch(repo: Path, name: str, force: bool = False) -> None:
+    rc, out = _git(repo, "branch", "-D" if force else "-d", name)
+    if rc != 0:
+        raise GitError(f"git branch -d {name} failed in {repo}: {out}")
+
+
+def worktree_add(repo: Path, path: Path, branch: str, base: str) -> None:
+    """Create branch `branch` at `base` and check it out in a new worktree at
+    `path`. `path` must not already exist."""
+    rc, out = _git(repo, "worktree", "add", "-b", branch, str(path), base)
+    if rc != 0:
+        raise GitError(f"git worktree add {path} ({branch} from {base}) failed: {out}")
+
+
+def worktree_remove(repo: Path, path: Path, force: bool = False) -> None:
+    args = ["worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(str(path))
+    rc, out = _git(repo, *args)
+    if rc != 0:
+        raise GitError(f"git worktree remove {path} failed: {out}")
+
+
+def worktree_list(repo: Path) -> list[Path]:
+    """Paths of every worktree attached to `repo` (the main checkout first)."""
+    rc, out = _git(repo, "worktree", "list", "--porcelain")
+    if rc != 0:
+        raise GitError(f"git worktree list failed in {repo}: {out}")
+    paths = []
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            paths.append(Path(line[len("worktree ") :]))
+    return paths
+
+
+def merge_branch(
+    repo: Path, branch: str, *, strategy: str = "merge", message: str | None = None
+) -> None:
+    """Merge `branch` into the branch currently checked out in `repo`.
+
+    strategy: "ff" (fast-forward only), "merge" (always a merge commit), or
+    "squash" (collapse to one commit). Raises GitError on conflict or when an
+    ff-only merge can't fast-forward, restoring the tree to its pre-merge state.
+    Assumes the target checkout is clean (the worktree pipeline guarantees it).
+    """
+    if strategy == "ff":
+        rc, out = _git(repo, "merge", "--ff-only", branch)
+        if rc != 0:
+            raise GitError(f"git merge --ff-only {branch} failed in {repo}: {out}")
+        return
+    if strategy == "merge":
+        msg = message or f"Merge branch '{branch}'"
+        rc, out = _git(repo, "merge", "--no-ff", "-m", msg, branch)
+        if rc != 0:
+            _git(repo, "merge", "--abort")  # restore to pre-merge HEAD
+            raise GitError(f"git merge --no-ff {branch} failed in {repo} (conflict?): {out}")
+        return
+    if strategy == "squash":
+        rc, out = _git(repo, "merge", "--squash", branch)
+        if rc != 0:
+            # squash leaves no MERGE_HEAD to --abort; reset the conflicted index
+            # back to the (clean) target HEAD.
+            _git(repo, "reset", "--hard", "HEAD")
+            raise GitError(f"git merge --squash {branch} failed in {repo} (conflict?): {out}")
+        msg = message or f"Squash-merge branch '{branch}'"
+        rc, out = _git(repo, "commit", "-m", msg)
+        if rc != 0:
+            raise GitError(f"git commit (squash {branch}) failed in {repo}: {out}")
+        return
+    raise GitError(f"unknown merge strategy: {strategy!r}")
+
+
+def capture_diff(repo: Path, baseline: str) -> str:
+    """Full unified diff of `repo`'s working tree against `baseline`, including
+    untracked (but not ignored) files. Used to preserve a failed unit's changes
+    for forensics. Returns "" when there is nothing to capture.
+
+    Unlike `_git`, the tracked diff is read from stdout alone and left verbatim
+    (no strip, no stderr merge) so the patch stays applyable.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "diff", baseline, "--"],
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT_S,
+    )
+    if proc.returncode != 0:
+        raise GitError(f"git diff {baseline} failed in {repo}: {proc.stderr.strip()}")
+    parts = [proc.stdout]
+
+    rc, out = _git(repo, "ls-files", "--others", "--exclude-standard")
+    if rc != 0:
+        raise GitError(f"git ls-files --others failed in {repo}: {out}")
+    for rel in out.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        # --no-index synthesizes an add-from-/dev/null diff for the untracked
+        # file; it exits 1 precisely because the files differ — expected here.
+        u = subprocess.run(
+            ["git", "-C", str(repo), "diff", "--no-index", "--", "/dev/null", rel],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_S,
+        )
+        parts.append(u.stdout)
+    return "".join(parts)
+
+
 def read_frontmatter(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
