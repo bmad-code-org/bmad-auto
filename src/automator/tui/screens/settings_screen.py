@@ -61,6 +61,8 @@ class _Field:
     placeholder: str = ""
     minimum: float | None = None
     maximum: float | None = None
+    label: str = ""  # display override; falls back to key when empty
+    description: str = ""  # muted caption shown below the field row
 
     @property
     def widget_id(self) -> str:
@@ -91,7 +93,17 @@ _FIELDS: tuple[_Field, ...] = (
         options=tuple(sorted(RETRO_MODES)),
         default=GatesPolicy.retrospective,
     ),
-    _Field("review", "enabled", "switch", default=ReviewPolicy.enabled),
+    _Field(
+        "review",
+        "enabled",
+        "switch",
+        default=ReviewPolicy.enabled,
+        label="separate review session",
+        description=(
+            "ON: triple review runs in a dedicated 2nd session · "
+            "OFF: quick-dev runs its own tri-review inline, story straight to done"
+        ),
+    ),
     _Field(
         "limits",
         "max_review_cycles",
@@ -188,6 +200,11 @@ class SettingsScreen(Screen[None]):
         padding: 1 1;
         color: $text-muted;
     }
+    SettingsScreen .fielddesc {
+        padding: 0 1 1 32;
+        color: $text-muted;
+        text-style: italic;
+    }
     SettingsScreen .field Input, SettingsScreen .field Select {
         width: 1fr;
     }
@@ -257,7 +274,7 @@ class SettingsScreen(Screen[None]):
     def _compose_field(self, spec: _Field) -> ComposeResult:
         raw = self._doc.get(spec.section, spec.key)
         with Horizontal(classes="field"):
-            yield Label(spec.key, classes="fieldname")
+            yield Label(spec.label or spec.key, classes="fieldname")
             if spec.kind == "select":
                 yield Select(
                     [(o, o) for o in spec.options],
@@ -300,6 +317,8 @@ class SettingsScreen(Screen[None]):
                     disabled=not override,
                     id=spec.widget_id,
                 )
+        if spec.description:
+            yield Static(spec.description, classes="fielddesc")
 
     def on_mount(self) -> None:
         self._show_errors(self._doc.validate())
