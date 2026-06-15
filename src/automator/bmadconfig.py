@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -17,6 +17,13 @@ class ProjectPaths:
     project: Path
     implementation_artifacts: Path
     planning_artifacts: Path
+    # the git root code/git work happens against; defaults to `project`. Phase 1
+    # foundation for worktree isolation — see ProjectPaths.rebased and Workspace.
+    repo_root: Path = field(default=None)  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.repo_root is None:
+            object.__setattr__(self, "repo_root", self.project)
 
     @property
     def sprint_status(self) -> Path:
@@ -25,6 +32,27 @@ class ProjectPaths:
     @property
     def deferred_work(self) -> Path:
         return self.implementation_artifacts / "deferred-work.md"
+
+    def rebased(self, new_root: Path) -> ProjectPaths:
+        """Re-resolve the project and its artifact dirs onto `new_root` (a full
+        checkout, e.g. a git worktree). Artifact dirs configured outside the
+        project tree are shared, not per-checkout, so they don't move. The new
+        ProjectPaths is rooted at `new_root` for both `project` and `repo_root`."""
+        new_root = new_root.resolve()
+
+        def rebase(p: Path) -> Path:
+            try:
+                rel = p.relative_to(self.project)
+            except ValueError:
+                return p  # configured outside the project tree; doesn't move
+            return (new_root / rel).resolve()
+
+        return ProjectPaths(
+            project=new_root,
+            implementation_artifacts=rebase(self.implementation_artifacts),
+            planning_artifacts=rebase(self.planning_artifacts),
+            repo_root=new_root,
+        )
 
 
 def _resolve(raw: str, project: Path) -> Path:
@@ -47,8 +75,11 @@ def load_paths(project: Path) -> ProjectPaths:
         raise BmadConfigError(
             f"{config_path} missing implementation_artifacts/planning_artifacts keys"
         )
+    repo_root_raw = doc.get("repo_root")
+    repo_root = _resolve(str(repo_root_raw), project) if repo_root_raw else project
     return ProjectPaths(
         project=project,
         implementation_artifacts=_resolve(str(impl), project),
         planning_artifacts=_resolve(str(plan), project),
+        repo_root=repo_root,
     )

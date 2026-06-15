@@ -39,6 +39,7 @@ from .runs import kill_session
 from .sprintstatus import load as load_sprint_status
 from .sprintstatus import next_actionable
 from .statemachine import advance
+from .workspace import Workspace
 
 
 class RunPaused(Exception):
@@ -95,6 +96,9 @@ class Engine:
         sweep_factory: Callable[[str], None] | None = None,
     ):
         self.paths = paths
+        # where code+git work + artifact reads happen. isolation="none" (today's
+        # only mode) → the repo root in place; Phase 3 swaps in per-unit worktrees.
+        self.workspace = Workspace.default(paths)
         self.policy = policy
         self.adapters = {
             "dev": adapter,
@@ -248,14 +252,14 @@ class Engine:
         must never eat them)."""
         keep = [".automator"]
         for artifact_dir in (
-            self.paths.implementation_artifacts,
-            self.paths.planning_artifacts,
+            self.workspace.paths.implementation_artifacts,
+            self.workspace.paths.planning_artifacts,
         ):
             try:
-                keep.append(str(artifact_dir.relative_to(self.paths.project)))
+                keep.append(str(artifact_dir.relative_to(self.workspace.root)))
             except ValueError:
                 pass  # artifacts configured outside the repo; nothing to protect
-        verify.reset_hard(self.paths.project, baseline, keep=tuple(keep))
+        verify.reset_hard(self.workspace.root, baseline, keep=tuple(keep))
 
     def _finish_inflight(self) -> None:
         """Complete or roll back tasks interrupted by a pause or crash."""
@@ -296,7 +300,7 @@ class Engine:
         self._review_and_commit(task)
 
     def _dev_phase(self, task: StoryTask) -> bool:
-        task.baseline_commit = verify.rev_parse_head(self.paths.project)
+        task.baseline_commit = verify.rev_parse_head(self.workspace.root)
         feedback: Path | None = None
         while True:
             task.attempt += 1
@@ -315,7 +319,7 @@ class Engine:
                 if outcome.ok:
                     # deterministic gates run here too: a broken build must not
                     # reach the (far more expensive) review loop
-                    outcome = verify.verify_commands_outcome(self.policy, self.paths.project)
+                    outcome = verify.verify_commands_outcome(self.policy, self.workspace.root)
             decision = decide_dev(task, result, outcome, self.policy)
             self.journal.append(
                 "dev-decision",
@@ -427,7 +431,7 @@ class Engine:
         advance(task, Phase.COMMITTING)
         self._save()
         try:
-            task.commit_sha = verify.commit_story(self.paths.project, self._commit_message(task))
+            task.commit_sha = verify.commit_story(self.workspace.root, self._commit_message(task))
         except verify.GitError as e:
             self._escalate(task, f"commit failed: {e}")
         advance(task, Phase.DONE)
@@ -448,11 +452,11 @@ class Engine:
 
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
         return verify.verify_dev(
-            task, self.paths, result_json, review_enabled=self.policy.review.enabled
+            task, self.workspace.paths, result_json, review_enabled=self.policy.review.enabled
         )
 
     def _verify_review(self, task: StoryTask):
-        return verify.verify_review(task, self.paths, self.policy)
+        return verify.verify_review(task, self.workspace.paths, self.policy)
 
     def _review_prompt(self, task: StoryTask) -> str:
         return f"/bmad-auto-review {task.spec_file}"
@@ -482,7 +486,7 @@ class Engine:
             task_id=task_id,
             role=role,
             prompt=prompt,
-            cwd=self.paths.project,
+            cwd=self.workspace.root,
             env=env,
             model=cfg.model,
             timeout_s=self.policy.limits.session_timeout_min * 60,
@@ -552,7 +556,7 @@ class Engine:
                 self._escalate(task, f"CRITICAL escalation from fix session: {details}")
             outcome = None
             if result.status == "completed":
-                outcome = verify.verify_commands_outcome(self.policy, self.paths.project)
+                outcome = verify.verify_commands_outcome(self.policy, self.workspace.root)
                 if not outcome.ok:
                     reason = outcome.reason
             ok = outcome is not None and outcome.ok
@@ -573,7 +577,7 @@ class Engine:
         advance(task, Phase.DEFERRED)
         if task.baseline_commit:
             self._stash_deferred_artifacts(task)
-            deferred_work = self.paths.deferred_work
+            deferred_work = self.workspace.paths.deferred_work
             snapshot = (
                 deferred_work.read_text(encoding="utf-8") if deferred_work.is_file() else None
             )
@@ -637,7 +641,7 @@ class Engine:
         self.state.sweeps_triggered.append(trigger)
         self._save()
         try:
-            clean = verify.worktree_clean(self.paths.project)
+            clean = verify.worktree_clean(self.workspace.root)
         except verify.GitError:
             clean = False
         if not clean:

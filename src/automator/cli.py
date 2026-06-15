@@ -164,7 +164,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _dry_run(paths, pol, args)
 
-    if not verify.worktree_clean(project):
+    if not verify.worktree_clean(paths.repo_root):
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
         return 1
 
@@ -333,7 +333,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _sweep_dry_run(paths, pol)
 
-    if not verify.worktree_clean(project):
+    if not verify.worktree_clean(paths.repo_root):
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
         return 1
 
