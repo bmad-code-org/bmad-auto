@@ -236,27 +236,59 @@ def test_scm_defaults_reproduce_today(tmp_path):
     assert pol.scm.merge_strategy == "merge"
     assert pol.scm.delete_branch is True
     assert pol.scm.keep_failed is True
-    assert pol.scm.create_pr is False
-    assert pol.scm.ci_merge == "off"
+    assert pol.scm.failed_diff_max_mb == 5
+    assert pol.scm.failed_diff_unlimited is False
+    assert pol.scm.commit_message_template == ""
+    assert pol.scm.max_parallel == 1
 
 
 def test_scm_override(tmp_path):
     p = tmp_path / "policy.toml"
     p.write_text(
-        '[scm]\nisolation = "worktree"\nbranch_per = "run"\n'
+        '[scm]\nisolation = "worktree"\nbranch_per = "story"\n'
         'target_branch = "integration"\nmerge_strategy = "squash"\n'
         "delete_branch = false\nkeep_failed = false\n"
-        'create_pr = true\nci_merge = "watch"\n'
+        'commit_message_template = "feat: {story_key} ({run_id})"\n'
     )
     pol = policy.load(p)
     assert pol.scm.isolation == "worktree"
-    assert pol.scm.branch_per == "run"
+    assert pol.scm.branch_per == "story"
     assert pol.scm.target_branch == "integration"
     assert pol.scm.merge_strategy == "squash"
     assert pol.scm.delete_branch is False
     assert pol.scm.keep_failed is False
-    assert pol.scm.create_pr is True
-    assert pol.scm.ci_merge == "watch"
+    assert pol.scm.commit_message_template == "feat: {story_key} ({run_id})"
+
+
+def test_scm_branch_per_run_forces_delete_branch_off(tmp_path):
+    # branch_per="run" shares one branch across the run; deleting it after each
+    # merge would defeat that, so delete_branch is coerced off even if set true.
+    p = tmp_path / "policy.toml"
+    p.write_text('[scm]\nbranch_per = "run"\ndelete_branch = true\n')
+    assert policy.load(p).scm.delete_branch is False
+
+
+def test_scm_max_parallel_clamped_to_one(tmp_path):
+    # Parallel fan-out (Phase 5) is unbuilt: the knob is accepted and validated
+    # but any value > 1 is clamped to 1 so it stays inert.
+    p = tmp_path / "policy.toml"
+    p.write_text("[scm]\nmax_parallel = 4\n")
+    assert policy.load(p).scm.max_parallel == 1
+    p.write_text("[scm]\nmax_parallel = 0\n")
+    with pytest.raises(policy.PolicyError, match="scm.max_parallel"):
+        policy.load(p)
+
+
+def test_scm_failed_diff_settings(tmp_path):
+    p = tmp_path / "policy.toml"
+    p.write_text("[scm]\nfailed_diff_max_mb = 25\nfailed_diff_unlimited = true\n")
+    pol = policy.load(p)
+    assert pol.scm.failed_diff_max_mb == 25
+    assert pol.scm.failed_diff_unlimited is True
+    # the cap must be a positive size
+    p.write_text("[scm]\nfailed_diff_max_mb = 0\n")
+    with pytest.raises(policy.PolicyError, match="scm.failed_diff_max_mb"):
+        policy.load(p)
 
 
 def test_scm_invalid_values(tmp_path):
@@ -270,20 +302,6 @@ def test_scm_invalid_values(tmp_path):
     p.write_text('[scm]\nmerge_strategy = "rebase"\n')
     with pytest.raises(policy.PolicyError, match="scm.merge_strategy"):
         policy.load(p)
-    p.write_text('[scm]\nci_merge = "always"\n')
-    with pytest.raises(policy.PolicyError, match="scm.ci_merge"):
-        policy.load(p)
-
-
-def test_scm_ci_merge_requires_create_pr(tmp_path):
-    p = tmp_path / "policy.toml"
-    # ci_merge without create_pr is a misconfiguration: nothing opens a PR to watch.
-    p.write_text('[scm]\nci_merge = "watch"\n')
-    with pytest.raises(policy.PolicyError, match="ci_merge requires"):
-        policy.load(p)
-    # create_pr alone (ci_merge default off) is valid: open the PR, leave it.
-    p.write_text("[scm]\ncreate_pr = true\n")
-    assert policy.load(p).scm.create_pr is True
 
 
 def test_template_parses():

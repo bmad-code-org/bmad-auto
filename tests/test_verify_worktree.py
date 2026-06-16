@@ -193,3 +193,25 @@ def test_capture_diff_ignores_gitignored(project):
     run_dir.mkdir(parents=True)
     (run_dir / "state.json").write_text("{}")
     assert verify.capture_diff(repo, base) == ""
+
+
+def test_capture_diff_caps_large_untracked_file(project):
+    repo = project.project
+    base = verify.rev_parse_head(repo)
+    (repo / "small.txt").write_text("tiny\n")
+    (repo / "big.bin").write_text("x" * 200_000)  # ~200 KB
+
+    diff = verify.capture_diff(repo, base, max_file_bytes=100_000)
+    # the small file is captured in full; the big one is skipped with a marker
+    assert "small.txt" in diff and "tiny" in diff
+    assert "skipped untracked file 'big.bin'" in diff
+    assert "x" * 1000 not in diff  # the oversized blob was not inlined
+    assert "scm.failed_diff_unlimited" in diff  # marker tells the user how to lift the cap
+
+
+def test_capture_diff_uncapped_includes_large_file(project):
+    repo = project.project
+    base = verify.rev_parse_head(repo)
+    (repo / "big.bin").write_text("x" * 200_000)
+    diff = verify.capture_diff(repo, base, max_file_bytes=None)  # no cap
+    assert "big.bin" in diff and "skipped" not in diff

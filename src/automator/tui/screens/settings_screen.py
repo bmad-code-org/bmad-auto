@@ -48,6 +48,7 @@ from ...policy import (
     LimitsPolicy,
     NotifyPolicy,
     ReviewPolicy,
+    ScmPolicy,
     SweepPolicy,
 )
 from ..settings import STAGES, PolicyDoc
@@ -179,6 +180,29 @@ _FIELDS: tuple[_Field, ...] = (
     ),
     _Field("sweep", "repeat", "switch", default=SweepPolicy.repeat),
     _Field("sweep", "max_cycles", "int", minimum=1, default=SweepPolicy.max_cycles),
+    _Field(
+        "scm",
+        "failed_diff_max_mb",
+        "int",
+        minimum=1,
+        default=ScmPolicy.failed_diff_max_mb,
+        label="failed-diff size cap (MB)",
+        description=(
+            "per-file size limit for untracked files captured into a kept-failed "
+            "unit's changes.patch · oversized files are skipped with a marker"
+        ),
+    ),
+    _Field(
+        "scm",
+        "failed_diff_unlimited",
+        "switch",
+        default=ScmPolicy.failed_diff_unlimited,
+        label="uncap failed-diff size",
+        description=(
+            "⚠ ON: capture failed-unit diffs with NO size limit (overrides the cap "
+            "above) — may produce very large patches; a warning is logged when active"
+        ),
+    ),
 )
 
 # collect() sentinel for a field whose widget holds an unusable value

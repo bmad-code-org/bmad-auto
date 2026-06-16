@@ -455,3 +455,54 @@ def test_isolation_none_leaves_no_worktrees(project):
     assert engine.state.target_branch == ""  # never resolved in none mode
     assert [p.resolve() for p in worktree_list(project.project)] == [project.project.resolve()]
     assert "worktree-opened" not in journal_kinds(engine)
+
+
+# ----------------------------------------------------------------- new guards (review hardening)
+
+
+def test_detached_head_pauses_instead_of_landing_on_unreferenced_commit(project):
+    """isolation=worktree with no configured target on a detached HEAD has no
+    branch to merge into; the run must pause rather than commit onto a nameless
+    detached HEAD that the next checkout would orphan."""
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    git(project.project, "checkout", "--detach")
+    engine, _ = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a"), wt_review_effect(project, "1-1-a", clean=True)],
+    )
+    summary = engine.run()
+    assert summary.paused
+    assert "detached HEAD" in (engine.state.paused_reason or "")
+    # nothing was isolated into a worktree
+    assert [p.resolve() for p in worktree_list(project.project)] == [project.project.resolve()]
+
+
+def test_commit_message_template_applied(project):
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    engine, _ = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a"), wt_review_effect(project, "1-1-a", clean=True)],
+        policy=wt_policy(commit_message_template="feat({story_key}): via {run_id}"),
+    )
+    summary = engine.run()
+    assert summary.done == 1
+    # the story's commit message (not the merge commit) used the template
+    log = git(project.project, "log", "--format=%s")
+    assert "feat(1-1-a): via test-run" in log
+    assert "implemented" not in log  # built-in default was not used
+
+
+def test_spec_file_serialized_relative_to_worktree():
+    """A worktree task persists spec_file relative to its worktree so a kept run's
+    state stays portable (no dangling absolute path into a pruned worktree)."""
+    task = StoryTask(story_key="1-1-a", epic=1, phase=Phase.DEFERRED)
+    task.worktree_path = "/repo/.git/automator-worktrees/run/1-1-a"
+    task.spec_file = "/repo/.git/automator-worktrees/run/1-1-a/_out/spec.md"
+    assert task.to_dict()["spec_file"] == "_out/spec.md"
+    # a spec living outside the worktree stays absolute
+    task.spec_file = "/elsewhere/spec.md"
+    assert task.to_dict()["spec_file"] == "/elsewhere/spec.md"
+    # in-place mode (no worktree) is unchanged
+    task.worktree_path = ""
+    task.spec_file = "/repo/_out/spec.md"
+    assert task.to_dict()["spec_file"] == "/repo/_out/spec.md"

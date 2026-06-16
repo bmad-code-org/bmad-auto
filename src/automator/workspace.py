@@ -97,6 +97,7 @@ def close_unit_workspace(
     run_dir: Path,
     unit_key: str,
     delete_branch: bool = True,
+    diff_max_file_bytes: int | None = None,
 ) -> Path | None:
     """Tear down (or preserve) a unit's worktree.
 
@@ -106,11 +107,18 @@ def close_unit_workspace(
     happens. On success (or failure without keep_failed) the worktree is removed
     and, if delete_branch, the branch deleted. Returns the patch path it wrote,
     or None.
+
+    diff_max_file_bytes caps the per-untracked-file size in that forensic patch
+    (None = no cap); see verify.capture_diff.
     """
     patch: Path | None = None
     if not success:
         try:
-            diff = verify.capture_diff(unit.path, unit.baseline) if unit.baseline else ""
+            diff = (
+                verify.capture_diff(unit.path, unit.baseline, max_file_bytes=diff_max_file_bytes)
+                if unit.baseline
+                else ""
+            )
         except verify.GitError:
             diff = ""
         if diff:

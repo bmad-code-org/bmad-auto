@@ -15,7 +15,6 @@ SWEEP_AUTO_MODES = {"never", "per-epic", "run-end"}
 ISOLATION_MODES = {"none", "worktree"}
 BRANCH_PER_MODES = {"story", "run"}
 MERGE_STRATEGIES = {"ff", "merge", "squash"}
-CI_MERGE_MODES = {"off", "watch", "auto"}
 
 
 class PolicyError(Exception):
@@ -131,15 +130,31 @@ class ScmPolicy:
     merge_strategy: str = "merge"  # ff | merge | squash
     delete_branch: bool = True  # delete the unit branch after a successful merge
     keep_failed: bool = True  # keep a failed unit's worktree+branch for inspection
-    # create_pr = True  -> open a GitHub PR into target_branch instead of merging
-    #                      locally (Phase 4). Degrades to a local merge when the
-    #                      repo has no remote or `gh` is absent.
-    create_pr: bool = False
-    # ci_merge governs what happens to the PR (create_pr only):
-    #   off   -> open the PR and leave it for a human (just journal the URL).
-    #   watch -> block on `gh pr checks --watch`; merge when green, escalate on red.
-    #   auto  -> enable GitHub auto-merge and move on (GitHub merges when green).
-    ci_merge: str = "off"
+    # failed_diff_max_mb caps the per-file size (MB) of untracked files captured
+    # into a kept-failed unit's forensic changes.patch, so a stray build dir or
+    # huge log can't blow it up; oversized files are skipped with a labelled
+    # marker in the patch. failed_diff_unlimited lifts the cap entirely (capture
+    # everything regardless of size) — convenient but may produce very large
+    # patches, so a warning is journalled when it's active.
+    failed_diff_max_mb: int = 5
+    failed_diff_unlimited: bool = False
+    # commit_message_template, when non-empty, is the commit message dev sessions
+    # use for a story's commit (placeholders {story_key} and {run_id} are
+    # substituted). Empty = the built-in default message.
+    commit_message_template: str = ""
+    # max_parallel: units in flight at once. Parallel fan-out (Phase 5) is not
+    # built yet, so any value > 1 is clamped to 1 in loads() — the knob exists
+    # but is inert until the parallel scheduler lands.
+    max_parallel: int = 1
+
+    def __post_init__(self) -> None:
+        # branch_per="run" shares a single branch across every unit in the run;
+        # deleting it after the first unit's merge would defeat that (the next
+        # unit would re-cut a fresh branch). Coerce delete_branch off so the
+        # shared-branch semantics actually hold, regardless of how this policy
+        # was constructed.
+        if self.branch_per == "run" and self.delete_branch:
+            object.__setattr__(self, "delete_branch", False)
 
 
 @dataclass(frozen=True)
@@ -288,6 +303,9 @@ def loads(text: str) -> Policy:
             "sweep.max_bundles, sweep.max_triage_attempts, "
             "sweep.max_migration_attempts and sweep.max_cycles must be >= 1"
         )
+    requested_parallel = int(scm_d.get("max_parallel", ScmPolicy.max_parallel))
+    if requested_parallel < 1:
+        raise PolicyError(f"scm.max_parallel must be >= 1: got {requested_parallel}")
     scm = ScmPolicy(
         isolation=str(scm_d.get("isolation", ScmPolicy.isolation)),
         branch_per=str(scm_d.get("branch_per", ScmPolicy.branch_per)),
@@ -295,8 +313,15 @@ def loads(text: str) -> Policy:
         merge_strategy=str(scm_d.get("merge_strategy", ScmPolicy.merge_strategy)),
         delete_branch=bool(scm_d.get("delete_branch", ScmPolicy.delete_branch)),
         keep_failed=bool(scm_d.get("keep_failed", ScmPolicy.keep_failed)),
-        create_pr=bool(scm_d.get("create_pr", ScmPolicy.create_pr)),
-        ci_merge=str(scm_d.get("ci_merge", ScmPolicy.ci_merge)),
+        failed_diff_max_mb=int(scm_d.get("failed_diff_max_mb", ScmPolicy.failed_diff_max_mb)),
+        failed_diff_unlimited=bool(
+            scm_d.get("failed_diff_unlimited", ScmPolicy.failed_diff_unlimited)
+        ),
+        commit_message_template=str(
+            scm_d.get("commit_message_template", ScmPolicy.commit_message_template)
+        ),
+        # Phase 5 parallel fan-out is unbuilt: clamp to 1 so the knob is inert.
+        max_parallel=min(requested_parallel, 1),
     )
     if scm.isolation not in ISOLATION_MODES:
         raise PolicyError(
@@ -311,12 +336,8 @@ def loads(text: str) -> Policy:
             f"scm.merge_strategy must be one of {sorted(MERGE_STRATEGIES)}: "
             f"got {scm.merge_strategy!r}"
         )
-    if scm.ci_merge not in CI_MERGE_MODES:
-        raise PolicyError(
-            f"scm.ci_merge must be one of {sorted(CI_MERGE_MODES)}: got {scm.ci_merge!r}"
-        )
-    if scm.ci_merge != "off" and not scm.create_pr:
-        raise PolicyError("scm.ci_merge requires scm.create_pr = true")
+    if scm.failed_diff_max_mb < 1:
+        raise PolicyError(f"scm.failed_diff_max_mb must be >= 1: got {scm.failed_diff_max_mb}")
     return Policy(
         gates=gates,
         limits=limits,
@@ -390,15 +411,17 @@ max_cycles = 5               # safety cap on total cycles per sweep run when rep
 
 [scm]
 # Source-control isolation + merge-back. Defaults reproduce today's behavior:
-# work happens in place on the checked-out branch, with no branches or PRs.
+# work happens in place on the checked-out branch, with no branches.
 isolation = "none"           # none | worktree
-branch_per = "story"         # story | run (worktree mode only)
+branch_per = "story"         # story | run (worktree mode only; "run" forces delete_branch = false)
 target_branch = ""           # "" = the branch checked out at run start
-merge_strategy = "merge"     # ff | merge | squash
+merge_strategy = "merge"     # ff | merge | squash (worktree mode merges the unit branch into target locally)
 delete_branch = true         # delete the unit branch after a successful merge
 keep_failed = true           # keep a failed unit's worktree+branch for inspection
-# GitHub PR flow (worktree mode). Falls back to a local merge when the repo has
-# no remote or `gh` is not installed/authenticated.
-create_pr = false            # open a PR into target_branch instead of merging locally
-ci_merge = "off"             # off | watch | auto (requires create_pr; auto needs required checks configured)
+failed_diff_max_mb = 5       # per-file size cap (MB) for untracked files in a kept-failed unit's changes.patch; oversized files are skipped with a marker
+failed_diff_unlimited = false # true = capture the failed-unit diff with no size cap (may produce very large patches; warns when active)
+# commit_message_template: when set, the commit message dev sessions use for a
+# story's commit. {story_key} and {run_id} are substituted. Empty = built-in default.
+commit_message_template = ""
+max_parallel = 1             # units in flight at once (parallel fan-out unbuilt; values > 1 clamp to 1)
 """

@@ -177,6 +177,12 @@ def worktree_remove(repo: Path, path: Path, force: bool = False) -> None:
         raise GitError(f"git worktree remove {path} failed: {out}")
 
 
+def worktree_prune(repo: Path) -> None:
+    """Drop administrative entries for worktrees whose directories are gone.
+    Best-effort housekeeping — never raises."""
+    _git(repo, "worktree", "prune")
+
+
 def worktree_list(repo: Path) -> list[Path]:
     """Paths of every worktree attached to `repo` (the main checkout first)."""
     rc, out = _git(repo, "worktree", "list", "--porcelain")
@@ -208,16 +214,22 @@ def merge_branch(
         msg = message or f"Merge branch '{branch}'"
         rc, out = _git(repo, "merge", "--no-ff", "-m", msg, branch)
         if rc != 0:
-            _git(repo, "merge", "--abort")  # restore to pre-merge HEAD
-            raise GitError(f"git merge --no-ff {branch} failed in {repo} (conflict?): {out}")
+            abort_rc, abort_out = _git(repo, "merge", "--abort")  # restore to pre-merge HEAD
+            detail = f"git merge --no-ff {branch} failed in {repo} (conflict?): {out}"
+            if abort_rc != 0:
+                detail += f"; AND git merge --abort failed (repo left mid-merge): {abort_out}"
+            raise GitError(detail)
         return
     if strategy == "squash":
         rc, out = _git(repo, "merge", "--squash", branch)
         if rc != 0:
             # squash leaves no MERGE_HEAD to --abort; reset the conflicted index
             # back to the (clean) target HEAD.
-            _git(repo, "reset", "--hard", "HEAD")
-            raise GitError(f"git merge --squash {branch} failed in {repo} (conflict?): {out}")
+            reset_rc, reset_out = _git(repo, "reset", "--hard", "HEAD")
+            detail = f"git merge --squash {branch} failed in {repo} (conflict?): {out}"
+            if reset_rc != 0:
+                detail += f"; AND git reset --hard HEAD failed (tree not restored): {reset_out}"
+            raise GitError(detail)
         msg = message or f"Squash-merge branch '{branch}'"
         rc, out = _git(repo, "commit", "-m", msg)
         if rc != 0:
@@ -226,13 +238,18 @@ def merge_branch(
     raise GitError(f"unknown merge strategy: {strategy!r}")
 
 
-def capture_diff(repo: Path, baseline: str) -> str:
+def capture_diff(repo: Path, baseline: str, *, max_file_bytes: int | None = None) -> str:
     """Full unified diff of `repo`'s working tree against `baseline`, including
     untracked (but not ignored) files. Used to preserve a failed unit's changes
     for forensics. Returns "" when there is nothing to capture.
 
     Unlike `_git`, the tracked diff is read from stdout alone and left verbatim
     (no strip, no stderr merge) so the patch stays applyable.
+
+    max_file_bytes caps the size of each *untracked* file included: a file larger
+    than the cap is skipped and replaced with a one-line marker naming it and its
+    size, so a stray build dir or huge log can't balloon the patch. None lifts the
+    cap (capture everything regardless of size).
     """
     proc = subprocess.run(
         ["git", "-C", str(repo), "diff", baseline, "--"],
@@ -251,14 +268,32 @@ def capture_diff(repo: Path, baseline: str) -> str:
         rel = rel.strip()
         if not rel:
             continue
+        if max_file_bytes is not None:
+            try:
+                size = (repo / rel).stat().st_size
+            except OSError:
+                size = 0
+            if size > max_file_bytes:
+                parts.append(
+                    f"# bmad-auto: skipped untracked file {rel!r} — "
+                    f"{size / 1_048_576:.1f} MB exceeds the {max_file_bytes / 1_048_576:.1f} MB "
+                    "cap (raise scm.failed_diff_max_mb or set scm.failed_diff_unlimited = true)\n"
+                )
+                continue
         # --no-index synthesizes an add-from-/dev/null diff for the untracked
         # file; it exits 1 precisely because the files differ — expected here.
+        # Any other non-zero code is a real failure (bad path, internal error),
+        # not "files differ", so don't silently fold it into the patch.
         u = subprocess.run(
             ["git", "-C", str(repo), "diff", "--no-index", "--", "/dev/null", rel],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_S,
         )
+        if u.returncode not in (0, 1):
+            raise GitError(
+                f"git diff --no-index for untracked {rel!r} failed in {repo}: {u.stderr.strip()}"
+            )
         parts.append(u.stdout)
     return "".join(parts)
 

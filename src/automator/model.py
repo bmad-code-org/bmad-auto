@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 
@@ -134,9 +135,6 @@ class StoryTask:
     # reconstruct or discard the in-flight worktree on resume.
     worktree_path: str = ""
     branch: str = ""
-    # worktree-isolation + create_pr mode only: the URL of the PR opened for this
-    # unit's branch (recorded so resume/inspection can find it).
-    pr_url: str = ""
     sessions: list[SessionRecord] = field(default_factory=list)
     tokens: TokenUsage = field(default_factory=TokenUsage)
 
@@ -157,17 +155,28 @@ class StoryTask:
             "attempt": self.attempt,
             "review_cycle": self.review_cycle,
             "baseline_commit": self.baseline_commit,
-            "spec_file": self.spec_file,
+            "spec_file": self._serialized_spec_file(),
             "commit_sha": self.commit_sha,
             "defer_reason": self.defer_reason,
             "dw_ids": self.dw_ids,
             "bundle_file": self.bundle_file,
             "worktree_path": self.worktree_path,
             "branch": self.branch,
-            "pr_url": self.pr_url,
             "sessions": [s.to_dict() for s in self.sessions],
             "tokens": self.tokens.to_dict(),
         }
+
+    def _serialized_spec_file(self) -> str | None:
+        """In worktree mode the spec lives inside the unit's worktree; persist it
+        relative to the worktree root so a kept-failed run's state.json stays
+        portable if the worktree is later moved (and is never a dangling absolute
+        path into a since-pruned worktree). In-place mode stores it verbatim."""
+        if not self.spec_file or not self.worktree_path:
+            return self.spec_file
+        try:
+            return str(Path(self.spec_file).relative_to(self.worktree_path))
+        except ValueError:
+            return self.spec_file  # spec lives outside the worktree; keep absolute
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StoryTask":
@@ -185,7 +194,6 @@ class StoryTask:
             bundle_file=d.get("bundle_file"),
             worktree_path=str(d.get("worktree_path", "")),
             branch=str(d.get("branch", "")),
-            pr_url=str(d.get("pr_url", "")),
             sessions=[SessionRecord.from_dict(s) for s in d.get("sessions", [])],
             tokens=TokenUsage.from_dict(d.get("tokens", {})),
         )

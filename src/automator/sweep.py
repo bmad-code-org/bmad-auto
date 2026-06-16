@@ -950,4 +950,7 @@ class SweepEngine(Engine):
         return verify.verify_review_bundle(task, self.workspace.paths, self.policy)
 
     def _commit_message(self, task: StoryTask) -> str:
+        rendered = self._render_commit_template(task)
+        if rendered is not None:
+            return rendered
         return f"sweep {task.story_key}: {', '.join(task.dw_ids)} via bmad-auto"
