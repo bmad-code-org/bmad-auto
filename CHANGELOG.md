@@ -9,39 +9,22 @@ breaking changes may land in a minor release.
 
 ### Fixed
 
-- **Answering sweep decisions over an attach no longer strands you in the prompt pane.**
-  After answering the last deferred-work decision (e.g. DW-90, DW-95), the session hung in the
-  orchestrator window instead of handing the terminal back — you were never returned to your shell,
-  nor (when attached from tmux) switched back to your previous session. Two causes are fixed:
-  (1) the sweep had no return step after the decisions phase — its only return path
-  (`RETURN_TRAILER`) fired only once the whole process exited and you pressed Enter at the park
-  prompt, so a normal sweep left you watching bundles run with no way out. The sweep now hands the
-  terminal back the moment the current cycle's decisions are answered (`switch-client` back to your
-  pane, or `detach-client` from a plain shell) and continues running bundles in the background;
-  after a return it goes unattended so a later `--repeat` cycle can't block on input in a window no
-  one is viewing (new decisions defer as before, recorded for `bmad-auto decisions` or the next
-  attended sweep). (2) `bmad-auto attach` targeted the agent session and recorded no return target,
-  so the command the startup banner advertises never reached the decision prompt nor returned you;
-  it now lands on the orchestrator window when a decision is pending and wires up the same return
-  mechanism the TUI uses.
+- Answering sweep decisions over an attach now returns you to your terminal. After the
+  last decision in a cycle was answered, the session previously stayed in the orchestrator
+  window instead of handing control back. The sweep now returns the terminal as soon as the
+  current cycle's decisions are answered and continues running bundles in the background.
+  `bmad-auto attach` lands on the orchestrator window when a decision is pending and restores
+  your previous session on exit.
 
 ## [0.4.1] — 2026-06-16
 
 ### Fixed
 
-- **Worktree isolation is now actually usable.** Isolated runs (`[scm] isolation = "worktree"`)
-  died on the first session with `Unknown command: /bmad-auto-dev`. Two compounding causes are
-  fixed: (1) per-unit worktrees were mounted under the main repo's `.git/`
-  (`.git/automator-worktrees/`); a cwd inside `.git/` is treated as git-internal by Claude Code,
-  which then refuses to load the project's `bmad-auto-*` skills. Worktrees now live under the run
-  dir (`.automator/runs/<run_id>/worktrees/<unit>`), already gitignored and outside `.git/`.
-  (2) `git worktree add` checks out tracked files only, but the skill trees (`.claude/skills`,
-  `.agents/skills`) and signal hook are typically gitignored, so a fresh worktree never received
-  them. Each worktree is now provisioned with the bundled skills + signal hook after mount
-  (`install.provision_worktree`); skills are copied only when absent (never clobbering a tracked
-  skill tree), the hook is registered against the main repo's relay via an absolute path, and the
-  provisioned paths are added to the worktree's local git exclude so the unit's `git add -A` never
-  merges tool files back. Verified end-to-end with a live worktree-isolated sandbox run.
+- Worktree isolation (`[scm] isolation = "worktree"`) now works. Isolated runs previously
+  failed on the first session with `Unknown command: /bmad-auto-dev`. Worktrees are now
+  created under the run directory (`.automator/runs/<run_id>/worktrees/<unit>`) instead of
+  inside `.git/`, and each worktree is provisioned with the bundled skills and signal hook so
+  project commands resolve correctly.
 
 ## [0.4.0] — 2026-06-16
 
