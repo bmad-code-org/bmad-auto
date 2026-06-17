@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
+import subprocess
 from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
@@ -114,6 +115,35 @@ def _copy_traversable(src, dst: Path) -> None:
         dst.write_bytes(src.read_bytes())
 
 
+def _worktree_local_exclude(worktree: Path, patterns: Sequence[str]) -> None:
+    """Add anchored ignore patterns to the worktree's local git exclude so the
+    provisioned tool files are never staged by the unit's `git add -A`. Uses
+    git's standard local-only exclude (never committed or pushed); it does not
+    affect already-tracked files. Best-effort — skipped if git can't be queried.
+    """
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return
+    common_dir = Path(common)
+    if not common_dir.is_absolute():
+        common_dir = (worktree / common_dir).resolve()
+    exclude = common_dir / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    present = set(existing.splitlines())
+    new = [p for p in patterns if p not in present]
+    if not new:
+        return
+    prefix = existing if not existing or existing.endswith("\n") else existing + "\n"
+    exclude.write_text(prefix + "\n".join(new) + "\n", encoding="utf-8")
+
+
 def _copy_skills(project: Path, trees: Sequence[str], force: bool) -> bool:
     """Install the bundled bmad-auto-* skills into each project skill tree.
 
@@ -144,6 +174,65 @@ def _copy_skills(project: Path, trees: Sequence[str], force: bool) -> bool:
             skipped_any = True
         print(f"  skills -> {tree}/: {'; '.join(parts) if parts else 'nothing to do'}")
     return skipped_any
+
+
+def provision_worktree(worktree: Path, profiles: Sequence[CLIProfile], repo_root: Path) -> None:
+    """Make a freshly-created git worktree a self-sufficient bmad-auto project.
+
+    A worktree checks out tracked files only, but the skill trees (.claude/skills,
+    .agents/skills) and hook config are typically gitignored, so they are absent
+    from the checkout. Without them the session can't find /bmad-auto-dev and the
+    Stop-signal hook never fires. Lay the bundled skills + signal hook into the
+    worktree for the active CLI profiles. Quiet (no stdout) — unlike `install_into`
+    this runs inside the engine loop under a TUI. No-op when `profiles` is empty.
+
+    Kept safe against the unit's eventual `git add -A` commit:
+    - skills are copied only when ABSENT, so a project that commits its own skill
+      tree (e.g. .agents/) keeps it untouched (no diff merged back);
+    - the hook points at the MAIN repo's already-installed relay via an absolute
+      path (the relay locates the run dir from $BMAD_AUTO_RUN_DIR, not its own
+      location), so nothing is written into the worktree's .automator/.
+    Both skill trees and the per-CLI hook config live in dirs projects gitignore.
+    """
+    if not profiles:
+        return
+    worktree = worktree.resolve()
+    relay = repo_root.resolve() / HOOK_SCRIPT_REL
+    skills_root = resources.files("automator.data").joinpath("skills")
+
+    # bundled skills into each CLI's skill tree (deduped: codex+gemini share one);
+    # never clobber a skill the checkout already carries (tracked or pre-existing).
+    for tree in dict.fromkeys(p.skill_tree for p in profiles):
+        tree_dir = worktree / tree
+        for skill in MODULE_SKILLS:
+            dst = tree_dir / skill
+            if dst.exists():
+                continue
+            _copy_traversable(skills_root.joinpath(skill), dst)
+
+    # per-CLI signal-hook registration, baked to the main repo's relay (absolute)
+    for profile in profiles:
+        config_path = worktree / profile.hooks.config_path
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config: dict = {}
+        if config_path.is_file():
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                config = {}
+        registrations = {
+            native: f"python3 {shlex.quote(str(relay))} {canonical}"
+            for native, canonical in profile.hooks.events.items()
+        }
+        config, changed = merge_hooks(config, registrations, profile.hooks.dialect)
+        if changed:
+            config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    # Shield exactly the paths we wrote (skill trees + hook configs) from the
+    # unit's `git add -A`, in case a project doesn't gitignore its tool dirs.
+    patterns = {f"/{p.skill_tree}" for p in profiles}
+    patterns |= {f"/{p.hooks.config_path}" for p in profiles}
+    _worktree_local_exclude(worktree, sorted(patterns))
 
 
 def install_into(

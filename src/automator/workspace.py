@@ -6,11 +6,12 @@ lives in the main repo and is passed separately — it never moves.
 
 - isolation = none → Workspace.default(paths): root = paths.repo_root, behavior
   identical to operating directly on the project.
-- isolation = worktree → per unit: a git worktree mounted under the main repo's
-  .git/ (so it stays invisible to the main checkout's `git status`), with paths
-  rebased onto it. open_unit_workspace / close_unit_workspace manage the
-  branch + worktree lifecycle; the engine merges the unit branch back into the
-  target branch from the main repo between units.
+- isolation = worktree → per unit: a git worktree mounted under the run dir
+  (.automator/runs/<run_id>/worktrees/, which `bmad-auto init` gitignores, so it
+  stays invisible to the main checkout's `git status`), with paths rebased onto
+  it. open_unit_workspace / close_unit_workspace manage the branch + worktree
+  lifecycle; the engine merges the unit branch back into the target branch from
+  the main repo between units.
 """
 
 from __future__ import annotations
@@ -21,9 +22,18 @@ from pathlib import Path
 from . import verify
 from .bmadconfig import ProjectPaths
 
-# Unit worktrees live inside the main repo's .git/ so they never show up as
-# untracked files in the main checkout (git never scans its own .git dir).
-WORKTREE_SUBDIR = Path(".git") / "automator-worktrees"
+# Per-unit worktrees live under the run dir (.automator/runs/<run_id>/worktrees/),
+# which `bmad-auto init` already gitignores — so unit checkouts never show up as
+# untracked files in the main checkout. Crucially they must NOT live under .git/:
+# a cwd inside .git/ is treated as git-internal by the coding CLIs (Claude Code),
+# which then refuse to load the project's bmad-auto-* skills — breaking every
+# worktree session (`Unknown command: /bmad-auto-dev`).
+WORKTREE_DIRNAME = "worktrees"
+
+
+def unit_worktrees_dir(run_dir: Path) -> Path:
+    """The parent dir holding this run's per-unit worktrees."""
+    return run_dir / WORKTREE_DIRNAME
 
 
 @dataclass(frozen=True)
@@ -64,16 +74,18 @@ def open_unit_workspace(
     unit_key: str,
     base: str,
     branch_per: str,
+    run_dir: Path,
 ) -> UnitWorkspace:
     """Mount a fresh worktree for `unit_key` and return its rebased workspace.
 
-    The unit branch is cut from `base` (the target branch's HEAD). When the
+    The worktree is mounted under the run dir (see unit_worktrees_dir), not under
+    .git/. The unit branch is cut from `base` (the target branch's HEAD). When the
     branch already exists (branch_per=run re-mounting the shared run branch
     across serial units) it is re-checked-out from its own HEAD instead, so it
     keeps the commits earlier units already landed on it.
     """
     branch = unit_branch_name(run_id, unit_key, branch_per)
-    wt = (repo_root / WORKTREE_SUBDIR / run_id / unit_key).resolve()
+    wt = (unit_worktrees_dir(run_dir) / unit_key).resolve()
     wt.parent.mkdir(parents=True, exist_ok=True)
     if verify.branch_exists(repo_root, branch):
         verify.worktree_add(repo_root, wt, branch, create=False)

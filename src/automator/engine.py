@@ -24,6 +24,7 @@ from .escalation import (
     decide_review_session,
     preference_escalations,
 )
+from .install import provision_worktree
 from .journal import Journal, save_state
 from .model import (
     PAUSE_EPIC_BOUNDARY,
@@ -40,12 +41,12 @@ from .sprintstatus import load as load_sprint_status
 from .sprintstatus import next_actionable
 from .statemachine import advance
 from .workspace import (
-    WORKTREE_SUBDIR,
     UnitWorkspace,
     Workspace,
     close_unit_workspace,
     discard_worktree,
     open_unit_workspace,
+    unit_worktrees_dir,
 )
 
 
@@ -265,6 +266,17 @@ class Engine:
         self.journal.append("target-branch", branch=self.state.target_branch)
         self._save()
 
+    def _worktree_profiles(self):
+        """The distinct CLI profiles of the dev + review adapters, for provisioning
+        their skills/hooks into a worktree. Adapters without a `profile` (e.g. test
+        fakes) contribute nothing, so provisioning is a no-op for them."""
+        seen: dict[str, object] = {}
+        for adapter in (self.adapters["dev"], self.adapters["review"]):
+            profile = getattr(adapter, "profile", None)
+            if profile is not None and profile.name not in seen:
+                seen[profile.name] = profile
+        return list(seen.values())
+
     def _run_isolated(self, task: StoryTask, drive: Callable[[StoryTask], None]) -> None:
         """Run one unit's `drive` body in a fresh per-unit worktree, then merge
         it back into the target branch. `drive` either returns (DONE/DEFERRED →
@@ -278,6 +290,7 @@ class Engine:
                 task.story_key,
                 self.state.target_branch,
                 self.policy.scm.branch_per,
+                self.run_dir,
             )
         except verify.GitError as e:
             # could not mount a worktree (e.g. branch_per=run with a kept-failed
@@ -293,6 +306,11 @@ class Engine:
             return
         task.worktree_path = str(unit.path)
         task.branch = unit.branch
+        # A worktree checks out tracked files only, but the bmad-auto-* skill
+        # trees + signal-hook config are typically gitignored, so they are absent
+        # from the fresh checkout. Re-lay them into the worktree so the session
+        # finds /bmad-auto-dev and the Stop-signal hook fires.
+        provision_worktree(unit.path, self._worktree_profiles(), self.paths.repo_root)
         self.journal.append(
             "worktree-opened", story_key=task.story_key, branch=unit.branch, path=str(unit.path)
         )
@@ -421,9 +439,9 @@ class Engine:
                     "worktree-kept", story_key=task.story_key, path=task.worktree_path
                 )
         verify.worktree_prune(repo)
-        run_dir = repo / WORKTREE_SUBDIR / self.state.run_id
-        if run_dir.is_dir() and not any(run_dir.iterdir()):
-            run_dir.rmdir()
+        worktrees_parent = unit_worktrees_dir(self.run_dir)
+        if worktrees_parent.is_dir() and not any(worktrees_parent.iterdir()):
+            worktrees_parent.rmdir()
 
     def _reopen_unit(self, task: StoryTask) -> UnitWorkspace:
         """Reconstruct the UnitWorkspace for an in-flight unit on resume, from

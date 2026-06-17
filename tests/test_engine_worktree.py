@@ -409,7 +409,9 @@ def test_worktree_crash_restart_discards_stale_worktree(project):
     # simulate an interrupted unit left mid-flight (DEV_RUNNING, worktree mounted)
     from automator.workspace import open_unit_workspace
 
-    unit = open_unit_workspace(project.project, project, "test-run", "1-1-a", "main", "story")
+    unit = open_unit_workspace(
+        project.project, project, "test-run", "1-1-a", "main", "story", engine.run_dir
+    )
     task = StoryTask("1-1-a", 1)
     engine.state.tasks["1-1-a"] = task
     task.phase = Phase.DEV_RUNNING
@@ -496,8 +498,8 @@ def test_spec_file_serialized_relative_to_worktree():
     """A worktree task persists spec_file relative to its worktree so a kept run's
     state stays portable (no dangling absolute path into a pruned worktree)."""
     task = StoryTask(story_key="1-1-a", epic=1, phase=Phase.DEFERRED)
-    task.worktree_path = "/repo/.git/automator-worktrees/run/1-1-a"
-    task.spec_file = "/repo/.git/automator-worktrees/run/1-1-a/_out/spec.md"
+    task.worktree_path = "/repo/.automator/runs/run/worktrees/1-1-a"
+    task.spec_file = "/repo/.automator/runs/run/worktrees/1-1-a/_out/spec.md"
     assert task.to_dict()["spec_file"] == "_out/spec.md"
     # a spec living outside the worktree stays absolute
     task.spec_file = "/elsewhere/spec.md"

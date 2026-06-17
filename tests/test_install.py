@@ -1,7 +1,12 @@
 import json
 
 from automator.adapters.profile import get_profile
-from automator.install import MODULE_SKILLS, install_into, merge_hooks
+from automator.install import (
+    MODULE_SKILLS,
+    install_into,
+    merge_hooks,
+    provision_worktree,
+)
 
 
 def _registrations(profile, command="python3 /x/.automator/bmad_auto_hook.py {event}"):
@@ -135,3 +140,56 @@ def test_install_unknown_cli(tmp_path):
 def test_install_resolves_legacy_alias(tmp_path):
     assert install_into(tmp_path, clis=("claude-code-tmux",)) == 0
     assert (tmp_path / ".claude" / "settings.json").is_file()
+
+
+def test_provision_worktree_lays_down_skills_and_hook(tmp_path):
+    """A worktree must receive the bmad-auto-* skills + signal hook even though
+    those dirs are gitignored (absent from a fresh checkout), or the session
+    can't find /bmad-auto-dev and the Stop hook never fires."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    claude = get_profile("claude")
+    provision_worktree(wt, [claude], repo)
+
+    # skills installed into the claude skill tree
+    for skill in MODULE_SKILLS:
+        assert (wt / claude.skill_tree / skill / "SKILL.md").is_file()
+    # hook registered, baked to the MAIN repo's relay (absolute) — nothing written
+    # into the worktree's .automator/ (which a project may not gitignore)
+    settings = json.loads((wt / claude.hooks.config_path).read_text())
+    assert set(claude.hooks.events) <= set(settings["hooks"])
+    cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+    assert str((repo / ".automator" / "bmad_auto_hook.py")) in cmd
+    assert not (wt / ".automator").exists()
+
+
+def test_provision_worktree_covers_multiple_profiles(tmp_path):
+    """Dev=claude + review=codex provisions both skill trees (.claude/skills and
+    .agents/skills) and both hook configs."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    claude, codex = get_profile("claude"), get_profile("codex")
+    provision_worktree(wt, [claude, codex], repo)
+
+    assert (wt / claude.skill_tree / "bmad-auto-dev" / "SKILL.md").is_file()
+    assert (wt / codex.skill_tree / "bmad-auto-dev" / "SKILL.md").is_file()
+    assert (wt / claude.hooks.config_path).is_file()
+    assert (wt / codex.hooks.config_path).is_file()
+
+
+def test_provision_worktree_does_not_clobber_existing_skill(tmp_path):
+    """A skill the checkout already carries (project commits its own skill tree)
+    is left untouched, so no diff is merged back."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    claude = get_profile("claude")
+    existing = wt / claude.skill_tree / "bmad-auto-dev" / "SKILL.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("COMMITTED", encoding="utf-8")
+
+    provision_worktree(wt, [claude], repo)
+    assert existing.read_text() == "COMMITTED"
+    # a skill that was absent is still laid down
+    assert (wt / claude.skill_tree / "bmad-auto-review" / "SKILL.md").is_file()
+
+
+def test_provision_worktree_empty_profiles_is_noop(tmp_path):
+    provision_worktree(tmp_path / "wt", [], tmp_path / "repo")
+    assert not (tmp_path / "wt").exists()
