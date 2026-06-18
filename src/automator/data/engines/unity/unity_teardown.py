@@ -7,7 +7,12 @@ worktree. Best effort: the engine logs a non-zero exit but the unit's outcome
 stands (it does not re-defer a done/paused unit just because Editor-quit failed).
 
   1. Gracefully quit the worktree's Editor (`unity-mcp-cli close`, then --force).
-  2. Drop the ``<worktree>/Library`` symlink this unit's setup created (leaving the
+  2. Fallback hard-kill: if an Editor whose argv references this worktree is still
+     alive afterwards, SIGTERM→SIGKILL it (Linux). ``close`` reports success even
+     when it can't find the Editor — which happens precisely when readiness failed
+     and the Editor never registered with the MCP — so without this a failed unit
+     would leak a live Editor.
+  3. Drop the ``<worktree>/Library`` symlink this unit's setup created (leaving the
      persistent cache it pointed at intact for the next run). A real (non-symlink)
      Library is left untouched.
 
@@ -28,14 +33,94 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 def _worktree() -> Path | None:
     wt = os.environ.get("BMAD_AUTO_WORKTREE")
     return Path(wt) if wt else None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal
+    return True
+
+
+def _exe_basename(entry: Path) -> str:
+    try:
+        return os.path.basename(os.readlink(entry / "exe")).lower()
+    except OSError:
+        return ""
+
+
+def _lingering_editor_pids(worktree: Path) -> list[int]:
+    """Linux: PIDs of the Unity *Editor binary* bound to this worktree.
+
+    Tight on purpose: the process must (a) reference this exact worktree path in
+    argv — Unity always gets ``-projectPath <path>`` — and (b) have an executable
+    basename of exactly ``unity`` (the Linux Editor binary). That excludes the
+    launcher shell, ``unity-mcp-cli``/node, python, greps, and the operator's
+    Editor on any other project, so we never kill the wrong process."""
+    if not sys.platform.startswith("linux"):
+        return []
+    needle = str(worktree)
+    pids: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (
+                (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            )
+        except OSError:
+            continue  # process gone or unreadable
+        if needle not in argv:
+            continue
+        argv0 = os.path.basename(argv.split(" ", 1)[0]).lower() if argv.strip() else ""
+        if _exe_basename(entry) == "unity" or argv0 == "unity":
+            pids.append(int(entry.name))
+    return pids
+
+
+def _force_kill_lingering(worktree: Path) -> int:
+    """Best-effort SIGTERM→SIGKILL of any Editor left running for this worktree
+    after ``close``. Returns the number of processes targeted."""
+    pids = _lingering_editor_pids(worktree)
+    # exclude ourselves just in case (our own argv has the worktree path too)
+    pids = [p for p in pids if p != os.getpid()]
+    if not pids:
+        return 0
+    print(
+        f"unity_teardown: 'close' left {len(pids)} Unity process(es) for {worktree} "
+        f"running ({pids}); hard-killing",
+        file=sys.stderr,
+    )
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    # give them a few seconds to exit politely, then SIGKILL survivors
+    for _ in range(20):
+        if not any(_alive(p) for p in pids):
+            break
+        time.sleep(0.5)
+    for pid in pids:
+        if _alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    return len(pids)
 
 
 def _cli() -> str:
@@ -92,6 +177,20 @@ def main() -> int:
             file=sys.stderr,
         )
         rc = 2
+    # close reports success even when it can't find the Editor (e.g. readiness
+    # failed so it never registered) — sweep up any Editor still bound to this
+    # worktree so a failed unit never leaks a live Editor. Only a SURVIVING Editor
+    # (couldn't be killed) is a teardown failure; a leak we successfully reaped is
+    # still a clean teardown.
+    if _force_kill_lingering(worktree):
+        survivors = _lingering_editor_pids(worktree)
+        if survivors:
+            print(
+                f"unity_teardown: {len(survivors)} Editor process(es) survived kill: "
+                f"{survivors}",
+                file=sys.stderr,
+            )
+            rc = rc or 1
     _drop_library_symlink(worktree)
     return rc
 

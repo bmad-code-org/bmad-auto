@@ -171,6 +171,23 @@ def test_unity_ready_grace_auto_per_mode(monkeypatch):
     assert mod._grace() == 120.0
 
 
+def _load_unity_teardown():
+    path = os.path.join(get_engine("unity").scripts_dir, "unity_teardown.py")
+    spec = importlib.util.spec_from_file_location("unity_teardown_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_unity_teardown_lingering_scan_no_false_match(tmp_path):
+    """The Editor sweep is scoped to the worktree path + a 'unity' exe basename, so
+    a path no Unity process references yields nothing (and never crashes the scan)."""
+    mod = _load_unity_teardown()
+    # this test process references tmp_path but is python, not a Unity binary
+    assert mod._lingering_editor_pids(tmp_path) == []
+    assert mod._force_kill_lingering(tmp_path) == 0
+
+
 def test_unity_ready_grace_explicit_override(monkeypatch):
     mod = _load_unity_ready()
     monkeypatch.setenv("BMAD_AUTO_ENGINE_EDITOR_MODE", "per_worktree")

@@ -32,7 +32,9 @@ breaking changes may land in a minor release.
   per-worktree cache under the gitignored `.automator/cache/` (never the operator's live
   Library); the readiness gate then waits for it,
   and a teardown hook quits the Editor on completion **and** on pause/escalation so it never
-  outlives its worktree. The MCP server's generated skill tree (gitignored, so absent from a
+  outlives its worktree (with a hard-kill fallback: when readiness failed the Editor never
+  registered with the MCP, so `close` can't find it — teardown then SIGTERM→SIGKILLs any Unity
+  Editor binary still bound to the worktree path, so a failed unit can't leak a live Editor). The MCP server's generated skill tree (gitignored, so absent from a
   fresh checkout) is copied into each worktree via the plugin's new `seed_globs`. A setup failure
   defers the unit instead of starting a session; only the IvanMurzak MCP is wired for a managed
   launch (CoplayDev's shared-server model needs a project-local override). The readiness gate
