@@ -36,6 +36,12 @@ breaking changes may land in a minor release.
   sessions then timed out reaching their MCP and escalated as spurious spec errors. Each loaded
   adapter's configs are now copied in before launch, via new `[scm]` knobs `seed_adapter_defaults`
   (default on) and `worktree_seed` (extra paths). Both are in the TUI settings editor.
+- **Game Engine settings in the TUI.** All six `[engine]` keys (`name`, `editor_mode`, `mcp`,
+  `unity_path`, `ready_timeout_sec`, `ready_grace_sec`) are now editable in the settings editor
+  (`g`) under a collapsible titled **Game Engine**; the `editor_mode` ↔ `[scm] isolation` coupling
+  is validated on save. New authoring docs: [Writing a Game Engine plugin](docs/game-engine-plugin-guide.md)
+  and [Writing a plugin for a specific Editor MCP](docs/game-engine-mcp-guide.md) (full
+  `BMAD_AUTO_UNITY_*` env-var reference).
 
 ### Changed
 

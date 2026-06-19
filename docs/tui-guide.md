@@ -397,10 +397,24 @@ behavior.
 | `scm.commit_message_template`         | text                   | (built-in)         | story/bundle commit message; `{story_key}` / `{run_id}` substituted                                                                                  |
 | `scm.failed_diff_max_mb`              | int ≥ 1                | 5                  | per-file cap (MB) for untracked files in a kept-failed unit's `changes.patch`                                                                        |
 | `scm.failed_diff_unlimited`           | switch                 | off                | lift the failed-diff size cap (warns when active)                                                                                                    |
+| `engine.name`                         | text                   | `""` (disabled)    | **Game Engine** layer plugin: `""` off / `unity` / a custom plugin under `.automator/engines/<name>/`                                                |
+| `engine.editor_mode`                  | select                 | `shared`           | `shared` (needs `scm.isolation = none`) / `per_worktree` (needs `isolation = worktree`)                                                              |
+| `engine.mcp`                          | select                 | `ivanmurzak`       | Editor MCP the plugin targets: `ivanmurzak` / `coplaydev`                                                                                            |
+| `engine.unity_path`                   | text                   | (auto-detect)      | explicit Editor binary for a `per_worktree` launch; ignored in shared mode                                                                           |
+| `engine.ready_timeout_sec`            | int ≥ 1                | 600                | readiness-gate budget for the Editor + MCP to come up                                                                                                |
+| `engine.ready_grace_sec`              | int ≥ -1               | -1                 | pre-probe delay; `-1` = auto (120s cold `per_worktree`, 0s warm `shared`)                                                                            |
 | `tui.low_frame_rate`                  | switch                 | off                | cap to 15fps + disable animations (slow/SSH links); applies next launch                                                                              |
 
 (`scm.max_parallel` is intentionally **not** exposed in the editor — it stays
 inert, clamped to 1, until parallel fan-out is built.)
+
+The `[engine]` keys render under a collapsible titled **Game Engine** — the opt-in
+layer for game projects that drive a live Editor through an MCP. It is **disabled by
+default** (`engine.name = ""`); setting `name = "unity"` enables it with working
+defaults for every other key. See [Writing a Game Engine plugin](game-engine-plugin-guide.md)
+and [Writing a plugin for a specific Editor MCP](game-engine-mcp-guide.md) to target
+another engine. The `editor_mode` ↔ `scm.isolation` coupling is validated on save, so
+an invalid combo (e.g. `per_worktree` with `isolation = none`) blocks with an error.
 
 `extra_args` fields are special: the switch distinguishes "use the profile's
 default flags" (off — the key stays absent) from "replace them with exactly

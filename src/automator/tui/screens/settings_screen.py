@@ -38,6 +38,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from ...engines.plugin import EDITOR_MODES
 from ...policy import (
     BRANCH_PER_MODES,
     GATE_MODES,
@@ -47,6 +48,7 @@ from ...policy import (
     RETRO_MODES,
     SWEEP_AUTO_MODES,
     AdapterPolicy,
+    EnginePolicy,
     GatesPolicy,
     LimitsPolicy,
     NotifyPolicy,
@@ -289,6 +291,69 @@ _FIELDS: tuple[_Field, ...] = (
         ),
     ),
     _Field(
+        "engine",
+        "name",
+        "str",
+        default=EnginePolicy.name,
+        placeholder="'' = disabled",
+        label="plugin name",
+        description=(
+            "game-engine plugin to enable — '' disables the layer (default); 'unity' "
+            "is bundled; a custom plugin lives under .automator/engines/<name>/"
+        ),
+    ),
+    _Field(
+        "engine",
+        "editor_mode",
+        "select",
+        options=tuple(sorted(EDITOR_MODES)),
+        default=EnginePolicy.editor_mode,
+        description=(
+            "shared → agent works in place on your live Editor (needs scm.isolation = "
+            "none); per_worktree → one managed Editor per worktree (needs isolation = "
+            "worktree)"
+        ),
+    ),
+    _Field(
+        "engine",
+        "mcp",
+        "select",
+        options=("ivanmurzak", "coplaydev"),
+        default=EnginePolicy.mcp,
+        label="Editor MCP",
+        description="which Editor MCP server the plugin's scripts target",
+    ),
+    _Field(
+        "engine",
+        "unity_path",
+        "str",
+        default=EnginePolicy.unity_path,
+        placeholder="'' = auto-detect",
+        description=(
+            "explicit Editor binary for a per_worktree launch; '' auto-detects · "
+            "ignored in shared mode (your own Editor is reused)"
+        ),
+    ),
+    _Field(
+        "engine",
+        "ready_timeout_sec",
+        "int",
+        minimum=1,
+        default=EnginePolicy.ready_timeout_sec,
+        description="how long the readiness gate blocks for the Editor + MCP to come up",
+    ),
+    _Field(
+        "engine",
+        "ready_grace_sec",
+        "int",
+        minimum=-1,
+        default=EnginePolicy.ready_grace_sec,
+        description=(
+            "delay before the first readiness probe; -1 = auto (120s cold per_worktree, "
+            "0s warm shared) · counts against ready_timeout_sec"
+        ),
+    ),
+    _Field(
         "tui",
         "low_frame_rate",
         "switch",
@@ -317,7 +382,14 @@ _SECTION_DESC = {
     "adapter.triage": "triage-stage adapter overrides",
     "sweep": "deferred-work sweep automation",
     "scm": "git isolation, branching & merge-back",
+    "engine": "opt-in layer for game projects driving a live Editor via MCP (Unity)",
     "tui": "dashboard rendering (slow-link / SSH tuning)",
+}
+
+# display name for a section's collapsible header, when it should differ from the
+# raw TOML section key (which stays the policy key). Falls back to the key.
+_SECTION_LABEL = {
+    "engine": "Game Engine",
 }
 
 
@@ -405,8 +477,9 @@ class SettingsScreen(Screen[None]):
                 id="note",
             )
             for section, fields in groupby(_FIELDS, key=lambda f: f.section):
+                name = _SECTION_LABEL.get(section, section)
                 desc = _SECTION_DESC.get(section)
-                title = f"{section} — {desc}" if desc else section
+                title = f"{name} — {desc}" if desc else name
                 with Collapsible(title=title, collapsed=True):
                     for spec in fields:
                         yield from self._compose_field(spec)
