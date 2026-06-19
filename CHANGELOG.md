@@ -5,6 +5,14 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [Unreleased]
+
+### Changed
+
+- Unity engine plugin: pin the `unity-mcp-cli` verification stamp to **v0.81.1** (subcommand
+  signatures re-checked; no call-site changes). Documents the new upstream **dev-control HTTP
+  bridge** (dev-only, off by default, not wired) in the [Game Engine MCP guide](docs/game-engine-mcp-guide.md).
+
 ## [0.4.3] — 2026-06-18
 
 ### Added

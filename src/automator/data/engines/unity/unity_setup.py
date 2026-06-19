@@ -40,7 +40,7 @@ cloud; ``bootstrap-local`` persists ``connectionMode: Custom`` in the project's
 The MCP tool *skill* files are not written here — they are gitignored and copied
 in from the main repo by the plugin's ``seed_globs`` (``.claude/skills/*``).
 
-Verified against unity-mcp-cli v0.81.0 (`setup-mcp` writes ``.mcp.json`` with the
+Verified against unity-mcp-cli v0.81.1 (`setup-mcp` writes ``.mcp.json`` with the
 deterministic local URL; `bootstrap-local --url --token` pins Custom mode; `open`
 injects UNITY_MCP_* env only when connection options are passed). The exact flags
 move between releases — override engine.worktree_setup_cmd in a project-local

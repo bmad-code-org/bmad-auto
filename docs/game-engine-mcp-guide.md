@@ -159,7 +159,34 @@ BMAD_AUTO_UNITY_LIBRARY_SEED_MODE = "copy"   # e.g. force a deep copy off-CoW
 | `BMAD_AUTO_UNITY_CLOSE_TIMEOUT` | `30`            | Polite-quit seconds before escalating to `--force`. |
 | `UNITY_MCP_CLI`                 | `unity-mcp-cli` | IvanMurzak CLI binary.                              |
 
-> These defaults are verified against `unity-mcp-cli` v0.81.0. The exact flags and
+> These defaults are verified against `unity-mcp-cli` v0.81.1. The exact flags and
 > subcommands move between releases — each script's module docstring is the
 > authoritative, version-stamped source, and any of the above can be overridden in a
 > project-local plugin's `[env]` block when yours differ.
+
+## Dev-control HTTP bridge (upstream, dev-only — not wired)
+
+Unity-MCP **0.81.1** added an optional **dev-control HTTP bridge** — a
+`127.0.0.1`-only HTTP server the Unity plugin exposes for driving and inspecting its
+"AI Game Developer" Editor window from outside the process. It is **off by default in
+shipped builds**, and **bmad-auto does not use it** — the bundled plugin's readiness
+and per_worktree lifecycle run entirely through the `unity-mcp-cli` subcommands above.
+It is documented here only so operators know it exists.
+
+Enable it on the Editor side with `UNITY_MCP_DEV_CONTROL=1` (resolution order: process
+env > project `.env` > default off); the listen port is `UNITY_MCP_DEV_CONTROL_PORT`
+(default **9922**). Endpoints:
+
+| Method + path                                                         | Use                                                    |
+| --------------------------------------------------------------------- | ------------------------------------------------------ |
+| `GET /health`, `GET /state`                                           | Read live window / server / connection status.         |
+| `POST /inject/connection-status`, `/inject/server-status`             | Inject fake states (testing).                          |
+| `POST /control/server-url`, `/control/select-agent`, `/control/click` | Drive the window (set URL, pick agent, Connect/Start). |
+
+Why an operator might reach for it **manually**: `GET /state` is a more authoritative
+readiness/diagnostic signal than `wait-for-ready` (it reports what the Editor window
+actually shows), and the `/control/*` routes can drive the window if a CLI subcommand
+drifts in a future release. **Caveats:** it is dev-only and experimental (the surface
+may change without notice), and its default port **9922 is fixed** — so concurrent
+`per_worktree` Editors would collide on it, and anyone wiring it must assign a distinct
+`UNITY_MCP_DEV_CONTROL_PORT` per worktree.

@@ -22,7 +22,7 @@ stands (it does not re-defer a done/paused unit just because Editor-quit failed)
      in — is left untouched; it is removed cheaply when bmad-auto deletes the worktree
      (CoW-shared extents cost almost nothing to drop).
 
-Verified against unity-mcp-cli v0.81.0 (`close <path>` keys off the project path).
+Verified against unity-mcp-cli v0.81.1 (`close <path>` keys off the project path).
 Only the IvanMurzak MCP launches a managed per-worktree Editor, so only it is quit
 here; for CoplayDev (shared :8080 server) override engine.worktree_teardown_cmd.
 
