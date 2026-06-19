@@ -49,11 +49,25 @@ def test_start_run_detached_argv(fake_run, tmp_path: Path):
     nw0 = fake_run.by_verb("new-window")[0]
     assert nw0[nw0.index("-F") + 1] == "#{window_id}"
 
-    # control session was missing: has-session, then new-session, then new-window
+    # control session was missing: has-session, new-session, new-window, then
+    # the project tag is stamped on the new window so cross-project cleanup
+    # never closes it
     assert [c[1] for c in fake_run.calls] == [
         "has-session",
         "new-session",
         "new-window",
+        "set-option",
+    ]
+    from automator import runs
+
+    assert fake_run.by_verb("set-option")[0] == [
+        "tmux",
+        "set-option",
+        "-w",
+        "-t",
+        "@7",
+        runs.PROJECT_OPTION,
+        runs.project_tag(tmp_path),
     ]
     ns = fake_run.by_verb("new-session")[0]
     assert ns == [
@@ -139,7 +153,7 @@ def test_existing_ctl_session_reused(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(launch.subprocess, "run", fake)
     monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
     launch.resume_detached(tmp_path, "RID")
-    assert [c[1] for c in fake.calls] == ["has-session", "new-window"]
+    assert [c[1] for c in fake.calls] == ["has-session", "new-window", "set-option"]
 
 
 def test_launch_without_tmux_raises(monkeypatch, tmp_path: Path):
@@ -224,17 +238,20 @@ def test_start_detached_returns_window_id(fake_run, tmp_path: Path):
 def test_prune_ctl_windows(monkeypatch, tmp_path: Path):
     from automator import runs
 
+    mine = runs.project_tag(tmp_path)
     # one live run (this process's pid); the others have no run dir
     live = tmp_path / ".automator" / "runs" / "20260101-000000-live"
     live.mkdir(parents=True)
     (live / "state.json").write_text("{}")
     runs.write_pid(live)
 
+    # window format is window_id\twindow_name\t@bmad_project
     windows = (
-        "@1\t0\n"  # the session's initial shell — not a run window
-        "@2\trun-20260101-000000-live\n"  # live run — keep
-        "@3\tsweep-20260101-000000-dead\n"  # no run dir — orphan, kill
-        "@4\tresume-20260101-000000-cur\n"  # would match, but is the current window
+        "@1\t0\t\n"  # the session's initial shell — not a run window
+        f"@2\trun-20260101-000000-live\t{mine}\n"  # live run, ours — keep
+        f"@3\tsweep-20260101-000000-dead\t{mine}\n"  # tagged-ours orphan — kill
+        "@5\tsweep-20260101-000000-other\t/some/other/project\n"  # another project — skip
+        f"@4\tresume-20260101-000000-cur\t{mine}\n"  # matches, but is the current window
     )
     killed: list[list[str]] = []
 

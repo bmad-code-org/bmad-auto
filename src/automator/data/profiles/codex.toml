@@ -12,6 +12,9 @@ model_flag = "--model"
 usage_parser = "codex-rollout"
 first_run_note = "run `codex` once in the project and accept BOTH prompts: workspace trust, then 'Hooks need review' -> 'Trust all and continue' (untrusted hooks silently never fire); requires Codex >= 0.139"
 skill_tree = ".agents/skills"
+# Project-scoped Codex config (MCP servers under [mcp_servers]) — gitignored, so
+# a worktree checkout omits it and isolated sessions lose their MCP servers.
+seed_files = [".codex/config.toml"]
 
 [hooks]
 dialect = "codex-hooks-json"

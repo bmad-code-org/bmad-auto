@@ -15,6 +15,7 @@ SWEEP_AUTO_MODES = {"never", "per-epic", "run-end"}
 ISOLATION_MODES = {"none", "worktree"}
 BRANCH_PER_MODES = {"story", "run"}
 MERGE_STRATEGIES = {"ff", "merge", "squash"}
+EDITOR_MODES = {"shared", "per_worktree"}
 
 
 class PolicyError(Exception):
@@ -32,7 +33,7 @@ class GatesPolicy:
 class LimitsPolicy:
     max_review_cycles: int = 3
     max_dev_attempts: int = 2
-    session_timeout_min: int = 45
+    session_timeout_min: int = 90
     stop_without_result_nudges: int = 1
     max_tokens_per_story: int = 2_000_000
     # weight of cache-read tokens in the budget check (1.0 = count raw)
@@ -155,6 +156,13 @@ class ScmPolicy:
     # built yet, so any value > 1 is clamped to 1 in loads() — the knob exists
     # but is inert until the parallel scheduler lands.
     max_parallel: int = 1
+    # A `git worktree add` checks out tracked files only, so gitignored MCP/CLI
+    # configs are missing from every fresh worktree and isolated sessions can't
+    # reach their MCP server. seed_adapter_defaults copies each loaded adapter's
+    # own seed_files (e.g. claude -> .mcp.json/.claude/settings.json) into the
+    # worktree; worktree_seed adds extra project-specific paths on top.
+    seed_adapter_defaults: bool = True
+    worktree_seed: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # branch_per="run" shares a single branch across every unit in the run;
@@ -167,6 +175,31 @@ class ScmPolicy:
 
 
 @dataclass(frozen=True)
+class EnginePolicy:
+    # Game-engine plugin layer (niche, opt-in). name = "" leaves it disabled and
+    # the orchestrator behaves exactly as before. name = "unity" (or any plugin
+    # in automator/data/engines/ or .automator/engines/) turns it on.
+    name: str = ""
+    # shared        -> agent works in place on the project the live Editor already
+    #                  has open (requires scm.isolation = none).
+    # per_worktree  -> one managed Editor per worktree (requires isolation = worktree).
+    editor_mode: str = "shared"
+    # which Editor MCP server the plugin's scripts target; passed through to them.
+    mcp: str = "ivanmurzak"
+    # Editor binary used to launch a per_worktree Editor; "" lets the plugin
+    # auto-detect. Ignored in shared mode (the operator's own Editor is reused).
+    unity_path: str = ""
+    # how long the readiness gate blocks for the Editor + MCP to come up.
+    ready_timeout_sec: int = 600
+    # seconds to wait before the FIRST readiness probe, to let a cold-launched
+    # Editor start before we check it (a fast-failing probe against a not-yet-
+    # listening Editor otherwise gives up early). Counts against ready_timeout_sec.
+    # -1 = auto: the plugin picks a per-mode default (per_worktree launches a cold
+    # Editor so it waits; shared reuses a warm one so it does not).
+    ready_grace_sec: int = -1
+
+
+@dataclass(frozen=True)
 class Policy:
     gates: GatesPolicy = field(default_factory=GatesPolicy)
     limits: LimitsPolicy = field(default_factory=LimitsPolicy)
@@ -176,6 +209,7 @@ class Policy:
     adapter: AdapterPolicy = field(default_factory=AdapterPolicy)
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
     scm: ScmPolicy = field(default_factory=ScmPolicy)
+    engine: EnginePolicy = field(default_factory=EnginePolicy)
     tui: TuiPolicy = field(default_factory=TuiPolicy)
 
     def to_dict(self) -> dict[str, Any]:
@@ -226,6 +260,7 @@ def loads(text: str) -> Policy:
     adapter_d = _section(doc, "adapter")
     sweep_d = _section(doc, "sweep")
     scm_d = _section(doc, "scm")
+    engine_d = _section(doc, "engine")
     tui_d = _section(doc, "tui")
 
     gates = GatesPolicy(
@@ -333,6 +368,10 @@ def loads(text: str) -> Policy:
         ),
         # Phase 5 parallel fan-out is unbuilt: clamp to 1 so the knob is inert.
         max_parallel=min(requested_parallel, 1),
+        seed_adapter_defaults=bool(
+            scm_d.get("seed_adapter_defaults", ScmPolicy.seed_adapter_defaults)
+        ),
+        worktree_seed=tuple(str(s) for s in scm_d.get("worktree_seed", ())),
     )
     if scm.isolation not in ISOLATION_MODES:
         raise PolicyError(
@@ -349,6 +388,35 @@ def loads(text: str) -> Policy:
         )
     if scm.failed_diff_max_mb < 1:
         raise PolicyError(f"scm.failed_diff_max_mb must be >= 1: got {scm.failed_diff_max_mb}")
+    engine = EnginePolicy(
+        name=str(engine_d.get("name", EnginePolicy.name)),
+        editor_mode=str(engine_d.get("editor_mode", EnginePolicy.editor_mode)),
+        mcp=str(engine_d.get("mcp", EnginePolicy.mcp)),
+        unity_path=str(engine_d.get("unity_path", EnginePolicy.unity_path)),
+        ready_timeout_sec=int(engine_d.get("ready_timeout_sec", EnginePolicy.ready_timeout_sec)),
+        ready_grace_sec=int(engine_d.get("ready_grace_sec", EnginePolicy.ready_grace_sec)),
+    )
+    if engine.editor_mode not in EDITOR_MODES:
+        raise PolicyError(
+            f"engine.editor_mode must be one of {sorted(EDITOR_MODES)}: got {engine.editor_mode!r}"
+        )
+    if engine.ready_timeout_sec < 1:
+        raise PolicyError(f"engine.ready_timeout_sec must be >= 1: got {engine.ready_timeout_sec}")
+    # editor_mode and scm.isolation are coupled: a live Editor MCP must act on the
+    # same folder the agent edits. shared = the agent's warm Editor on the checkout
+    # in place (no worktree); per_worktree = one Editor per isolated worktree.
+    if engine.name:
+        if engine.editor_mode == "shared" and scm.isolation != "none":
+            raise PolicyError(
+                "engine.editor_mode = 'shared' requires scm.isolation = 'none' "
+                f"(the agent works in place on the live Editor's checkout); got "
+                f"scm.isolation = {scm.isolation!r}"
+            )
+        if engine.editor_mode == "per_worktree" and scm.isolation != "worktree":
+            raise PolicyError(
+                "engine.editor_mode = 'per_worktree' requires scm.isolation = 'worktree'; "
+                f"got scm.isolation = {scm.isolation!r}"
+            )
     tui = TuiPolicy(low_frame_rate=bool(tui_d.get("low_frame_rate", TuiPolicy.low_frame_rate)))
     return Policy(
         gates=gates,
@@ -359,6 +427,7 @@ def loads(text: str) -> Policy:
         adapter=adapter,
         sweep=sweep,
         scm=scm,
+        engine=engine,
         tui=tui,
     )
 
@@ -373,7 +442,7 @@ retrospective = "notify"     # never | notify | auto (auto unsupported in v1)
 [limits]
 max_review_cycles = 3
 max_dev_attempts = 2
-session_timeout_min = 45
+session_timeout_min = 90
 stop_without_result_nudges = 1
 max_tokens_per_story = 2000000
 cache_read_weight = 0.1      # cache reads bill at ~0.1x input on all vendors; 1.0 = count raw
@@ -437,6 +506,30 @@ failed_diff_unlimited = false # true = capture the failed-unit diff with no size
 # story's commit. {story_key} and {run_id} are substituted. Empty = built-in default.
 commit_message_template = ""
 max_parallel = 1             # units in flight at once (parallel fan-out unbuilt; values > 1 clamp to 1)
+# A git worktree checks out tracked files only, so gitignored MCP/CLI configs are
+# absent from every fresh worktree and isolated sessions can't reach their MCP
+# server. seed_adapter_defaults copies each loaded adapter's own config files
+# (claude -> .mcp.json/.claude/settings.json, codex -> .codex/config.toml, etc.)
+# into the worktree; worktree_seed adds extra project-specific gitignored paths.
+seed_adapter_defaults = true # seed each loaded adapter's default gitignored configs into worktrees
+worktree_seed = []           # extra gitignored files to copy into each worktree, on top of adapter defaults
+
+[engine]
+# Niche, opt-in game-engine layer for projects whose dev/sweep cycle drives a
+# live engine Editor (e.g. a Unity project the agent controls via an Editor MCP).
+# Leave name empty for normal projects — nothing changes.
+name = ""                    # "" = disabled. "unity" enables the bundled Unity plugin.
+# editor_mode couples with [scm] isolation, because a live Editor MCP must act on
+# the same folder the agent edits:
+#   shared       -> agent works in place on the project the live Editor already has
+#                   open. Requires scm.isolation = "none". Zero relaunches.
+#   per_worktree -> one managed Editor per worktree. Requires scm.isolation = "worktree".
+editor_mode = "shared"       # shared | per_worktree
+mcp = "ivanmurzak"           # which Editor MCP the plugin scripts target: ivanmurzak | coplaydev
+unity_path = ""              # Editor binary for a per_worktree launch ("" = auto-detect; unused in shared)
+ready_timeout_sec = 600      # how long the readiness gate waits for the Editor + MCP to come up
+ready_grace_sec = -1         # delay before the first readiness probe (lets a cold Editor start);
+                             # -1 = auto (per_worktree waits, shared does not). Counts against ready_timeout_sec.
 
 [tui]
 # low_frame_rate = true caps Textual to 15fps and disables animations (sets

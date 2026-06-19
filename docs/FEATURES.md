@@ -8,21 +8,21 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 ## Capability matrix (feature → problem addressed)
 
-| Capability                           | What it does                                                                                                                            | Problem it addresses                                                                      |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Deterministic control loop           | Story selection, retries, gates, completion checks run in plain Python                                                                  | LLM-as-orchestrator is nondeterministic, hard to debug, and costs tokens for control flow |
-| Trust-nothing verification           | Checks on-disk artifacts (spec status, baseline-commit match, non-empty diff, sprint sync) + runs your test/lint commands before commit | Agents claim success without working code; broken builds slip through                     |
-| Fresh-context adversarial review     | Dev and review are separate sessions; review uses 3 parallel layers                                                                     | Self-review anchoring bias; implementer marks own work correct                            |
-| Hook-based transport                 | Coding-agent hooks write structured event files; skills write `result.json`                                                             | Brittle terminal pane-scraping                                                            |
-| Resumable state machine              | Every run is on-disk state, resumable after gate/escalation/crash                                                                       | Long unattended runs lost to interruptions                                                |
-| Plateau-defer                        | Stuck stories are skipped, stashed, and the run continues                                                                               | One unconvergeable story blocking a whole sprint                                          |
-| Typed escalations + resolve workflow | CRITICAL pauses + notifies; interactive resolve agent re-arms the story                                                                 | Ambiguous specs silently producing wrong code                                             |
-| Deferred-work sweeps                 | Triages an append-only ledger against real code, bundles + executes                                                                     | Split-off goals and review findings get lost                                              |
-| Multi-CLI adapter + profiles         | Generic tmux driver runs claude/codex/gemini; per-stage overrides; TOML profiles                                                        | Vendor lock-in; no way to mix models per stage                                            |
-| Cost-weighted token budgets          | Per-story budget counts cache reads at ~0.1x; raw totals displayed                                                                      | Naive token caps misjudge real cost (cache reads dominate)                                |
-| Non-invasive skill forks             | Drives its own `bmad-auto-*` skill forks; reads `sprint-status.yaml` only                                                               | Modifying a user's standard BMAD install                                                  |
-| Read-only TUI + launcher             | Live dashboard over run-dir artifacts; launches detached runs                                                                           | No visibility into what an unattended run is doing                                        |
-| Git worktree isolation (opt-in)      | Each unit runs in its own worktree/branch, merging back into the target locally; failed units kept for inspection                       | A long unattended run mutating the working tree you're actively using                     |
+| Capability                           | What it does                                                                                                                                                             | Problem it addresses                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Deterministic control loop           | Story selection, retries, gates, completion checks run in plain Python                                                                                                   | LLM-as-orchestrator is nondeterministic, hard to debug, and costs tokens for control flow |
+| Trust-nothing verification           | Checks on-disk artifacts (spec status, baseline-commit match, non-empty diff, sprint sync) + runs your test/lint commands before commit                                  | Agents claim success without working code; broken builds slip through                     |
+| Fresh-context adversarial review     | Dev and review are separate sessions; review uses 3 parallel layers                                                                                                      | Self-review anchoring bias; implementer marks own work correct                            |
+| Hook-based transport                 | Coding-agent hooks write structured event files; skills write `result.json`                                                                                              | Brittle terminal pane-scraping                                                            |
+| Resumable state machine              | Every run is on-disk state, resumable after gate/escalation/crash                                                                                                        | Long unattended runs lost to interruptions                                                |
+| Plateau-defer                        | Stuck stories are skipped, stashed, and the run continues                                                                                                                | One unconvergeable story blocking a whole sprint                                          |
+| Typed escalations + resolve workflow | CRITICAL pauses + notifies; interactive resolve agent re-arms the story                                                                                                  | Ambiguous specs silently producing wrong code                                             |
+| Deferred-work sweeps                 | Triages an append-only ledger against real code, bundles + executes                                                                                                      | Split-off goals and review findings get lost                                              |
+| Multi-CLI adapter + profiles         | Generic tmux driver runs claude/codex/gemini; per-stage overrides; TOML profiles                                                                                         | Vendor lock-in; no way to mix models per stage                                            |
+| Cost-weighted token budgets          | Per-story budget counts cache reads at ~0.1x; raw totals displayed                                                                                                       | Naive token caps misjudge real cost (cache reads dominate)                                |
+| Non-invasive skill forks             | Drives its own `bmad-auto-*` skill forks; reads `sprint-status.yaml` only                                                                                                | Modifying a user's standard BMAD install                                                  |
+| Read-only TUI + launcher             | Live dashboard over run-dir artifacts; launches detached runs                                                                                                            | No visibility into what an unattended run is doing                                        |
+| Git worktree isolation (opt-in)      | Each unit runs in its own worktree/branch (seeded with the adapters' gitignored MCP/CLI configs), merging back into the target locally; failed units kept for inspection | A long unattended run mutating the working tree you're actively using                     |
 
 ---
 
@@ -64,9 +64,18 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - Off by default (`[scm] isolation = "none"` — work in place on the checked-out branch, byte-for-byte the prior behavior). Set `isolation = "worktree"` and each story (and each sweep bundle) runs in its own `git worktree` on an `automator/<run_id>[/<story>]` branch cut from the target branch, then merges back **locally** — the main checkout stays free while a run is in flight.
 - Merge knobs: `merge_strategy` (`ff` / `merge` / `squash`), `target_branch` (default = branch checked out at run start; created if missing — a detached HEAD or unborn repo pauses the run instead of merging onto an unreferenced commit), `branch_per` (`story` or a shared `run` branch; `run` forces `delete_branch = false`), and `delete_branch`.
 - Failed-unit forensics: a deferred/escalated unit's worktree + branch stay mounted (`keep_failed`, default on) and its full diff is preserved to `run_dir/failed/<unit>/changes.patch`; `failed_diff_max_mb` caps per-file untracked-file size (oversized skipped with a marker), `failed_diff_unlimited` lifts the cap.
+- Config seeding: a worktree checks out _tracked_ files only, so a project's gitignored MCP/CLI configs (`.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `.gemini/settings.json`) would be missing — an isolated session couldn't reach its MCP server. With `seed_adapter_defaults` (default on) each loaded adapter's own `seed_files` are copied in from the main repo before the session launches; `worktree_seed` adds extra paths. Copy-when-absent, seeded before the hook-merge (a seeded `settings.json` keeps its content and just gains the Stop hook), and shielded from the unit's `git add -A`.
 - Run state never moves into a worktree — `.automator/` always lives in the main repo; spec paths are persisted relative to the worktree so a kept-failed run stays portable.
 - Merge-back is serialized; `max_parallel` is a validated knob clamped to `1` until parallel fan-out is built. The `repo_root` key in `_bmad/bmm/config.yaml` (defaults to the project dir) decouples where git/code work happens from where run state lives (monorepos).
 - `commit_message_template` (`{story_key}` / `{run_id}` substituted) customizes story/bundle commit messages.
+
+### Game-engine projects (opt-in)
+
+- Niche `[engine]` layer for projects whose dev/sweep cycle drives a **live engine Editor** via an Editor MCP (Unity bundled; Godot/Unreal later). Off by default (`name = ""`). Plugins ship like CLI profiles — bundled TOML in `automator/data/engines/<name>/`, overridable under `.automator/engines/<name>/`.
+- `editor_mode` is coupled to `[scm] isolation` because a live Editor MCP can only act on the folder its Editor has open: **`shared`** (requires `isolation = "none"`) runs the agent in place on the project the operator's warm Editor already has open — zero relaunches, full live MCP; **`per_worktree`** (requires `isolation = "worktree"`) gives each worktree its own managed Editor.
+- Readiness gate: before each unit, the plugin's `ready_cmd` blocks until the Editor + MCP report ready (Unity: `wait-for-ready` for IvanMurzak, connectivity check for CoplayDev); on timeout the unit is deferred with an `ATTENTION` notice rather than starting a session against a half-open Editor.
+- `per_worktree` lifecycle (Unity/IvanMurzak): a setup hook launches the worktree's own Editor (MCP port auto-derived from the worktree path, so it self-isolates from the operator's main Editor), writes the worktree `.mcp.json`, and primes the worktree's `Library` with a reflink/CoW copy of the warm main `Library` (so Unity reimports incrementally instead of a cold full reimport that crashes the import workers; deep-copy then symlinked-empty-cache fallbacks off-CoW); the readiness gate then waits for it; a teardown hook quits the Editor on completion **and** on pause/escalation. The MCP-generated skill tree (gitignored) is copied into each worktree via the plugin's `seed_globs`; a setup failure defers the unit instead of running it against no Editor.
+- The six `[engine]` settings are editable in the TUI under the **Game Engine** section. To target another engine or a different Editor MCP, see [Writing a Game Engine plugin](game-engine-plugin-guide.md) and [Writing a plugin for a specific Editor MCP](game-engine-mcp-guide.md).
 
 ### Resumability & state
 
@@ -108,7 +117,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 ### Configuration (`.automator/policy.toml`)
 
 - Single policy file written by `init`, snapshotted at run start (applies to new runs and resumes; editable live from the TUI).
-- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[tui]` (`low_frame_rate` for slow/SSH links).
+- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[engine]` (opt-in game-engine layer; off by default), `[tui]` (`low_frame_rate` for slow/SSH links).
 - Tunable limits: `max_review_cycles`, `max_dev_attempts`, `session_timeout_min`, `stop_without_result_nudges`, `max_tokens_per_story`.
 
 ### TUI dashboard
@@ -122,11 +131,11 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 - Each run drives agents in a dedicated `bmad-auto-<run-id>` session; `attach` to watch live.
 - Auto-teardown on finish (`cleanup_session_on_finish`, disable to inspect); `stop` always kills it; paused/interrupted runs keep the session for `resume`.
-- `bmad-auto cleanup` (or `c` in the TUI) sweeps leftover sessions/windows for finished/stopped/orphaned runs; live runs are never touched.
+- `bmad-auto cleanup` (or `c` in the TUI) sweeps leftover sessions/windows for finished/stopped/orphaned runs **of the current project**; live runs, and anything belonging to another project, are never touched.
 
 ### Setup & install
 
-- `bmad-auto init` installs the four `bmad-auto-*` skills (`.claude/skills/` and/or `.agents/skills/`), the hook relay, `.automator/policy.toml`, and a runs-dir gitignore. Flags: `--cli` (repeatable), `--no-skills`, `--force-skills`.
+- `bmad-auto init` installs the five `bmad-auto-*` skills (`.claude/skills/` and/or `.agents/skills/`), the hook relay, `.automator/policy.toml`, and a runs-dir gitignore. Flags: `--cli` (repeatable), `--no-skills`, `--force-skills`.
 - `bmad-auto validate` preflights every prerequisite: BMAD config, sprint-status, git, tmux, CLI binary, hook registration.
 - Non-invasive: drives its own forks of the dev/review skills — your standard BMAD install is never modified. Upstream improvements are merged by diffing fork vs. upstream (forks keep the upstream file structure).
 
@@ -141,6 +150,9 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - `bmad-auto decisions` — answer deferred-work decisions past sweeps left unanswered (`--list` to just show them).
 - `bmad-auto status [<run-id>]` — run + sprint summary with per-story token totals.
 - `bmad-auto attach [<run-id>]` — tmux-attach to a run's live agent session.
+- `bmad-auto stop <run-id>` — stop a live run (engine + agent session).
+- `bmad-auto delete <run-id>` — delete a run directory (`--force` stops it first if live).
+- `bmad-auto archive <run-id>` — compress a run into `.automator/archive` and remove it (`--force` stops it first if live).
 - `bmad-auto cleanup` — remove leftover tmux artifacts for finished/stopped runs.
 - `bmad-auto tui` — the interactive dashboard (`--low-frame-rate` for slow/SSH links).
 - Every command takes `--project <dir>` (default: current directory).

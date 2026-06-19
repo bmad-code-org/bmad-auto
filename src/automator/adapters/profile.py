@@ -54,6 +54,10 @@ class CLIProfile:
     env: dict[str, str] = field(default_factory=dict)
     usage_parser: str = "none"
     first_run_note: str = ""
+    # project-relative gitignored configs (MCP/CLI settings) this CLI needs but
+    # that a `git worktree add` checkout omits; provision_worktree copies them in
+    # from the main repo so isolated dev/review sessions can reach the MCP server.
+    seed_files: tuple[str, ...] = ()
 
     def render_prompt(self, prompt: str) -> str:
         """Render the engine's canonical "/skill args" prompt for this CLI.
@@ -102,6 +106,11 @@ def _parse_profile(doc: dict, source: str) -> CLIProfile:
     if not skill_tree or Path(skill_tree).is_absolute():
         raise fail("skill_tree must be a project-relative path")
 
+    seed_files = tuple(str(s) for s in doc.get("seed_files", ()))
+    for seed in seed_files:
+        if not seed or Path(seed).is_absolute():
+            raise fail(f"seed_files entries must be project-relative paths: got {seed!r}")
+
     return CLIProfile(
         name=name,
         binary=binary,
@@ -114,6 +123,7 @@ def _parse_profile(doc: dict, source: str) -> CLIProfile:
         env={str(k): str(v) for k, v in doc.get("env", {}).items()},
         usage_parser=usage_parser,
         first_run_note=str(doc.get("first_run_note", "")),
+        seed_files=seed_files,
     )
 
 

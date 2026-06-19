@@ -51,6 +51,40 @@ def make_adapter(
     )
 
 
+def test_ensure_session_tags_project(tmp_path, monkeypatch):
+    """A freshly created agent session is stamped with its project so a cleanup
+    in another project never prunes this run."""
+    from automator import runs
+    from automator.adapters import generic_tmux
+
+    project = tmp_path
+    run_dir = project / ".automator" / "runs" / "RID"  # parents[2] == project
+    adapter = GenericTmuxAdapter(
+        run_dir=run_dir, policy=Policy(limits=LimitsPolicy()), profile=get_profile("claude")
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        rc = 1 if argv[1] == "has-session" else 0  # session missing -> create it
+        return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
+
+    monkeypatch.setattr(generic_tmux.subprocess, "run", fake_run)
+    adapter._ensure_session(project)
+
+    assert [c for c in calls if c[1] == "set-option"] == [
+        [
+            "tmux",
+            "set-option",
+            "-t",
+            adapter.session_name,
+            runs.PROJECT_OPTION,
+            runs.project_tag(project),
+        ]
+    ]
+
+
 def make_spec(tmp_path, task_id="1-1-a-dev-1", timeout_s=30.0, model="sonnet") -> SessionSpec:
     return SessionSpec(
         task_id=task_id,

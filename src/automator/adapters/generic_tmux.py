@@ -22,6 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from .. import runs
 from ..journal import LOGS_DIR
 from ..model import TokenUsage
 from ..policy import Policy
@@ -104,6 +105,18 @@ class GenericTmuxAdapter(CodingCLIAdapter):
                 str(PANE_COLUMNS),
                 "-y",
                 str(PANE_LINES),
+            )
+            # Tag the session with its project so a cleanup in another project
+            # never prunes this run (run_dir = <project>/.automator/runs/<id>).
+            # set-option has no '=' exact-match form; the full session name is
+            # unique so plain-name targeting resolves it unambiguously.
+            project = self.run_dir.parents[2]
+            self._tmux(
+                "set-option",
+                "-t",
+                self.session_name,
+                runs.PROJECT_OPTION,
+                runs.project_tag(project),
             )
 
     def interactive_argv(self, spec: SessionSpec) -> list[str]:

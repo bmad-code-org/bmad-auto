@@ -1,5 +1,6 @@
 import json
 
+from automator import verify
 from automator.adapters.profile import get_profile
 from automator.install import (
     MODULE_SKILLS,
@@ -65,7 +66,9 @@ def test_install_into_full(tmp_path):
     assert (tmp_path / ".automator" / "policy.toml").is_file()
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert "Stop" in settings["hooks"]
-    assert ".automator/runs/" in (tmp_path / ".gitignore").read_text()
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert ".automator/runs/" in gitignore
+    assert ".automator/cache/" in gitignore  # engine plugins' rebuildable caches
 
     # all four skills land in claude's tree, with nested files intact
     skills_dir = tmp_path / ".claude" / "skills"
@@ -77,7 +80,9 @@ def test_install_into_full(tmp_path):
     assert install_into(tmp_path) == 0
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
     assert len(settings["hooks"]["Stop"]) == 1
-    assert (tmp_path / ".gitignore").read_text().count(".automator/runs/") == 1
+    final_gitignore = (tmp_path / ".gitignore").read_text()
+    assert final_gitignore.count(".automator/runs/") == 1
+    assert final_gitignore.count(".automator/cache/") == 1
 
 
 def test_install_into_multiple_clis(tmp_path):
@@ -193,3 +198,128 @@ def test_provision_worktree_does_not_clobber_existing_skill(tmp_path):
 def test_provision_worktree_empty_profiles_is_noop(tmp_path):
     provision_worktree(tmp_path / "wt", [], tmp_path / "repo")
     assert not (tmp_path / "wt").exists()
+
+
+def test_provision_worktree_seeds_gitignored_config(tmp_path):
+    """A gitignored config present in the main repo is copied into the worktree
+    (a `git worktree add` checkout would omit it)."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
+    provision_worktree(wt, [], repo, seed_files=[".mcp.json"])
+    assert (wt / ".mcp.json").read_text() == '{"mcpServers": {}}'
+
+
+def test_provision_worktree_seed_skips_missing_source(tmp_path):
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    repo.mkdir()
+    provision_worktree(wt, [], repo, seed_files=[".mcp.json"])
+    assert not (wt / ".mcp.json").exists()
+
+
+def test_provision_worktree_seed_does_not_clobber_existing(tmp_path):
+    """A seed target already present in the worktree (tracked/committed) is left
+    untouched, so no diff is merged back."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".mcp.json").write_text("FROM_REPO", encoding="utf-8")
+    dst = wt / ".mcp.json"
+    dst.parent.mkdir(parents=True)
+    dst.write_text("IN_WORKTREE", encoding="utf-8")
+    provision_worktree(wt, [], repo, seed_files=[".mcp.json"])
+    assert dst.read_text() == "IN_WORKTREE"
+
+
+def test_provision_worktree_seed_rejects_escaping_path(tmp_path):
+    """A seed entry resolving outside the repo/worktree is skipped — never copies
+    a file from outside the project tree into the worktree."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.txt").write_text("SECRET", encoding="utf-8")
+    provision_worktree(wt, [], repo, seed_files=["../outside.txt"])
+    assert not wt.exists()  # nothing copied, no dirs created
+
+
+def test_provision_worktree_seed_then_hook_merge_preserves_settings(tmp_path):
+    """A seeded settings file that is also the hook config_path keeps its real
+    content (seeded first), then gets the Stop hook merged in — not recreated empty."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    repo.mkdir()
+    claude = get_profile("claude")
+    cfg = repo / claude.hooks.config_path  # .claude/settings.json
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"permissions": {"allow": ["Bash(ls)"]}}), encoding="utf-8")
+
+    provision_worktree(wt, [claude], repo, seed_files=[claude.hooks.config_path])
+
+    seeded = json.loads((wt / claude.hooks.config_path).read_text())
+    assert seeded["permissions"] == {"allow": ["Bash(ls)"]}  # real content survived
+    assert "Stop" in seeded["hooks"]  # signal hook merged in on top
+
+
+def test_provision_worktree_seed_shielded_in_local_exclude(project, tmp_path):
+    """Seeded configs are added to the worktree's local git exclude so a project
+    that doesn't gitignore them won't have the unit's `git add -A` stage them."""
+    repo = project.project
+    (repo / ".mcp.json").write_text("{}", encoding="utf-8")
+    wt = tmp_path / "wt"
+    verify.worktree_add(repo, wt, "feat", "main")
+
+    provision_worktree(wt, [get_profile("claude")], repo, seed_files=[".mcp.json"])
+
+    assert (wt / ".mcp.json").is_file()
+    exclude = (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert "/.mcp.json" in exclude.splitlines()
+
+
+# ----------------------------------------------------------------- seed_globs (engine plugin)
+
+
+def test_provision_worktree_seed_globs_copies_matching_tree(tmp_path):
+    """A glob pattern expands against the main repo; every match is copied into
+    the worktree (this is how an engine plugin's MCP skill dirs reach a worktree)."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    skills = repo / ".claude" / "skills"
+    (skills / "gameobject-create").mkdir(parents=True)
+    (skills / "gameobject-create" / "SKILL.md").write_text("tool", encoding="utf-8")
+    (skills / "scene-open").mkdir(parents=True)
+    (skills / "scene-open" / "SKILL.md").write_text("tool", encoding="utf-8")
+
+    provision_worktree(wt, [], repo, seed_globs=[".claude/skills/*"])
+
+    assert (wt / ".claude" / "skills" / "gameobject-create" / "SKILL.md").read_text() == "tool"
+    assert (wt / ".claude" / "skills" / "scene-open" / "SKILL.md").read_text() == "tool"
+
+
+def test_provision_worktree_seed_globs_skip_existing_and_noop_when_unmatched(tmp_path):
+    """Glob seeding never clobbers a match already in the worktree, and an empty
+    expansion writes nothing."""
+    wt, repo = tmp_path / "wt", tmp_path / "repo"
+    src = repo / ".claude" / "skills" / "ping"
+    src.mkdir(parents=True)
+    (src / "SKILL.md").write_text("FROM_REPO", encoding="utf-8")
+    dst = wt / ".claude" / "skills" / "ping"
+    dst.mkdir(parents=True)
+    (dst / "SKILL.md").write_text("IN_WORKTREE", encoding="utf-8")
+
+    # one matching dir already present, plus a pattern that matches nothing
+    provision_worktree(wt, [], repo, seed_globs=[".claude/skills/*", ".mcp/*"])
+
+    assert (dst / "SKILL.md").read_text() == "IN_WORKTREE"  # not clobbered
+
+
+def test_provision_worktree_seed_globs_shielded_in_local_exclude(project, tmp_path):
+    """Glob-seeded paths join the worktree's local git exclude alongside seed_files,
+    so a project that doesn't gitignore its skill tree won't stage them."""
+    repo = project.project
+    skill = repo / ".claude" / "skills" / "tests-run"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("tool", encoding="utf-8")
+    wt = tmp_path / "wt"
+    verify.worktree_add(repo, wt, "feat", "main")
+
+    provision_worktree(wt, [get_profile("claude")], repo, seed_globs=[".claude/skills/*"])
+
+    assert (wt / ".claude" / "skills" / "tests-run" / "SKILL.md").is_file()
+    exclude = (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
+    assert "/.claude/skills/tests-run" in exclude

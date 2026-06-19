@@ -1,0 +1,41 @@
+# Bundled Unity game-engine plugin for bmad-auto.
+#
+# Opt in from .automator/policy.toml:
+#   [engine]
+#   name = "unity"
+#   editor_mode = "shared"      # agent works in place on your live Editor's checkout
+#   mcp = "ivanmurzak"          # ivanmurzak | coplaydev
+#
+# Override per project by copying this dir to .automator/engines/unity/ and
+# editing it (the project-local copy wins, and its dir becomes {scripts}).
+
+name = "unity"
+editor_modes = ["shared", "per_worktree"]
+
+# Readiness gate: block until the Unity Editor + MCP bridge are ready before any
+# dev/sweep session starts. The script branches on BMAD_AUTO_ENGINE_MCP and reads
+# the BMAD_AUTO_* env the engine injects.
+ready_cmd = 'python3 "{scripts}/unity_ready.py"'
+
+# --- per_worktree mode -----------------------------------------------------
+# One managed Unity Editor per worktree (set editor_mode = "per_worktree" and
+# [scm] isolation = "worktree"). setup primes the worktree's Library with a
+# reflink/CoW copy of the main project's warm Library (a fresh worktree has none —
+# Library is gitignored — and opening Unity on an empty Library forces a cold full
+# reimport that melts the import workers and SIGFPEs Burst; priming makes it an
+# incremental import instead, ~free on btrfs/xfs). It then writes the worktree's
+# .mcp.json, pins the project to local ("Custom") mode (bootstrap-local), and
+# launches the worktree's own Editor with local-connection env so it talks to its
+# per-path server (whose
+# port the IvanMurzak CLI derives from the project path, self-isolating from your
+# main Editor) and *hosts that server itself* (--start-server true) rather than
+# the cloud. Because the Editor (not the client) owns the server, the
+# Editor<->server bridge — and thus wait-for-ready — comes up before any agent
+# connects, so the readiness gate just waits for that (optionally confirming with
+# a read-only run-tool round-trip; off by default, see unity_ready.py). Teardown
+# quits the Editor AND reaps its child gamedev-mcp-server on completion/pause.
+# seed_globs copies the MCP-generated skill tree (gitignored) into the worktree so
+# the agent's CLI can reach the Editor's tools.
+worktree_setup_cmd = 'python3 "{scripts}/unity_setup.py"'
+worktree_teardown_cmd = 'python3 "{scripts}/unity_teardown.py"'
+seed_globs = [".claude/skills/*"]

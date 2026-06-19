@@ -15,7 +15,7 @@ from automator.adapters.mock import MockAdapter
 from automator.engine import Engine
 from automator.journal import Journal, load_state
 from automator.model import Phase, RunState, StoryTask, TokenUsage
-from automator.policy import GatesPolicy, NotifyPolicy, Policy, ScmPolicy
+from automator.policy import EnginePolicy, GatesPolicy, NotifyPolicy, Policy, ScmPolicy
 from automator.verify import (
     branch_exists,
     current_branch,
@@ -492,6 +492,152 @@ def test_commit_message_template_applied(project):
     log = git(project.project, "log", "--format=%s")
     assert "feat(1-1-a): via test-run" in log
     assert "implemented" not in log  # built-in default was not used
+
+
+# ------------------------------------------------ per_worktree engine plugin
+
+
+def _write_engine_plugin(
+    project, name, *, ready="true", setup="true", teardown="true", seed_globs=None
+):
+    """A project-local engine plugin whose hooks are shell stubs (no real Unity).
+    Commands are TOML literal strings, so they may embed double quotes but not
+    single quotes."""
+    eng_dir = project.project / ".automator" / "engines" / name
+    eng_dir.mkdir(parents=True)
+    lines = [
+        f'name = "{name}"',
+        f"ready_cmd = '{ready}'",
+        f"worktree_setup_cmd = '{setup}'",
+        f"worktree_teardown_cmd = '{teardown}'",
+    ]
+    if seed_globs:
+        globs = ", ".join(f'"{g}"' for g in seed_globs)
+        lines.append(f"seed_globs = [{globs}]")
+    (eng_dir / "engine.toml").write_text("\n".join(lines) + "\n")
+
+
+def _pw_policy(name, **gates):
+    return Policy(
+        gates=GatesPolicy(mode=gates.get("mode", "none")),
+        notify=QUIET,
+        scm=ScmPolicy(isolation="worktree"),
+        engine=EnginePolicy(name=name, editor_mode="per_worktree"),
+    )
+
+
+def test_per_worktree_setup_then_gate_then_teardown_and_seed(project):
+    """Happy path: the worktree is seeded, setup launches the Editor, the gate
+    waits (and only passes because setup ran first), the agent runs, teardown
+    quits the Editor. Ordering is proven by the gate depending on a setup marker."""
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    # a gitignored MCP skill dir present in the main repo (untracked) to be seeded
+    skill = project.project / ".claude" / "skills" / "gameobject-create"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("tool", encoding="utf-8")
+    # setup asserts the seed reached its cwd (the worktree) before marking ready;
+    # the gate fails unless that marker exists -> proves seed+setup precede the gate.
+    _write_engine_plugin(
+        project,
+        "stub",
+        setup="test -f .claude/skills/gameobject-create/SKILL.md "
+        '&& touch "$BMAD_AUTO_RUN_DIR/setup-done"',
+        ready='test -f "$BMAD_AUTO_RUN_DIR/setup-done"',
+        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        seed_globs=[".claude/skills/*"],
+    )
+    engine, adapter = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a"), wt_review_effect(project, "1-1-a", clean=True)],
+        policy=_pw_policy("stub"),
+    )
+    summary = engine.run()
+
+    assert summary.done == 1
+    assert (engine.run_dir / "setup-done").is_file()
+    assert (engine.run_dir / "teardown-done").is_file()
+    kinds = journal_kinds(engine)
+    for k in ("engine-setup", "engine-setup-ok", "engine-ready", "engine-teardown-ok"):
+        assert k in kinds, k
+    # the dev + review sessions actually ran (gate let them through)
+    assert [s.role for s in adapter.sessions] == ["dev", "review"]
+
+
+def test_per_worktree_setup_failure_defers_and_skips_session(project):
+    """A setup failure (Editor wouldn't launch) defers the unit, never starts a
+    session, still tears down best-effort, and closes the (empty) worktree."""
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    _write_engine_plugin(
+        project,
+        "stub",
+        setup="exit 3",
+        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+    )
+    engine, adapter = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a"), wt_review_effect(project, "1-1-a", clean=True)],
+        policy=_pw_policy("stub"),
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 1 and summary.done == 0 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert task.phase == Phase.DEFERRED
+    assert "worktree setup failed" in task.defer_reason
+    assert adapter.sessions == []  # gate/setup ran before any dev session
+    kinds = journal_kinds(engine)
+    assert "engine-setup-failed" in kinds and "engine-ready" not in kinds
+    # teardown still ran; the deferred unit's worktree is kept (keep_failed default)
+    # for inspection, exactly like any other deferral — but the Editor was quit.
+    assert (engine.run_dir / "teardown-done").is_file()
+    assert len(worktree_list(project.project)) == 2
+
+
+def test_per_worktree_ready_gate_failure_defers(project):
+    """Setup succeeds but the Editor never reports ready -> defer + teardown."""
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    _write_engine_plugin(
+        project,
+        "stub",
+        ready="exit 1",
+        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+    )
+    engine, adapter = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a")],
+        policy=_pw_policy("stub"),
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 1 and not summary.paused
+    assert engine.state.tasks["1-1-a"].phase == Phase.DEFERRED
+    assert adapter.sessions == []
+    kinds = journal_kinds(engine)
+    assert "engine-setup-ok" in kinds and "engine-not-ready" in kinds
+    assert (engine.run_dir / "teardown-done").is_file()
+
+
+def test_per_worktree_teardown_runs_on_pause(project):
+    """A spec-approval pause leaves the worktree mounted, but the managed Editor
+    is still torn down (teardown runs in the finally, even as RunPaused unwinds)."""
+    commit_sprint(project, {"1-1-a": "ready-for-dev"})
+    _write_engine_plugin(
+        project,
+        "stub",
+        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+    )
+    engine, _ = make_engine(
+        project,
+        [wt_dev_effect(project, "1-1-a")],
+        policy=_pw_policy("stub", mode="per-story-spec-approval"),
+    )
+    summary = engine.run()
+
+    assert summary.paused
+    # the worktree stays up for resume, but the Editor was quit
+    assert len(worktree_list(project.project)) == 2
+    assert (engine.run_dir / "teardown-done").is_file()
+    assert "engine-teardown-ok" in journal_kinds(engine)
 
 
 def test_spec_file_serialized_relative_to_worktree():

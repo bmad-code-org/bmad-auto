@@ -190,34 +190,55 @@ def test_tmux_sessions_no_server(monkeypatch):
 
 
 def test_prunable_sessions_partitions(tmp_path, monkeypatch):
-    # live run: real run dir with this process's pid
+    mine = runs.project_tag(tmp_path)
+    # live run: real run dir with this process's pid, tagged ours
     live = _make_state_run(tmp_path, "live-1")
     runs.write_pid(live)
-    # finished run: run dir exists but dead pid
+    # finished run: run dir exists but dead pid, tagged ours
     finished = _make_state_run(tmp_path, "fin-1")
     (finished / "engine.pid").write_text(str(_dead_pid()))
-    # orphan: a session whose run dir is gone
+    # orphan tagged ours: session's run dir is gone -> still prunable
+    # untagged finished run: ownership proven by the run dir under this project
+    untag_fin = _make_state_run(tmp_path, "untag-fin")
+    (untag_fin / "engine.pid").write_text(str(_dead_pid()))
 
+    sessions = [
+        "bmad-auto-live-1",
+        "bmad-auto-fin-1",
+        "bmad-auto-orphan-1",
+        "bmad-auto-other-1",  # another project's live run
+        "bmad-auto-untag-fin",  # pre-upgrade session, no tag
+        "bmad-auto-untag-orphan",  # pre-upgrade, no tag, no run dir here
+        "bmad-auto-ctl",  # control session: never a candidate
+        "unrelated",  # not ours
+    ]
+    monkeypatch.setattr(runs, "tmux_sessions", lambda: sessions)
     monkeypatch.setattr(
         runs,
-        "tmux_sessions",
-        lambda: [
-            "bmad-auto-live-1",
-            "bmad-auto-fin-1",
-            "bmad-auto-orphan-1",
-            "bmad-auto-ctl",  # control session: never a candidate
-            "unrelated",  # not ours
-        ],
+        "session_project_tags",
+        lambda: {
+            "bmad-auto-live-1": mine,
+            "bmad-auto-fin-1": mine,
+            "bmad-auto-orphan-1": mine,
+            "bmad-auto-other-1": "/some/other/project",
+            # untag-* and unrelated intentionally absent (no tag)
+        },
     )
     prunable, alive = runs.prunable_sessions(tmp_path)
-    assert sorted(prunable) == ["fin-1", "orphan-1"]
+    # other-1 (foreign tag) and untag-orphan (unprovable) are skipped entirely
+    assert sorted(prunable) == ["fin-1", "orphan-1", "untag-fin"]
     assert alive == ["live-1"]
 
 
 def test_prune_sessions_dry_run_kills_nothing(tmp_path, monkeypatch):
+    finished = _make_state_run(tmp_path, "fin-1")
+    (finished / "engine.pid").write_text(str(_dead_pid()))
     killed: list[str] = []
     monkeypatch.setattr(runs, "kill_session", lambda rid: killed.append(rid))
     monkeypatch.setattr(runs, "tmux_sessions", lambda: ["bmad-auto-fin-1"])
+    monkeypatch.setattr(
+        runs, "session_project_tags", lambda: {"bmad-auto-fin-1": runs.project_tag(tmp_path)}
+    )
     assert runs.prune_sessions(tmp_path, dry_run=True) == ["fin-1"]
     assert killed == []
     assert runs.prune_sessions(tmp_path) == ["fin-1"]

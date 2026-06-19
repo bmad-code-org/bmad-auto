@@ -30,6 +30,19 @@ def test_builtin_profiles_load():
     assert profiles["claude"].skill_tree == ".claude/skills"
     assert profiles["codex"].skill_tree == ".agents/skills"
     assert profiles["gemini"].skill_tree == ".agents/skills"
+    # each profile carries the gitignored configs a worktree checkout omits
+    assert ".mcp.json" in profiles["claude"].seed_files
+    assert ".claude/settings.json" in profiles["claude"].seed_files
+    assert profiles["codex"].seed_files == (".codex/config.toml",)
+    assert profiles["gemini"].seed_files == (".gemini/settings.json",)
+
+
+def test_seed_files_default_empty_when_unset(tmp_path):
+    # MINIMAL_PROFILE omits seed_files -> defaults to ()
+    profiles_dir = tmp_path / ".automator" / "profiles"
+    profiles_dir.mkdir(parents=True)
+    (profiles_dir / "mycli.toml").write_text(MINIMAL_PROFILE)
+    assert load_profiles(tmp_path)["mycli"].seed_files == ()
 
 
 def test_skill_tree_defaults_when_unset():
@@ -98,6 +111,13 @@ def test_user_profile_overlay(tmp_path):
                 'skill_tree = "/abs/skills"\n[hooks]',
             ),
             "skill_tree",
+        ),
+        (
+            MINIMAL_PROFILE.replace(
+                "[hooks]",
+                'seed_files = ["/etc/passwd"]\n[hooks]',
+            ),
+            "seed_files",
         ),
     ],
 )

@@ -6,7 +6,8 @@
 - installs the bundled bmad-auto-* skills into each selected CLI's skill tree
   (.claude/skills for claude, .agents/skills for codex/gemini)
 - writes .automator/policy.toml from the template (if missing)
-- gitignores .automator/runs/
+- gitignores generated dirs: .automator/runs/ (per-run state) and
+  .automator/cache/ (engine plugins' rebuildable caches, e.g. the Unity Library)
 
 Every dialect registers the same relay script under the CLI's native event
 names while passing the canonical event name as the script argument, so the
@@ -176,29 +177,81 @@ def _copy_skills(project: Path, trees: Sequence[str], force: bool) -> bool:
     return skipped_any
 
 
-def provision_worktree(worktree: Path, profiles: Sequence[CLIProfile], repo_root: Path) -> None:
+def provision_worktree(
+    worktree: Path,
+    profiles: Sequence[CLIProfile],
+    repo_root: Path,
+    seed_files: Sequence[str] = (),
+    seed_globs: Sequence[str] = (),
+) -> None:
     """Make a freshly-created git worktree a self-sufficient bmad-auto project.
 
     A worktree checks out tracked files only, but the skill trees (.claude/skills,
-    .agents/skills) and hook config are typically gitignored, so they are absent
-    from the checkout. Without them the session can't find /bmad-auto-dev and the
-    Stop-signal hook never fires. Lay the bundled skills + signal hook into the
-    worktree for the active CLI profiles. Quiet (no stdout) — unlike `install_into`
-    this runs inside the engine loop under a TUI. No-op when `profiles` is empty.
+    .agents/skills), the hook config, and the project's gitignored MCP/CLI configs
+    are absent from the checkout. Without them the session can't find /bmad-auto-dev,
+    the Stop-signal hook never fires, and isolated sessions can't reach their MCP
+    server. Lay the bundled skills + signal hook into the worktree for the active
+    CLI profiles, and copy the `seed_files` configs in from the main repo. Quiet (no
+    stdout) — unlike `install_into` this runs inside the engine loop under a TUI.
+    No-op when there's nothing to do.
+
+    seed_globs are project-relative glob patterns (e.g. ".claude/skills/*") expanded
+    against the main repo; every match is copied into the worktree under the same
+    relative path, copy-when-absent like seed_files. A game-engine plugin uses these
+    to pull its MCP-generated skill tree (gitignored, so absent from the checkout)
+    into a per_worktree Editor's checkout.
 
     Kept safe against the unit's eventual `git add -A` commit:
-    - skills are copied only when ABSENT, so a project that commits its own skill
-      tree (e.g. .agents/) keeps it untouched (no diff merged back);
+    - skills + seed files are copied only when ABSENT, so a project that commits its
+      own skill tree (e.g. .agents/) or config keeps it untouched (no diff merged back);
     - the hook points at the MAIN repo's already-installed relay via an absolute
       path (the relay locates the run dir from $BMAD_AUTO_RUN_DIR, not its own
-      location), so nothing is written into the worktree's .automator/.
-    Both skill trees and the per-CLI hook config live in dirs projects gitignore.
+      location), so nothing is written into the worktree's .automator/;
+    - everything we wrote is added to the worktree's local git exclude.
+    Skill trees, the per-CLI hook config, and the seeded configs all live in dirs
+    projects gitignore — but the exclude shields them even when a project doesn't.
+
+    seed_files are copied BEFORE the hook step so a seeded settings file that is
+    also a hook config_path (.claude/settings.json, .gemini/settings.json) keeps its
+    real content and just gets the Stop hook merged in, rather than being created empty.
     """
-    if not profiles:
+    if not profiles and not seed_files and not seed_globs:
         return
     worktree = worktree.resolve()
-    relay = repo_root.resolve() / HOOK_SCRIPT_REL
+    repo_root = repo_root.resolve()
+    relay = repo_root / HOOK_SCRIPT_REL
     skills_root = resources.files("automator.data").joinpath("skills")
+
+    # project gitignored MCP/CLI configs: copy from the main repo when absent.
+    # Resolve-and-contain guards against an `..`/absolute entry escaping either tree.
+    seeded: list[str] = []
+    for rel in seed_files:
+        src = (repo_root / rel).resolve()
+        dst = (worktree / rel).resolve()
+        if not src.is_relative_to(repo_root) or not dst.is_relative_to(worktree):
+            continue
+        if not src.exists() or dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _copy_traversable(src, dst)
+        seeded.append(rel)
+
+    # glob-seeded trees (e.g. an engine plugin's MCP skill dirs): expand each
+    # pattern against the main repo and copy matches in, same contain guard +
+    # copy-when-absent semantics. rel is taken from the unresolved match so the
+    # worktree path mirrors the repo layout; resolve only guards containment.
+    for pattern in seed_globs:
+        for match in sorted(repo_root.glob(pattern)):
+            rel = match.relative_to(repo_root)
+            src = match.resolve()
+            dst = (worktree / rel).resolve()
+            if not src.is_relative_to(repo_root) or not dst.is_relative_to(worktree):
+                continue
+            if not src.exists() or dst.exists():
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _copy_traversable(src, dst)
+            seeded.append(str(rel))
 
     # bundled skills into each CLI's skill tree (deduped: codex+gemini share one);
     # never clobber a skill the checkout already carries (tracked or pre-existing).
@@ -228,10 +281,12 @@ def provision_worktree(worktree: Path, profiles: Sequence[CLIProfile], repo_root
         if changed:
             config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
-    # Shield exactly the paths we wrote (skill trees + hook configs) from the
-    # unit's `git add -A`, in case a project doesn't gitignore its tool dirs.
+    # Shield exactly the paths we wrote (skill trees + hook configs + seeded
+    # configs) from the unit's `git add -A`, in case a project doesn't gitignore
+    # its tool dirs.
     patterns = {f"/{p.skill_tree}" for p in profiles}
     patterns |= {f"/{p.hooks.config_path}" for p in profiles}
+    patterns |= {f"/{rel}" for rel in seeded}
     _worktree_local_exclude(worktree, sorted(patterns))
 
 
@@ -286,16 +341,20 @@ def install_into(
         policy_path.write_text(POLICY_TEMPLATE, encoding="utf-8")
         print(f"  policy written: {policy_path}")
 
-    # 5. gitignore runs dir
+    # 5. gitignore generated dirs: per-run state (.automator/runs/) and the
+    # game-engine plugins' rebuildable caches, e.g. the per-worktree Unity Library
+    # (.automator/cache/). Both are large/ephemeral and must never be committed.
     gitignore = project / ".gitignore"
-    ignore_line = ".automator/runs/"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
-    if ignore_line not in existing.splitlines():
+    have = set(existing.splitlines())
+    to_add = [line for line in (".automator/runs/", ".automator/cache/") if line not in have]
+    if to_add:
         with gitignore.open("a", encoding="utf-8") as f:
             if existing and not existing.endswith("\n"):
                 f.write("\n")
-            f.write(ignore_line + "\n")
-        print(f"  gitignored: {ignore_line}")
+            f.write("\n".join(to_add) + "\n")
+        for line in to_add:
+            print(f"  gitignored: {line}")
 
     if skills_skipped:
         print("  some skills already present; re-run with --force-skills to overwrite")

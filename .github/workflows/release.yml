@@ -1,0 +1,33 @@
+name: Release
+
+# Auto-publish on merge: when a version bump lands on `main`, create the matching
+# `vX.Y.Z` tag and GitHub release with notes from CHANGELOG.md. Idempotent —
+# `release.py publish` is a no-op when the tag already exists, so merges that
+# don't bump the version do nothing.
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create tags + releases
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need all tags to detect whether vX.Y.Z already exists
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Create tag + GitHub release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project python scripts/release.py publish

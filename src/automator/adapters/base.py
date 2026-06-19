@@ -30,7 +30,8 @@ class SessionSpec:
     cwd: Path
     env: dict[str, str] = field(default_factory=dict)
     model: str = ""  # empty = CLI default
-    timeout_s: float = 45 * 60
+    # fallback only; real dev/review/retro sessions get limits.session_timeout_min * 60
+    timeout_s: float = 90 * 60
 
 
 @dataclass(frozen=True)

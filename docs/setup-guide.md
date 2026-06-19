@@ -1,6 +1,6 @@
 # Setup guide
 
-This module is two things: the four `bmad-auto-*` skills and the `bmad-automator`
+This module is two things: the five `bmad-auto-*` skills and the `bmad-automator`
 orchestrator tool (the Python program that actually drives the loop). The skills do
 nothing on their own — the orchestrator is what spawns the fresh coding-CLI sessions
 that invoke `bmad-auto-dev`, `bmad-auto-review`, `bmad-auto-sweep`, and
@@ -8,7 +8,7 @@ that invoke `bmad-auto-dev`, `bmad-auto-review`, `bmad-auto-sweep`, and
 an optional extra.
 
 There are two ways the skills land in a project. The orchestrator's wheel **bundles**
-the four skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
+the five skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
 itself. Alternatively the **BMAD-method installer** copies them. Either way the
 `/bmad-auto-setup` skill registers the `_bmad/` config, ensures the tool is installed,
 picks which coding CLIs to drive, and bootstraps the project. For the one-page summary,
@@ -17,7 +17,7 @@ of the README.
 
 ## Installed via the BMAD-method installer? (recommended)
 
-The BMAD-method installer copies the four `bmad-auto-*` skill directories into your
+The BMAD-method installer copies the five `bmad-auto-*` skill directories into your
 project. It does **not** carry the orchestrator tool — the installer copies only skill
 directories, not their sibling files, so the tool can't ride along in the skill folder.
 It is installed separately from Git by the setup skill. The canonical source is

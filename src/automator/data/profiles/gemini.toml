@@ -12,6 +12,10 @@ model_flag = "--model"
 usage_parser = "gemini-chat"
 first_run_note = "authenticate once (browser OAuth or GEMINI_API_KEY); requires Gemini CLI >= 0.46"
 skill_tree = ".agents/skills"
+# .gemini/settings.json holds project MCP servers (mcpServers) AND is the hook
+# config_path: it is seeded first, then the Stop hook is merged in, so a worktree
+# keeps the project's MCP servers instead of starting from an empty settings file.
+seed_files = [".gemini/settings.json"]
 
 [env]
 GEMINI_CLI_TRUST_WORKSPACE = "true"

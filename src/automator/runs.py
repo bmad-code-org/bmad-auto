@@ -125,6 +125,19 @@ def kill_session(run_id: str) -> None:
 CTL_SESSION = "bmad-auto-ctl"
 _SESSION_PREFIX = "bmad-auto-"
 
+# tmux user option stamping a session/window with the project it belongs to, so
+# a prune in one project never touches another project's live runs. See
+# prunable_sessions and tui.launch.
+PROJECT_OPTION = "@bmad_project"
+
+
+def project_tag(project: Path) -> str:
+    """Canonical project identity stored in PROJECT_OPTION. The single source of
+    normalization: both the tagging (at session/window creation) and the prune
+    comparison must route through this so symlinks/relative paths can't make a
+    project look foreign to its own sessions."""
+    return str(project.resolve())
+
 
 def tmux_sessions() -> list[str]:
     """All live tmux session names, or [] when tmux is missing, no server is
@@ -145,14 +158,46 @@ def tmux_sessions() -> list[str]:
     return [line for line in proc.stdout.splitlines() if line]
 
 
+def session_project_tags() -> dict[str, str]:
+    """Map each live session name to its PROJECT_OPTION value ("" when unset).
+    Same missing-tmux/no-server guards as tmux_sessions()."""
+    if not shutil.which("tmux"):
+        return {}
+    try:
+        proc = subprocess.run(
+            ["tmux", "list-sessions", "-F", f"#{{session_name}}\t#{{{PROJECT_OPTION}}}"],
+            capture_output=True,
+            text=True,
+            timeout=_TMUX_TIMEOUT_S,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    if proc.returncode != 0:  # no server / no sessions
+        return {}
+    tags: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        name, _, tag = line.partition("\t")
+        if name:
+            tags[name] = tag
+    return tags
+
+
 def prunable_sessions(project: Path) -> tuple[list[str], list[str]]:
     """Partition the bmad-auto-<id> agent sessions into (prunable, live) run ids.
 
-    The control session (bmad-auto-ctl) is never a candidate. A session is live
-    only when its run dir exists and holds a provably-alive engine pid;
-    everything else — finished, stopped, interrupted, or orphaned (run dir
-    deleted) — is prunable.
+    The control session (bmad-auto-ctl) is never a candidate. Pruning is scoped
+    to `project` via the PROJECT_OPTION tag set at session creation:
+
+    - tag == this project: ours — prunable unless a provably-alive engine pid is
+      running (covers finished/stopped/crashed *and* orphans whose run dir was
+      deleted, since engine_alive is False with no pid).
+    - tag is another project: skipped — never touched.
+    - tag empty (pre-upgrade, untagged session): can't prove ownership, so fall
+      back to the run dir — prunable only when the dir exists under this project
+      and is dead; skipped when the dir is absent.
     """
+    tags = session_project_tags()
+    mine = project_tag(project)
     prunable: list[str] = []
     live: list[str] = []
     for name in tmux_sessions():
@@ -160,7 +205,13 @@ def prunable_sessions(project: Path) -> tuple[list[str], list[str]]:
             continue
         run_id = name[len(_SESSION_PREFIX) :]
         run_dir = run_dir_for(project, run_id)
-        if is_run(run_dir) and engine_alive(run_dir):
+        tag = tags.get(name, "")
+        if tag:
+            if tag != mine:
+                continue  # another project's session
+        elif not is_run(run_dir):
+            continue  # untagged and no run dir here — ownership unprovable
+        if engine_alive(run_dir):
             live.append(run_id)
         else:
             prunable.append(run_id)

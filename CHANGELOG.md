@@ -5,6 +5,59 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.4.3] — 2026-06-18
+
+### Added
+
+- **Game-engine plugin layer (opt-in; Unity).** New `[engine]` policy section adapts the
+  dev/sweep cycle to projects that drive a live engine Editor through an MCP (Unity via
+  [IvanMurzak/Unity-MCP](https://github.com/IvanMurzak/Unity-MCP) or
+  [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp)); off by default. Plugins ship
+  like CLI profiles — bundled under `automator/data/engines/<name>/`, overridable in
+  `.automator/engines/<name>/`. `editor_mode` couples to `[scm] isolation`: `shared` runs the
+  agent in place on the operator's open Editor; `per_worktree` gives each unit its own managed
+  Editor. A readiness gate blocks until the Editor + MCP report ready before each unit, deferring
+  on timeout instead of starting against a half-open Editor.
+- **Unity `per_worktree` mode.** Each unit runs in its own git worktree with a dedicated Editor:
+  - Launches in local (Custom) mode — `bootstrap-local` plus `open --start-server true` so the
+    Editor hosts its own per-path MCP server; this makes `wait-for-ready` a real readiness signal
+    before any client connects. Connection knobs overridable via `BMAD_AUTO_UNITY_MCP_*`
+    (`…_LOCAL=0` keeps the prior cloud launch).
+  - Primes the worktree `Library` with a reflink/CoW copy of the warm main `Library`, so Unity
+    reimports incrementally rather than cold — a cold import on a large project crashes the import
+    workers (Burst `SIGFPE` writing `VirtualArtifacts`). Tunable via `BMAD_AUTO_UNITY_LIBRARY_SEED`
+    and `…_SEED_MODE` (`reflink`|`copy`|`symlink`|`off`).
+  - Teardown quits the Editor and reaps its child `gamedev-mcp-server` on completion or pause, so
+    neither leaks across runs (a leaked server holds its port and breaks the next run).
+  - Cold-launch grace via `[engine] ready_grace_sec`; MCP skill tree seeded into each worktree via
+    `seed_globs`; `init` now gitignores `.automator/cache/`.
+- **Worktree config seeding.** A fresh worktree checks out tracked files only, so a project's
+  gitignored MCP/CLI configs (`.mcp.json`, `.claude/settings.json`, …) were missing — isolated
+  sessions then timed out reaching their MCP and escalated as spurious spec errors. Each loaded
+  adapter's configs are now copied in before launch, via new `[scm]` knobs `seed_adapter_defaults`
+  (default on) and `worktree_seed` (extra paths). Both are in the TUI settings editor.
+- **Game Engine settings in the TUI.** All six `[engine]` keys (`name`, `editor_mode`, `mcp`,
+  `unity_path`, `ready_timeout_sec`, `ready_grace_sec`) are now editable in the settings editor
+  (`g`) under a collapsible titled **Game Engine**; the `editor_mode` ↔ `[scm] isolation` coupling
+  is validated on save. New authoring docs: [Writing a Game Engine plugin](docs/game-engine-plugin-guide.md)
+  and [Writing a plugin for a specific Editor MCP](docs/game-engine-mcp-guide.md) (full
+  `BMAD_AUTO_UNITY_*` env-var reference).
+
+### Changed
+
+- Default `limits.session_timeout_min` raised from 45 to 90 minutes — the old default cut off
+  substantial units, especially MCP-driven Unity sessions where each Editor step is a slow
+  round-trip. Override per project under `[limits]`.
+
+### Fixed
+
+- `bmad-auto cleanup` (and the TUI `c` action) no longer stops other projects' live runs. tmux
+  sessions are global but were named only `bmad-auto-<run_id>`, so a run id absent from the current
+  project looked like a prunable orphan and matched another project's active run. Sessions and
+  windows are now stamped with their project (`@bmad_project`); cleanup prunes only the current
+  project's, while still clearing true same-project orphans. Pre-existing untagged sessions are
+  left untouched.
+
 ## [0.4.2] — 2026-06-17
 
 ### Fixed
@@ -232,6 +285,8 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.4.3]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.3
+[0.4.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.0
 [0.3.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.2

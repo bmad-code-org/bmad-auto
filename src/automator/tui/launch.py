@@ -198,23 +198,43 @@ def _ctl_window_candidates(project: Path) -> list[tuple[str, str]]:
     dir is gone). The current window is excluded so a prune triggered from inside
     the ctl session never targets itself; live runs and the session's own shell
     window are excluded too.
+
+    The control session is shared across projects, so pruning is scoped to
+    `project` via the per-window PROJECT_OPTION tag (mirrors runs.prunable_sessions):
+    a window tagged for another project is left alone; an untagged (pre-upgrade)
+    window is only a candidate when its run dir exists under this project.
     """
     if not tmux_available() or not session_exists(CTL_SESSION):
         return []
     current = _current_window_id()
-    proc = _tmux("list-windows", "-t", f"={CTL_SESSION}", "-F", "#{window_id}\t#{window_name}")
+    proc = _tmux(
+        "list-windows",
+        "-t",
+        f"={CTL_SESSION}",
+        "-F",
+        f"#{{window_id}}\t#{{window_name}}\t#{{{runs.PROJECT_OPTION}}}",
+    )
     if proc.returncode != 0:
         return []
+    mine = runs.project_tag(project)
     candidates: list[tuple[str, str]] = []
     for line in proc.stdout.splitlines():
-        win_id, _, name = line.partition("\t")
+        parts = line.split("\t")
+        win_id = parts[0] if parts else ""
+        name = parts[1] if len(parts) > 1 else ""
+        tag = parts[2] if len(parts) > 2 else ""
         if not win_id or win_id == current:
             continue
         m = _CTL_WINDOW_RE.match(name)
         if m is None:
             continue  # not a run window (e.g. the session's initial shell)
         run_dir = runs.run_dir_for(project, m.group(1))
-        if runs.is_run(run_dir) and runs.engine_alive(run_dir):
+        if tag:
+            if tag != mine:
+                continue  # another project's window
+        elif not runs.is_run(run_dir):
+            continue  # untagged and no run dir here — ownership unprovable
+        if runs.engine_alive(run_dir):
             continue
         candidates.append((win_id, name))
     return candidates
@@ -305,7 +325,12 @@ def start_detached(project: Path, argv_tail: list[str], run_id: str, kind: str) 
     )
     if proc.returncode != 0:
         raise LaunchError(f"tmux new-window failed: {proc.stderr.strip()}")
-    return proc.stdout.strip() or None
+    win_id = proc.stdout.strip() or None
+    if win_id:
+        # Tag the window with its project so a cleanup in another project never
+        # closes it (the ctl session is shared across projects).
+        _tmux("set-option", "-w", "-t", win_id, runs.PROJECT_OPTION, runs.project_tag(project))
+    return win_id
 
 
 def start_run_detached(

@@ -262,12 +262,13 @@ never re-attaches to a dead session.
 
 ## Cleaning up sessions (`c`)
 
-`c` removes leftover tmux artifacts in one pass, after a confirmation modal:
-every `bmad-auto-<run-id>` agent session whose run has finished, stopped, or
-crashed (and any orphan whose run dir is gone), plus the parked
-`[bmad-auto exited …]` windows in `bmad-auto-ctl`. Live runs — and the window
-you triggered the cleanup from — are always spared, so it is safe to press at
-any time. A toast reports how many sessions and windows were closed. The same
+`c` removes leftover tmux artifacts for the current project in one pass, after a
+confirmation modal: every `bmad-auto-<run-id>` agent session whose run has
+finished, stopped, or crashed (and any orphan whose run dir is gone), plus the
+parked `[bmad-auto exited …]` windows in `bmad-auto-ctl`. Live runs, the window
+you triggered the cleanup from, and any session or window belonging to another
+project are always spared, so it is safe to press at any time even with other
+projects' runs in flight. A toast reports how many sessions and windows were closed. The same
 sweep is available from a plain shell as `bmad-auto cleanup` (`--dry-run` to
 preview). Runs already tear their own session down on finish unless you set
 `[adapter] cleanup_session_on_finish = false`; `c` is for the backlog that
@@ -362,42 +363,58 @@ open/closed at once. Unset keys show their default as a placeholder rather than
 a baked-in value; clearing a field deletes the key, restoring default/inherit
 behavior.
 
-| Section.key                           | Type                   | Default            | Notes                                                                                        |
-| ------------------------------------- | ---------------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| `gates.mode`                          | select                 | `per-epic`         | `none` / `per-epic` / `per-story-spec-approval`                                              |
-| `gates.retrospective`                 | select                 | `notify`           | `never` / `notify` / `auto`                                                                  |
-| `limits.max_review_cycles`            | int ≥ 1                | 3                  | review loop bound before plateau-defer                                                       |
-| `limits.max_dev_attempts`             | int ≥ 1                | 2                  | dev retry budget                                                                             |
-| `limits.session_timeout_min`          | int ≥ 1                | 45                 | per-session wall clock                                                                       |
-| `limits.stop_without_result_nudges`   | int ≥ 0                | 1                  | nudges when a session stops without result.json                                              |
-| `limits.max_tokens_per_story`         | int ≥ 1                | 2000000            | cost-weighted budget                                                                         |
-| `limits.cache_read_weight`            | float 0.0–1.0          | 0.1                | cache-read weight in the budget; 1.0 = raw                                                   |
-| `verify.commands`                     | one per line           | (none)             | test/lint commands run before commit                                                         |
-| `notify.desktop`                      | switch                 | on                 | desktop notifications                                                                        |
-| `notify.file`                         | switch                 | on                 | ATTENTION file logging                                                                       |
-| `adapter.name`                        | text                   | `claude`           | CLI profile: `claude` / `codex` / `gemini` / custom                                          |
-| `adapter.model`                       | text                   | (CLI default)      | model override                                                                               |
-| `adapter.extra_args`                  | override switch + args | profile defaults   | see below                                                                                    |
-| `adapter.cleanup_session_on_finish`   | switch                 | on                 | kill the run's tmux session on finish; off keeps it                                          |
-| `adapter.dev` / `.review` / `.triage` | text ×2 + args         | inherit            | per-stage `name` / `model` / `extra_args` overrides                                          |
-| `sweep.auto`                          | select                 | `never`            | `never` / `per-epic` / `run-end`                                                             |
-| `sweep.max_bundles`                   | int ≥ 1                | 5                  | bundles per sweep; triage excess truncated                                                   |
-| `sweep.max_triage_attempts`           | int ≥ 1                | 2                  | triage validation retries                                                                    |
-| `sweep.repeat`                        | switch                 | off                | re-triage after each cycle, continue on new work                                             |
-| `sweep.max_cycles`                    | int ≥ 1                | 5                  | cycle cap per sweep run when repeat is on                                                    |
-| `scm.isolation`                       | select                 | `none`             | `none` (work in place) / `worktree` (per-unit worktree + merge-back)                         |
-| `scm.branch_per`                      | select                 | `story`            | worktree mode: branch per `story`, or one shared branch per `run` (forces delete-branch off) |
-| `scm.target_branch`                   | text                   | (run-start branch) | worktree mode: branch units merge back into (created if missing)                             |
-| `scm.merge_strategy`                  | select                 | `merge`            | worktree mode: `ff` / `merge` / `squash`                                                     |
-| `scm.delete_branch`                   | switch                 | on                 | worktree mode: delete the unit branch after a successful merge                               |
-| `scm.keep_failed`                     | switch                 | on                 | keep a failed unit's worktree + branch mounted for inspection                                |
-| `scm.commit_message_template`         | text                   | (built-in)         | story/bundle commit message; `{story_key}` / `{run_id}` substituted                          |
-| `scm.failed_diff_max_mb`              | int ≥ 1                | 5                  | per-file cap (MB) for untracked files in a kept-failed unit's `changes.patch`                |
-| `scm.failed_diff_unlimited`           | switch                 | off                | lift the failed-diff size cap (warns when active)                                            |
-| `tui.low_frame_rate`                  | switch                 | off                | cap to 15fps + disable animations (slow/SSH links); applies next launch                      |
+| Section.key                           | Type                   | Default            | Notes                                                                                                                                                |
+| ------------------------------------- | ---------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gates.mode`                          | select                 | `per-epic`         | `none` / `per-epic` / `per-story-spec-approval`                                                                                                      |
+| `gates.retrospective`                 | select                 | `notify`           | `never` / `notify` / `auto`                                                                                                                          |
+| `limits.max_review_cycles`            | int ≥ 1                | 3                  | review loop bound before plateau-defer                                                                                                               |
+| `limits.max_dev_attempts`             | int ≥ 1                | 2                  | dev retry budget                                                                                                                                     |
+| `limits.session_timeout_min`          | int ≥ 1                | 90                 | per-session wall clock                                                                                                                               |
+| `limits.stop_without_result_nudges`   | int ≥ 0                | 1                  | nudges when a session stops without result.json                                                                                                      |
+| `limits.max_tokens_per_story`         | int ≥ 1                | 2000000            | cost-weighted budget                                                                                                                                 |
+| `limits.cache_read_weight`            | float 0.0–1.0          | 0.1                | cache-read weight in the budget; 1.0 = raw                                                                                                           |
+| `verify.commands`                     | one per line           | (none)             | test/lint commands run before commit                                                                                                                 |
+| `notify.desktop`                      | switch                 | on                 | desktop notifications                                                                                                                                |
+| `notify.file`                         | switch                 | on                 | ATTENTION file logging                                                                                                                               |
+| `adapter.name`                        | text                   | `claude`           | CLI profile: `claude` / `codex` / `gemini` / custom                                                                                                  |
+| `adapter.model`                       | text                   | (CLI default)      | model override                                                                                                                                       |
+| `adapter.extra_args`                  | override switch + args | profile defaults   | see below                                                                                                                                            |
+| `adapter.cleanup_session_on_finish`   | switch                 | on                 | kill the run's tmux session on finish; off keeps it                                                                                                  |
+| `adapter.dev` / `.review` / `.triage` | text ×2 + args         | inherit            | per-stage `name` / `model` / `extra_args` overrides                                                                                                  |
+| `sweep.auto`                          | select                 | `never`            | `never` / `per-epic` / `run-end`                                                                                                                     |
+| `sweep.max_bundles`                   | int ≥ 1                | 5                  | bundles per sweep; triage excess truncated                                                                                                           |
+| `sweep.max_triage_attempts`           | int ≥ 1                | 2                  | triage validation retries                                                                                                                            |
+| `sweep.repeat`                        | switch                 | off                | re-triage after each cycle, continue on new work                                                                                                     |
+| `sweep.max_cycles`                    | int ≥ 1                | 5                  | cycle cap per sweep run when repeat is on                                                                                                            |
+| `scm.isolation`                       | select                 | `none`             | `none` (work in place) / `worktree` (per-unit worktree + merge-back)                                                                                 |
+| `scm.branch_per`                      | select                 | `story`            | worktree mode: branch per `story`, or one shared branch per `run` (forces delete-branch off)                                                         |
+| `scm.target_branch`                   | text                   | (run-start branch) | worktree mode: branch units merge back into (created if missing)                                                                                     |
+| `scm.merge_strategy`                  | select                 | `merge`            | worktree mode: `ff` / `merge` / `squash`                                                                                                             |
+| `scm.delete_branch`                   | switch                 | on                 | worktree mode: delete the unit branch after a successful merge                                                                                       |
+| `scm.keep_failed`                     | switch                 | on                 | keep a failed unit's worktree + branch mounted for inspection                                                                                        |
+| `scm.seed_adapter_defaults`           | switch                 | on                 | worktree mode: seed each loaded adapter's gitignored MCP/CLI configs (`.mcp.json`, `.claude/settings.json`, `.codex/config.toml`…) into the worktree |
+| `scm.worktree_seed`                   | one per line           | (none)             | worktree mode: extra project-relative gitignored files to seed, on top of the adapter defaults                                                       |
+| `scm.commit_message_template`         | text                   | (built-in)         | story/bundle commit message; `{story_key}` / `{run_id}` substituted                                                                                  |
+| `scm.failed_diff_max_mb`              | int ≥ 1                | 5                  | per-file cap (MB) for untracked files in a kept-failed unit's `changes.patch`                                                                        |
+| `scm.failed_diff_unlimited`           | switch                 | off                | lift the failed-diff size cap (warns when active)                                                                                                    |
+| `engine.name`                         | text                   | `""` (disabled)    | **Game Engine** layer plugin: `""` off / `unity` / a custom plugin under `.automator/engines/<name>/`                                                |
+| `engine.editor_mode`                  | select                 | `shared`           | `shared` (needs `scm.isolation = none`) / `per_worktree` (needs `isolation = worktree`)                                                              |
+| `engine.mcp`                          | select                 | `ivanmurzak`       | Editor MCP the plugin targets: `ivanmurzak` / `coplaydev`                                                                                            |
+| `engine.unity_path`                   | text                   | (auto-detect)      | explicit Editor binary for a `per_worktree` launch; ignored in shared mode                                                                           |
+| `engine.ready_timeout_sec`            | int ≥ 1                | 600                | readiness-gate budget for the Editor + MCP to come up                                                                                                |
+| `engine.ready_grace_sec`              | int ≥ -1               | -1                 | pre-probe delay; `-1` = auto (120s cold `per_worktree`, 0s warm `shared`)                                                                            |
+| `tui.low_frame_rate`                  | switch                 | off                | cap to 15fps + disable animations (slow/SSH links); applies next launch                                                                              |
 
 (`scm.max_parallel` is intentionally **not** exposed in the editor — it stays
 inert, clamped to 1, until parallel fan-out is built.)
+
+The `[engine]` keys render under a collapsible titled **Game Engine** — the opt-in
+layer for game projects that drive a live Editor through an MCP. It is **disabled by
+default** (`engine.name = ""`); setting `name = "unity"` enables it with working
+defaults for every other key. See [Writing a Game Engine plugin](game-engine-plugin-guide.md)
+and [Writing a plugin for a specific Editor MCP](game-engine-mcp-guide.md) to target
+another engine. The `editor_mode` ↔ `scm.isolation` coupling is validated on save, so
+an invalid combo (e.g. `per_worktree` with `isolation = none`) blocks with an error.
 
 `extra_args` fields are special: the switch distinguishes "use the profile's
 default flags" (off — the key stays absent) from "replace them with exactly

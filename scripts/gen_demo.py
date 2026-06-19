@@ -7,7 +7,8 @@ Textual's ``run_test`` pilot, and ``save_screenshot`` after each micro-action so
 the result actually animates. The narrative: land on the running story run, walk
 the runs cursor, unfold the sprint tree epic by epic, step down the deferred-work
 ledger and open an entry, type a story key into the start-run modal character by
-character, raise the sweep decision banner, and scroll the policy editor. Frames
+character, raise the sweep decision banner, scroll the policy editor, and expand
+its `[scm]` section to show the worktree-isolation + config-seeding knobs. Frames
 are rasterised to PNG with ``resvg`` and stitched into a GIF with ``ffmpeg``,
 each frame held for its own delay (so motion is smooth and rests linger).
 
@@ -36,7 +37,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 # Reuse the screenshot harness's mock-project builder and resvg font mapping.
 # (Imports follow the sys.path tweak above, hence the E402 suppressions.)
 from gen_screenshots import MONO_FONT, SIZE, STORY_RUN, SWEEP_RUN, build_project  # noqa: E402
-from textual.widgets import Checkbox, Input  # noqa: E402
+from textual.widgets import Checkbox, Collapsible, Input  # noqa: E402
 
 from automator.tui import launch  # noqa: E402
 from automator.tui.app import BmadAutoApp  # noqa: E402
@@ -195,7 +196,22 @@ async def capture(root: Path, frames_dir: Path) -> list[tuple[str, float]]:
             await pilot.press("down")
             await pilot.pause(0.05)
             shot(0.32)
-        await hold_last(2.4, pilot)
+        await hold_last(2.0, pilot)
+
+        # Beat 8 — expand [scm] to reveal worktree isolation + the config-seeding
+        # knobs (seed adapter configs / extra worktree seed files).
+        seed_switch = app.screen.query_one("#scm-seed_adapter_defaults")
+        scm_section = next(a for a in seed_switch.ancestors if isinstance(a, Collapsible))
+        scm_section.scroll_visible(animate=False)
+        await pilot.pause(0.2)
+        shot(0.9)
+        scm_section.collapsed = False
+        await pilot.pause(0.2)
+        shot(0.6)
+        app.screen.query_one("#scm-worktree_seed").scroll_visible(animate=False)
+        await pilot.pause(0.2)
+        shot()
+        await hold_last(3.0, pilot)
 
     return frames
 
