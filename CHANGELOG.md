@@ -7,6 +7,16 @@ breaking changes may land in a minor release.
 
 ## [0.4.4] — 2026-06-19
 
+### Added
+
+- **Plugin system foundation (internal; not yet wired).** New `automator.plugins` package — a
+  general extension layer the orchestrator will build on: a `plugin.toml` manifest (metadata,
+  declarative `[hooks.<stage>]`, a `[[settings]]` schema, optional in-process `[python]`), a
+  folder-drop loader with builtin/project overlay (and a locked seam for entry-point packaging
+  later), a trust allowlist (`[plugins] enabled` in `policy.toml`), and a registry that isolates
+  plugin failures. A dropped `[python]` plugin is never imported unless explicitly enabled. Loads
+  into nothing yet — runs are byte-identical to today.
+
 ### Fixed
 
 - Unity `per_worktree`: auto-recover merge-back when a competing Editor leaks asset writes

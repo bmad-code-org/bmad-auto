@@ -200,6 +200,17 @@ class EnginePolicy:
 
 
 @dataclass(frozen=True)
+class PluginsPolicy:
+    # Trust allowlist for the plugin system. A plugin folder dropped under
+    # .automator/plugins/ (or shipped under automator/data/plugins/) loads its
+    # declarative manifest — settings + out-of-process shell hooks — regardless.
+    # A plugin that declares an in-process [python] module is NEVER imported or
+    # executed unless its name appears here. Absent table = no plugins trusted,
+    # which reproduces today's behavior exactly.
+    enabled: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Policy:
     gates: GatesPolicy = field(default_factory=GatesPolicy)
     limits: LimitsPolicy = field(default_factory=LimitsPolicy)
@@ -210,6 +221,7 @@ class Policy:
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
     scm: ScmPolicy = field(default_factory=ScmPolicy)
     engine: EnginePolicy = field(default_factory=EnginePolicy)
+    plugins: PluginsPolicy = field(default_factory=PluginsPolicy)
     tui: TuiPolicy = field(default_factory=TuiPolicy)
 
     def to_dict(self) -> dict[str, Any]:
@@ -261,6 +273,7 @@ def loads(text: str) -> Policy:
     sweep_d = _section(doc, "sweep")
     scm_d = _section(doc, "scm")
     engine_d = _section(doc, "engine")
+    plugins_d = _section(doc, "plugins")
     tui_d = _section(doc, "tui")
 
     gates = GatesPolicy(
@@ -417,6 +430,10 @@ def loads(text: str) -> Policy:
                 "engine.editor_mode = 'per_worktree' requires scm.isolation = 'worktree'; "
                 f"got scm.isolation = {scm.isolation!r}"
             )
+    raw_enabled = plugins_d.get("enabled", ())
+    if isinstance(raw_enabled, str) or not isinstance(raw_enabled, (list, tuple)):
+        raise PolicyError("plugins.enabled must be a list of plugin names")
+    plugins = PluginsPolicy(enabled=tuple(str(n) for n in raw_enabled))
     tui = TuiPolicy(low_frame_rate=bool(tui_d.get("low_frame_rate", TuiPolicy.low_frame_rate)))
     return Policy(
         gates=gates,
@@ -428,6 +445,7 @@ def loads(text: str) -> Policy:
         sweep=sweep,
         scm=scm,
         engine=engine,
+        plugins=plugins,
         tui=tui,
     )
 
@@ -530,6 +548,13 @@ unity_path = ""              # Editor binary for a per_worktree launch ("" = aut
 ready_timeout_sec = 600      # how long the readiness gate waits for the Editor + MCP to come up
 ready_grace_sec = -1         # delay before the first readiness probe (lets a cold Editor start);
                              # -1 = auto (per_worktree waits, shared does not). Counts against ready_timeout_sec.
+
+[plugins]
+# Plugin trust allowlist. A plugin dropped under .automator/plugins/<name>/ loads
+# its declarative manifest (settings + out-of-process shell hooks) automatically.
+# A plugin that ships an in-process [python] module is NEVER imported or run
+# unless its name is listed here. Empty = no plugins trusted (today's behavior).
+enabled = []                 # e.g. ["unity", "my-lint-plugin"]
 
 [tui]
 # low_frame_rate = true caps Textual to 15fps and disables animations (sets
