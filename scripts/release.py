@@ -9,8 +9,8 @@ asset generators, the CHANGELOG, git, and ``gh``.
 The flow is two-phase:
 
 * ``prepare X.Y.Z`` runs on a feature/release branch. It validates the CHANGELOG
-  section for the target version (the human/`/bmad-release` skill curates it
-  *before* calling this), stamps the version everywhere via ``sync_version.py``,
+  section for the target version (the human curates it *before* calling this),
+  stamps the version everywhere via ``sync_version.py``,
   regenerates screenshots + demo *only* when ``src/automator/tui`` changed since
   the last tag, and commits the result — leaving the branch ready for a PR.
 * ``publish`` runs on ``main`` after the PR merges (driven by
