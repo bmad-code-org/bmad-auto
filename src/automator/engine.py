@@ -87,6 +87,17 @@ class RunSummary:
         return "\n".join(lines)
 
 
+# CLI profile name -> the agent id the Unity-MCP CLI's `setup-mcp` expects (see
+# `unity-mcp-cli setup-mcp --list`). All but claude differ only by claude's
+# "-code" suffix; codex/gemini/cursor and any custom profile pass through as-is.
+_SETUP_MCP_AGENT_IDS = {"claude": "claude-code"}
+
+
+def _setup_mcp_agent_id(profile_name: str) -> str:
+    """Map a CLI profile name to its Unity-MCP `setup-mcp` agent id."""
+    return _SETUP_MCP_AGENT_IDS.get(profile_name, profile_name)
+
+
 class Engine:
     # The engine that installed the process-wide stop handlers; nested
     # auto-sweep runs (same process) see it set and let RunStopped propagate up.
@@ -284,6 +295,19 @@ class Engine:
             if profile is not None and profile.name not in seen:
                 seen[profile.name] = profile
         return list(seen.values())
+
+    def _engine_agent_ids(self) -> list[str]:
+        """The Unity-MCP `setup-mcp` agent ids for every CLI that runs in a
+        worktree (dev + review). A worktree can host more than one agent — e.g.
+        dev=claude, review=codex — and each reads its own MCP config file, so the
+        per_worktree setup must point every one of them at the worktree's Editor,
+        not just the dev agent. Deduped, order-preserving; empty for test fakes."""
+        ids: list[str] = []
+        for profile in self._worktree_profiles():
+            agent = _setup_mcp_agent_id(profile.name)
+            if agent not in ids:
+                ids.append(agent)
+        return ids
 
     def _run_isolated(self, task: StoryTask, drive: Callable[[StoryTask], None]) -> None:
         """Run one unit's `drive` body in a fresh per-unit worktree, then merge
@@ -691,6 +715,13 @@ class Engine:
                 "BMAD_AUTO_UNITY_PATH": eng.unity_path,
             }
         )
+        # Tell the per_worktree setup which agent MCP configs to point at the
+        # worktree's Editor (dev + review may be different CLIs, each with its own
+        # config file). Omitted when no real profile is loaded so the plugin keeps
+        # its claude-code default.
+        agent_ids = self._engine_agent_ids()
+        if agent_ids:
+            env["BMAD_AUTO_ENGINE_AGENTS"] = ",".join(agent_ids)
         try:
             # operator-configured engine command (from the plugin TOML); shell=True
             # is intentional, mirroring the deterministic verify commands.

@@ -6,11 +6,12 @@ import importlib.util
 import json
 import os
 import time
+import types
 
 import pytest
 
 from automator.adapters.mock import MockAdapter
-from automator.engine import Engine
+from automator.engine import Engine, _setup_mcp_agent_id
 from automator.engines import EngineError, get_engine, load_engines
 from automator.journal import Journal
 from automator.model import Phase, RunState, StoryTask, TokenUsage
@@ -479,3 +480,156 @@ def test_unsupported_editor_mode_rejected_at_construction(project):
     )
     with pytest.raises(EngineError, match="does not support editor_mode"):
         make_engine(project, pol)
+
+
+# ------------------------------------ per_worktree MCP agent routing (the leak fix)
+
+
+def test_setup_mcp_agent_id_mapping():
+    # only claude carries the "-code" suffix; everything else passes through
+    assert _setup_mcp_agent_id("claude") == "claude-code"
+    assert _setup_mcp_agent_id("codex") == "codex"
+    assert _setup_mcp_agent_id("gemini") == "gemini"
+    assert _setup_mcp_agent_id("cursor") == "cursor"
+    assert _setup_mcp_agent_id("some-custom-profile") == "some-custom-profile"
+
+
+class _FakeProfile:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeAdapter:
+    def __init__(self, name):
+        self.profile = _FakeProfile(name)
+
+
+def test_engine_agent_ids_dedups_dev_and_review(project):
+    # a worktree can host two different CLIs (dev=claude, review=codex) — both must
+    # be routed, deduped and order-preserved
+    engine, _ = make_engine(project, Policy(notify=QUIET))
+    engine.adapters = {"dev": _FakeAdapter("claude"), "review": _FakeAdapter("codex")}
+    assert engine._engine_agent_ids() == ["claude-code", "codex"]
+    engine.adapters = {"dev": _FakeAdapter("codex"), "review": _FakeAdapter("codex")}
+    assert engine._engine_agent_ids() == ["codex"]
+
+
+def test_engine_agent_ids_empty_for_profileless_adapters(project):
+    # MockAdapter has no .profile -> nothing to route (env var omitted)
+    engine, _ = make_engine(project, Policy(notify=QUIET))
+    assert engine._engine_agent_ids() == []
+
+
+def _capture_hook_env(engine, monkeypatch):
+    import automator.engine as eng_mod
+
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["env"] = kw["env"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(eng_mod.subprocess, "run", fake_run)
+    engine._run_engine_hook("true", StoryTask(story_key="1-1-a", epic=1))
+    return captured["env"]
+
+
+def test_run_engine_hook_injects_agents_env(project, monkeypatch):
+    engine, _ = make_engine(project, Policy(notify=QUIET))
+    engine.adapters = {"dev": _FakeAdapter("claude"), "review": _FakeAdapter("codex")}
+    env = _capture_hook_env(engine, monkeypatch)
+    assert env["BMAD_AUTO_ENGINE_AGENTS"] == "claude-code,codex"
+
+
+def test_run_engine_hook_omits_agents_env_when_no_profiles(project, monkeypatch):
+    engine, _ = make_engine(project, Policy(notify=QUIET))  # MockAdapter, no profile
+    env = _capture_hook_env(engine, monkeypatch)
+    assert "BMAD_AUTO_ENGINE_AGENTS" not in env
+
+
+def test_unity_setup_engine_agent_ids_env_parsing(monkeypatch):
+    mod = _load_unity_setup()
+    monkeypatch.delenv("BMAD_AUTO_ENGINE_AGENTS", raising=False)
+    monkeypatch.delenv("BMAD_AUTO_ENGINE_AGENT", raising=False)
+    assert mod._engine_agent_ids() == ["claude-code"]  # default
+    monkeypatch.setenv("BMAD_AUTO_ENGINE_AGENT", "codex")  # legacy singular fallback
+    assert mod._engine_agent_ids() == ["codex"]
+    monkeypatch.setenv("BMAD_AUTO_ENGINE_AGENTS", "claude-code, codex ,claude-code")
+    assert mod._engine_agent_ids() == ["claude-code", "codex"]  # strip + dedup, plural wins
+
+
+def test_verify_agent_isolation(tmp_path):
+    mod = _load_unity_setup()
+    url = "http://localhost:23723"
+    cdir = tmp_path / ".codex"
+    cdir.mkdir()
+    # config points at the worktree's port -> isolated
+    (cdir / "config.toml").write_text(
+        '[mcp_servers.ai-game-developer]\nurl = "http://localhost:23723"\n'
+    )
+    assert mod._verify_agent_isolation("codex", tmp_path, url) is True
+    # config still points at a leaked main-project port -> refuse
+    (cdir / "config.toml").write_text(
+        '[mcp_servers.ai-game-developer]\nurl = "http://localhost:23191"\n'
+    )
+    assert mod._verify_agent_isolation("codex", tmp_path, url) is False
+    # config missing -> can't guarantee isolation -> refuse
+    assert mod._verify_agent_isolation("gemini", tmp_path, url) is False
+    # agent without a worktree-local config path -> not verifiable here -> pass through
+    assert mod._verify_agent_isolation("claude-desktop", tmp_path, url) is True
+
+
+def _fake_setup_cli(tmp_path):
+    """Fake unity-mcp-cli for the setup hook: setup-mcp writes claude-code's
+    .mcp.json (path-derived 23723) and codex's .codex/config.toml (honoring --url,
+    or FAKE_CODEX_FORCE_URL to simulate a leaked port); other subcommands no-op 0."""
+    script = tmp_path / "fake-setup-cli"
+    log = tmp_path / "setup-calls.log"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, os, json\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n"
+        "a = sys.argv[1:]\n"
+        "if a[:1] == ['setup-mcp']:\n"
+        "    agent, path = a[1], a[2]\n"
+        "    url = a[a.index('--url') + 1] if '--url' in a else 'http://localhost:23723'\n"
+        "    if agent == 'claude-code':\n"
+        "        json.dump({'mcpServers': {'ai-game-developer': {'url': 'http://localhost:23723'}}},\n"
+        "                  open(os.path.join(path, '.mcp.json'), 'w'))\n"
+        "    elif agent == 'codex':\n"
+        "        u = os.environ.get('FAKE_CODEX_FORCE_URL') or url\n"
+        "        d = os.path.join(path, '.codex'); os.makedirs(d, exist_ok=True)\n"
+        "        open(os.path.join(d, 'config.toml'), 'w').write(\n"
+        "            '[mcp_servers.ai-game-developer]\\nurl = \"%s\"\\n' % u)\n"
+        "sys.exit(0)\n"
+    )
+    script.chmod(0o755)
+    return script, log
+
+
+def test_unity_setup_configures_every_agent_at_worktree_port(tmp_path, monkeypatch):
+    mod = _load_unity_setup()
+    _clear_setup_knobs(monkeypatch)
+    script, log = _fake_setup_cli(tmp_path)
+    monkeypatch.setenv("UNITY_MCP_CLI", str(script))
+    monkeypatch.setenv("BMAD_AUTO_ENGINE_AGENTS", "claude-code,codex")
+    monkeypatch.delenv("FAKE_CODEX_FORCE_URL", raising=False)
+    assert mod._setup_ivanmurzak(tmp_path) == 0
+    calls = log.read_text()
+    assert calls.count("setup-mcp claude-code") == 1  # written once, no duplicate
+    assert "setup-mcp codex" in calls
+    assert "--url http://localhost:23723" in calls  # codex forced to the worktree url
+    # codex's real config now points at the worktree Editor, not a leaked port
+    assert "23723" in (tmp_path / ".codex" / "config.toml").read_text()
+
+
+def test_unity_setup_fails_loud_when_agent_config_leaks(tmp_path, monkeypatch):
+    mod = _load_unity_setup()
+    _clear_setup_knobs(monkeypatch)
+    script, _ = _fake_setup_cli(tmp_path)
+    monkeypatch.setenv("UNITY_MCP_CLI", str(script))
+    monkeypatch.setenv("BMAD_AUTO_ENGINE_AGENTS", "claude-code,codex")
+    # simulate the bug: codex config still pinned to the main project's port
+    monkeypatch.setenv("FAKE_CODEX_FORCE_URL", "http://localhost:23191")
+    # isolation check rejects -> non-zero so the engine defers the unit (no work)
+    assert mod._setup_ivanmurzak(tmp_path) == 1

@@ -7,6 +7,14 @@ breaking changes may land in a minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Unity `per_worktree`: route **every** worktree CLI's MCP config at the worktree's Editor, not
+  just the dev agent. When dev and review use different CLIs (e.g. `dev=claude`, `review=codex`),
+  the review agent could read a main-repo-seeded config and route its asset writes into the main
+  checkout. Each agent's config is now written to the deterministic per-path port and verified; a
+  mismatch fails the setup hook (the unit defers) instead of leaking writes.
+
 ### Changed
 
 - Unity engine plugin: pin the `unity-mcp-cli` verification stamp to **v0.81.1** (subcommand

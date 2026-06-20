@@ -28,7 +28,11 @@ ready_cmd = 'python3 "{scripts}/unity_ready.py"'
 # launches the worktree's own Editor with local-connection env so it talks to its
 # per-path server (whose
 # port the IvanMurzak CLI derives from the project path, self-isolating from your
-# main Editor) and *hosts that server itself* (--start-server true) rather than
+# main Editor). It writes that MCP config for EVERY agent that runs in the worktree
+# — dev AND review may be different CLIs, each with its own config file (.mcp.json,
+# .codex/config.toml, …) — and verifies each points at the worktree's port, so an
+# agent config seeded from the main repo can't route asset writes into the main
+# checkout. The Editor *hosts that server itself* (--start-server true) rather than
 # the cloud. Because the Editor (not the client) owns the server, the
 # Editor<->server bridge — and thus wait-for-ready — comes up before any agent
 # connects, so the readiness gate just waits for that (optionally confirming with

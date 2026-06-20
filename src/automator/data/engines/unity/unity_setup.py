@@ -16,11 +16,16 @@ its own managed Editor:
      On a CoW filesystem (btrfs/xfs) the copy is near-instant and shares extents, so
      it costs almost no time or disk; elsewhere it falls back to a deep copy, then to
      a symlinked empty per-worktree cache (the old behavior) if no warm source exists.
-  2. Write the worktree's MCP client config (``.mcp.json``) via ``setup-mcp`` and
-     pin the *Unity project* to local ("Custom") mode via ``bootstrap-local``. The
-     IvanMurzak CLI derives a deterministic MCP port from the *project path*, so a
-     worktree at a different path automatically gets its own port and self-isolates
-     from the operator's main Editor with no manual port wiring.
+  2. Write the worktree's MCP client config via ``setup-mcp`` for *every* agent that
+     runs in the worktree (dev + review may be different CLIs, each reading its own
+     config file — ``.mcp.json`` for claude, ``.codex/config.toml`` for codex, …)
+     and pin the *Unity project* to local ("Custom") mode via ``bootstrap-local``.
+     The IvanMurzak CLI derives a deterministic MCP port from the *project path*, so
+     a worktree at a different path automatically gets its own port and self-isolates
+     from the operator's main Editor with no manual port wiring. Each agent's config
+     is then verified to point at that port — a worktree-local config seeded from the
+     main repo (pinned to the main project's port) would otherwise silently route the
+     agent's asset writes into the main checkout, so a mismatch fails the hook.
   3. Launch a Unity Editor on the worktree path (detached) **with local-connection
      env** so it connects to that per-path local server and *hosts the server
      itself* (``--start-server true``) rather than the cloud. The plugin's
@@ -55,7 +60,11 @@ Env (injected by the engine, all optional except the worktree):
   BMAD_AUTO_REPO_ROOT        main repo root (parent of the Library cache)
   BMAD_AUTO_ENGINE_MCP       ivanmurzak | coplaydev            (default ivanmurzak)
   BMAD_AUTO_UNITY_PATH       explicit Editor binary            (skips Unity Hub discovery)
-  BMAD_AUTO_ENGINE_AGENT     agent id for setup-mcp            (default claude-code)
+  BMAD_AUTO_ENGINE_AGENTS    comma-separated setup-mcp agent ids to point at the
+                             worktree Editor — every CLI that runs here, dev AND
+                             review (auto-wired by the engine from the loaded
+                             profiles; default claude-code)
+  BMAD_AUTO_ENGINE_AGENT     legacy single-agent fallback for the above
   BMAD_AUTO_UNITY_LIBRARY_CACHE  override the symlink-fallback Library cache root
   BMAD_AUTO_UNITY_LIBRARY_SEED   warm Library to prime from   (default <repo>/Library;
                                  empty string disables priming → symlink fallback)
@@ -306,6 +315,87 @@ def _open_command(cli: str, worktree: Path, url: str | None) -> list[str]:
     return cmd
 
 
+# Where each setup-mcp agent writes its *project-local* MCP config, relative to the
+# worktree (mirrors `unity-mcp-cli setup-mcp --list`). Agents whose config lives in
+# the home dir (claude-desktop, antigravity, …) aren't worktree-scoped, so they
+# can't be isolated per worktree and are intentionally absent — they're skipped
+# (with a warning) by the isolation check rather than silently "verified".
+_AGENT_CONFIG_PATHS = {
+    "claude-code": ".mcp.json",
+    "codex": ".codex/config.toml",
+    "gemini": ".gemini/settings.json",
+    "cursor": ".cursor/mcp.json",
+}
+
+
+def _engine_agent_ids() -> list[str]:
+    """The setup-mcp agent ids whose worktree config must point at this Editor.
+    The engine injects BMAD_AUTO_ENGINE_AGENTS (comma-separated dev+review agents);
+    BMAD_AUTO_ENGINE_AGENT (singular) is honored as a legacy fallback. Defaults to
+    claude-code. Deduped, order-preserving."""
+    raw = os.environ.get("BMAD_AUTO_ENGINE_AGENTS") or os.environ.get(
+        "BMAD_AUTO_ENGINE_AGENT", "claude-code"
+    )
+    ids: list[str] = []
+    for token in raw.split(","):
+        agent = token.strip()
+        if agent and agent not in ids:
+            ids.append(agent)
+    return ids or ["claude-code"]
+
+
+def _run_setup_mcp(cli: str, agent: str, worktree: Path, url: str | None = None) -> int:
+    """Write ``agent``'s MCP client config for ``worktree``. With ``url`` we force
+    that exact server URL; without it the CLI derives the deterministic per-path
+    port itself (same value for every agent on the same path)."""
+    cmd = [cli, "setup-mcp", agent, str(worktree)]
+    if url is not None:
+        cmd += ["--url", url]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout + proc.stderr)
+        print(f"unity_setup: setup-mcp {agent} failed", file=sys.stderr)
+    return proc.returncode
+
+
+def _verify_agent_isolation(agent: str, worktree: Path, url: str) -> bool:
+    """Assert ``agent``'s worktree config points at this worktree's Editor port,
+    not a leaked main-project port. Returns True on a confirmed match; False (the
+    caller then fails the hook so the unit is deferred before any work) when the
+    config is missing or carries the wrong port. Agents with no worktree-local
+    config path are not verifiable here — warn and pass them through."""
+    rel = _AGENT_CONFIG_PATHS.get(agent)
+    if rel is None:
+        print(
+            f"unity_setup: cannot verify per-worktree MCP isolation for agent "
+            f"{agent!r} (no worktree-local config path); skipping its check",
+            file=sys.stderr,
+        )
+        return True
+    # the deterministic port is the strongest format-agnostic invariant: if the
+    # config still pointed at the main project's Editor, this port would be absent.
+    port = url.rsplit(":", 1)[-1].strip("/")
+    cfg = worktree / rel
+    try:
+        text = cfg.read_text()
+    except OSError:
+        print(
+            f"unity_setup: agent {agent!r} MCP config {rel} missing after setup; "
+            "cannot guarantee per-worktree isolation",
+            file=sys.stderr,
+        )
+        return False
+    if f":{port}" not in text:
+        print(
+            f"unity_setup: agent {agent!r} MCP config {rel} does not point at the "
+            f"worktree Editor (expected port {port}); refusing to run to avoid "
+            "leaking asset writes into the main checkout",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def _setup_ivanmurzak(worktree: Path) -> int:
     cli = _cli()
     if shutil.which(cli) is None:
@@ -316,23 +406,38 @@ def _setup_ivanmurzak(worktree: Path) -> int:
         )
         return 2
 
-    # 1. worktree MCP client config (deterministic per-path port; no Editor needed)
-    agent = os.environ.get("BMAD_AUTO_ENGINE_AGENT", "claude-code")
-    cfg = subprocess.run(
-        [cli, "setup-mcp", agent, str(worktree)],
-        capture_output=True,
-        text=True,
-    )
-    if cfg.returncode != 0:
-        sys.stderr.write(cfg.stdout + cfg.stderr)
-        print("unity_setup: setup-mcp failed", file=sys.stderr)
-        return cfg.returncode
+    # 1. worktree MCP client config (deterministic per-path port; no Editor needed).
+    #    Always write claude-code's .mcp.json first as the canonical URL source
+    #    (_local_url parses it), then derive the per-path URL from it.
+    rc = _run_setup_mcp(cli, "claude-code", worktree)
+    if rc != 0:
+        return rc
+    url = _local_url(worktree)
 
-    # 2. pin the project to local/Custom mode (so the Editor connects to the
+    # 2. point EVERY worktree agent (dev + review may differ) at that URL so each
+    #    talks to this worktree's Editor — not a main-project port leaked in via a
+    #    seeded config. Without this, e.g. codex reads the seeded .codex/config.toml
+    #    (main project's port) and its asset writes land in the main checkout.
+    agents = _engine_agent_ids()
+    for agent in agents:
+        if agent == "claude-code":
+            continue  # already written in step 1
+        rc = _run_setup_mcp(cli, agent, worktree, url=url)
+        if rc != 0:
+            return rc
+
+    # 3. isolation guarantee: every agent's config must now point at this worktree's
+    #    Editor port. Fail loud (engine defers the unit) rather than let an agent
+    #    run against the wrong Editor and leak writes into the main checkout.
+    if url is not None:
+        for agent in agents:
+            if not _verify_agent_isolation(agent, worktree, url):
+                return 1
+
+    # 4. pin the project to local/Custom mode (so the Editor connects to the
     #    per-worktree server, not the cloud). Best effort: a failure here just
     #    means the Editor may open in cloud mode — the open below still passes the
     #    local --url, which is what actually flips it off cloud for this session.
-    url = _local_url(worktree)
     if url is not None and _truthy(os.environ.get("BMAD_AUTO_UNITY_MCP_LOCAL"), True):
         _bootstrap_local(cli, worktree, url)
     elif url is None:
@@ -342,7 +447,7 @@ def _setup_ivanmurzak(worktree: Path) -> int:
             file=sys.stderr,
         )
 
-    # 3. launch the worktree's Editor, detached, and watch briefly for a crash.
+    # 5. launch the worktree's Editor, detached, and watch briefly for a crash.
     cmd = _open_command(cli, worktree, url)
     try:
         proc = subprocess.Popen(
