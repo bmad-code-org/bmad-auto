@@ -78,7 +78,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 ### Game-engine projects (opt-in)
 
-- A niche engine layer — built **on the plugin system** — for projects whose dev/sweep cycle drives a **live engine Editor** via an Editor MCP (Unity bundled as `automator/data/plugins/unity/`; Godot/Unreal later). Off by default; enable with `[plugins] enabled = ["unity"]` + a `[plugins.unity]` table. (The legacy `[engine]` block and `.automator/engines/<name>/` still load through a deprecation shim.)
+- A niche engine layer — built **on the plugin system** — for projects whose dev/sweep cycle drives a **live engine Editor** via an Editor MCP (Unity bundled as `automator/data/plugins/unity/`; Godot/Unreal later). Off by default; enable with `[plugins] enabled = ["unity"]` + a `[plugins.unity]` table. (The legacy `[engine]` policy block still loads, folded onto `[plugins.unity]` with a deprecation warning; project-local overrides now live under `.automator/plugins/<name>/`.)
 - `editor_mode` is coupled to `[scm] isolation` because a live Editor MCP can only act on the folder its Editor has open: **`shared`** (requires `isolation = "none"`) runs the agent in place on the project the operator's warm Editor already has open — zero relaunches, full live MCP; **`per_worktree`** (requires `isolation = "worktree"`) gives each worktree its own managed Editor.
 - Readiness gate: before each unit, the plugin's `pre_ready_gate` hook blocks until the Editor + MCP report ready (Unity: `wait-for-ready` for IvanMurzak, connectivity check for CoplayDev); on timeout the unit is deferred with an `ATTENTION` notice rather than starting a session against a half-open Editor.
 - `per_worktree` lifecycle (Unity/IvanMurzak): a setup hook launches the worktree's own Editor (MCP port auto-derived from the worktree path, so it self-isolates from the operator's main Editor), writes the worktree `.mcp.json`, and primes the worktree's `Library` with a reflink/CoW copy of the warm main `Library` (so Unity reimports incrementally instead of a cold full reimport that crashes the import workers; deep-copy then symlinked-empty-cache fallbacks off-CoW); the readiness gate then waits for it; a teardown hook quits the Editor on completion **and** on pause/escalation. The MCP-generated skill tree (gitignored) is copied into each worktree via the plugin's `seed_globs`; a setup failure defers the unit instead of running it against no Editor.
@@ -124,7 +124,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 ### Configuration (`.automator/policy.toml`)
 
 - Single policy file written by `init`, snapshotted at run start (applies to new runs and resumes; editable live from the TUI).
-- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[engine]` (opt-in game-engine layer; off by default), `[tui]` (`low_frame_rate` for slow/SSH links).
+- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[plugins]` (trust allowlist + per-plugin `[plugins.<name>]` config — e.g. the opt-in game-engine layer via `[plugins.unity]`, off by default), `[tui]` (`low_frame_rate` for slow/SSH links).
 - Tunable limits: `max_review_cycles`, `max_dev_attempts`, `session_timeout_min`, `stop_without_result_nudges`, `max_tokens_per_story`.
 
 ### TUI dashboard

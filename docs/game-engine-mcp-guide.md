@@ -9,13 +9,15 @@ reference** for tuning the bundled Unity plugin without forking it.
 
 ## The `mcp` policy key
 
-`[engine] mcp` is passed through to the plugin's scripts as `BMAD_AUTO_ENGINE_MCP`.
-The bundled Unity scripts **branch** on it to support two different server
-implementations from one plugin:
+`[plugins.unity] mcp` is passed through to the plugin's scripts as
+`BMAD_AUTO_ENGINE_MCP`. The bundled Unity scripts **branch** on it to support two
+different server implementations from one plugin:
 
 ```toml
-[engine]
-name = "unity"
+[plugins]
+enabled = ["unity"]
+
+[plugins.unity]
 mcp = "ivanmurzak"        # ivanmurzak | coplaydev
 ```
 
@@ -37,7 +39,7 @@ operator's already-open Editor + MCP are up. **`per_worktree` is IvanMurzak-only
 the bundled plugin**, because its per-path port derivation gives each worktree's
 Editor its own server with no manual wiring. For CoplayDev's single-shared-server
 model, point `worktree_setup_cmd` / `worktree_teardown_cmd` at your own scripts
-(override the plugin under `.automator/engines/unity/`), or use `shared` mode.
+(override the plugin under `.automator/plugins/unity/`), or use `shared` mode.
 
 ## Writing an MCP-agnostic readiness probe
 
@@ -61,7 +63,7 @@ non-zero otherwise** (which defers the unit). Within that, a few things matter:
 
 > CLI subcommand names and MCP endpoints move between releases. Keep the
 > version-specific bits in the plugin (and document the version you verified
-> against), so an operator can override `ready_cmd` under `.automator/engines/<name>/`
+> against), so an operator can override `ready_cmd` under `.automator/plugins/<name>/`
 > when their installed version differs.
 
 ## `per_worktree` isolation (IvanMurzak)
@@ -109,23 +111,24 @@ These compose with the `[scm]` worktree seeds (`seed_adapter_defaults`,
 
 ## Full env-var reference (Unity plugin)
 
-The six `[engine]` policy keys are the operator-facing settings (editable in the TUI
-**Game Engine** section). Everything below is a **script-level knob** with a built-in
-default — override it via the plugin's **`[env]` block** (in `engine.toml`), not
-policy:
+The five `[plugins.unity]` keys are the operator-facing settings (editable in the TUI
+under the Unity plugin's section). Everything below is a **script-level knob** with a
+built-in default. The plugin builds the helper scripts' environment from `os.environ`
+(then overlays the identity + settings vars below), so **override a knob by exporting it
+in the environment that launches `bmad-auto`** — e.g. in your shell profile or run
+wrapper:
 
-```toml
-# .automator/engines/unity/engine.toml
-[env]
-UNITY_MCP_CLI = "unity-mcp-cli"
-BMAD_AUTO_UNITY_LIBRARY_SEED_MODE = "copy"   # e.g. force a deep copy off-CoW
+```sh
+export UNITY_MCP_CLI="unity-mcp-cli"
+export BMAD_AUTO_UNITY_LIBRARY_SEED_MODE="copy"   # e.g. force a deep copy off-CoW
+bmad-auto run …
 ```
 
-**Always injected by the engine** (from the six policy keys; do not set by hand):
-`BMAD_AUTO_REPO_ROOT`, `BMAD_AUTO_WORKTREE`, `BMAD_AUTO_RUN_DIR`,
+**Always injected by the plugin** (identity from the run context + the five settings; do
+not set by hand): `BMAD_AUTO_REPO_ROOT`, `BMAD_AUTO_WORKTREE`, `BMAD_AUTO_RUN_DIR`,
 `BMAD_AUTO_STORY_KEY`, `BMAD_AUTO_ENGINE_MCP`, `BMAD_AUTO_ENGINE_EDITOR_MODE`,
-`BMAD_AUTO_ENGINE_READY_TIMEOUT`, `BMAD_AUTO_ENGINE_READY_GRACE`,
-`BMAD_AUTO_UNITY_PATH`.
+`BMAD_AUTO_ENGINE_READY_TIMEOUT`, `BMAD_AUTO_ENGINE_READY_GRACE`, `BMAD_AUTO_UNITY_PATH`,
+and `BMAD_AUTO_ENGINE_AGENTS` (the dev + review CLI ids, for per-worktree MCP routing).
 
 ### Readiness gate (`unity_ready.py`)
 

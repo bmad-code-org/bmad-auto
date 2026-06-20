@@ -361,9 +361,22 @@ Merge-back is always **serialized** — `max_parallel` is a validated knob clamp
 
 For a monorepo or any layout where the git root differs from the project dir, set an optional `repo_root` key in `_bmad/bmm/config.yaml` — it decouples where git/code work happens from where run state lives (defaults to the project dir).
 
+### Plugins
+
+The orchestrator is extensible through a **plugin system** — a general layer that adapts the run/sweep cycle without touching the core loop. A plugin is a folder-drop `plugin.toml` manifest (metadata, declarative `[hooks.<stage>]` shell commands, a `[[settings]]` schema, and an optional in-process `[python]` module), bundled under `automator/data/plugins/<name>/` and overridable per project at `.automator/plugins/<name>/`. At every run/sweep lifecycle stage a plugin can **observe, veto** (defer / pause / skip), and **mutate** a shared context; a zero-plugin run pays nothing (O(1) no-op fast path) and stays byte-identical to before.
+
+Two trust tiers: a **data-only / declarative** plugin (settings + shell hooks) takes effect as soon as its folder is discovered, while a plugin that ships an in-process `[python]` module is **never imported unless its name is listed in `[plugins] enabled`** in `.automator/policy.toml` — dropping a folder in never runs code. Every hook is failure-isolated: a raise is caught, journalled, and disables that instance for the rest of the run rather than crashing it. A plugin's `[[settings]]` render in the TUI settings editor and persist under `[plugins.<name>]`.
+
+```toml
+[plugins]
+enabled = ["unity"]        # only these plugins' [python] modules load
+```
+
+See **[Writing a bmad-auto plugin](docs/plugin-authoring-guide.md)** for the manifest, hook, stage, settings, trust, and workflow reference; a complete worked example ships under [`examples/plugins/guardrails/`](examples/plugins/guardrails/).
+
 ### Game-engine projects (Unity)
 
-A niche, opt-in `[engine]` layer for projects whose dev/sweep cycle needs the agent to drive a **live engine Editor** — e.g. a Unity project the agent manipulates through an Editor MCP ([IvanMurzak/Unity-MCP](https://github.com/IvanMurzak/Unity-MCP) or [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp)). Normal projects leave `[engine] name = ""` and nothing changes. Engine plugins ship like CLI profiles: bundled TOML in `automator/data/engines/<name>/` (Unity included), overridable per project under `.automator/engines/<name>/`.
+A niche game-engine layer — built **on the plugin system** — for projects whose dev/sweep cycle needs the agent to drive a **live engine Editor** — e.g. a Unity project the agent manipulates through an Editor MCP ([IvanMurzak/Unity-MCP](https://github.com/IvanMurzak/Unity-MCP) or [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp)). It's off by default; normal projects never list it in `[plugins] enabled` and nothing changes. Unity ships bundled at `automator/data/plugins/unity/`, overridable per project under `.automator/plugins/unity/`.
 
 The core constraint: a live Editor MCP can only act on the folder its Editor has open, and Unity binds one Editor per folder and can't be repointed live. So `editor_mode` is coupled to `[scm] isolation`:
 
@@ -373,8 +386,10 @@ The core constraint: a live Editor MCP can only act on the folder its Editor has
 Enable shared mode (the recommended Unity workflow) in `.automator/policy.toml`:
 
 ```toml
-[engine]
-name = "unity"
+[plugins]
+enabled = ["unity"]
+
+[plugins.unity]
 editor_mode = "shared"     # requires [scm] isolation = "none" (the default)
 mcp = "ivanmurzak"         # ivanmurzak | coplaydev
 unity_path = ""            # explicit Editor binary for per_worktree; "" = auto-detect
@@ -382,16 +397,19 @@ ready_timeout_sec = 600
 ready_grace_sec = -1       # delay before the first readiness probe; -1 = auto
 ```
 
-All six keys are editable in the TUI settings editor (`g`) under the **Game Engine**
-section. To run a project on a different engine — or reshape the Unity plugin — see
-**[Writing a Game Engine plugin](docs/game-engine-plugin-guide.md)** (TOML schema,
-lifecycle hooks, a minimal Godot example) and **[Writing a plugin for a specific
-Editor MCP](docs/game-engine-mcp-guide.md)** (IvanMurzak vs CoplayDev, readiness
-probing, per-worktree isolation, and the full `BMAD_AUTO_UNITY_*` env-var reference).
+All five `[plugins.unity]` keys are editable in the TUI settings editor (`g`) under the
+Unity plugin's section (shown once `unity` is in `[plugins] enabled`). To run a project on
+a different engine — or reshape the Unity plugin — see **[Writing a Game Engine
+plugin](docs/game-engine-plugin-guide.md)** (manifest schema, lifecycle hooks, a minimal
+Godot example) and **[Writing a plugin for a specific Editor MCP](docs/game-engine-mcp-guide.md)**
+(IvanMurzak vs CoplayDev, readiness probing, per-worktree isolation, and the full
+`BMAD_AUTO_UNITY_*` env-var reference). The legacy `[engine]` block still loads — it's
+folded onto `[plugins.unity]` with a deprecation warning — but will be removed in a future
+release; migrate to `[plugins] enabled = ["unity"]`.
 
-The readiness gate runs the plugin's `ready_cmd` (`unity_ready.py`), which for `ivanmurzak` shells out to the Unity-MCP CLI's `wait-for-ready` (with an explicit `--timeout`, since the CLI's own default is only 120s) and for `coplaydev` does a connectivity check against the MCP server. It first waits `ready_grace_sec` for the Editor to start before probing — `-1` (the default) auto-picks **120s for a cold `per_worktree` Editor** and **0s for a warm `shared` one** — then retries so a fast connection-refused against a not-yet-listening Editor doesn't abort the gate; the grace counts against `ready_timeout_sec`. The exact CLI name/subcommand and endpoint move between MCP releases — verify against your installed version and override `ready_cmd` (or the whole plugin) under `.automator/engines/unity/` if they differ.
+The readiness gate runs the plugin's `ready_cmd` (`unity_ready.py`), which for `ivanmurzak` shells out to the Unity-MCP CLI's `wait-for-ready` (with an explicit `--timeout`, since the CLI's own default is only 120s) and for `coplaydev` does a connectivity check against the MCP server. It first waits `ready_grace_sec` for the Editor to start before probing — `-1` (the default) auto-picks **120s for a cold `per_worktree` Editor** and **0s for a warm `shared` one** — then retries so a fast connection-refused against a not-yet-listening Editor doesn't abort the gate; the grace counts against `ready_timeout_sec`. The exact CLI name/subcommand and endpoint move between MCP releases — verify against your installed version and override `ready_cmd` (or the whole plugin) under `.automator/plugins/unity/` if they differ.
 
-For `per_worktree`, set `editor_mode = "per_worktree"` with `[scm] isolation = "worktree"`. The bundled Unity plugin wires the worktree-Editor lifecycle against the **IvanMurzak** CLI (`open` / `setup-mcp` / `close`, which key off the project path with auto port detection — verified against v0.81.1). A fresh worktree has no `Library` (it's gitignored), and opening Unity on an empty `Library` forces a cold full reimport that crashes the import workers on a real project — so the setup hook **primes** the worktree's `Library` with a reflink/CoW copy of your warm main `Library` (`<repo>/Library`), near-instant on btrfs/xfs, making the import incremental; it falls back to a deep copy, then to a symlinked empty cache under the gitignored `.automator/cache/`, off-CoW or when no warm `Library` exists. Tune this with `BMAD_AUTO_UNITY_LIBRARY_SEED` / `…_SEED_MODE` (and `BMAD_AUTO_UNITY_LIBRARY_CACHE` for the fallback cache root — see the [Game Engine MCP guide](docs/game-engine-mcp-guide.md) for the full env reference); a [Unity Accelerator](https://docs.unity3d.com/Manual/UnityAccelerator.html) helps further, and `unity_path` pins the Editor binary. A cold worktree Editor takes time to launch and import — bump `ready_grace_sec`/`ready_timeout_sec` if your project's first import runs long. CoplayDev's single shared-server model isn't wired for a managed per-worktree launch — point `worktree_setup_cmd`/`worktree_teardown_cmd` at your own scripts under `.automator/engines/unity/`, or use shared mode.
+For `per_worktree`, set `editor_mode = "per_worktree"` with `[scm] isolation = "worktree"`. The bundled Unity plugin wires the worktree-Editor lifecycle against the **IvanMurzak** CLI (`open` / `setup-mcp` / `close`, which key off the project path with auto port detection — verified against v0.81.1). A fresh worktree has no `Library` (it's gitignored), and opening Unity on an empty `Library` forces a cold full reimport that crashes the import workers on a real project — so the setup hook **primes** the worktree's `Library` with a reflink/CoW copy of your warm main `Library` (`<repo>/Library`), near-instant on btrfs/xfs, making the import incremental; it falls back to a deep copy, then to a symlinked empty cache under the gitignored `.automator/cache/`, off-CoW or when no warm `Library` exists. Tune this with `BMAD_AUTO_UNITY_LIBRARY_SEED` / `…_SEED_MODE` (and `BMAD_AUTO_UNITY_LIBRARY_CACHE` for the fallback cache root — see the [Game Engine MCP guide](docs/game-engine-mcp-guide.md) for the full env reference); a [Unity Accelerator](https://docs.unity3d.com/Manual/UnityAccelerator.html) helps further, and `unity_path` pins the Editor binary. A cold worktree Editor takes time to launch and import — bump `ready_grace_sec`/`ready_timeout_sec` if your project's first import runs long. CoplayDev's single shared-server model isn't wired for a managed per-worktree launch — point `worktree_setup_cmd`/`worktree_teardown_cmd` at your own scripts under `.automator/plugins/unity/`, or use shared mode.
 
 ## Run state
 

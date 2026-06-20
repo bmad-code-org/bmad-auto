@@ -75,15 +75,18 @@ Which testarch skills become orchestrated vs. stay interactive?
 
 ## Integrate BMAD GDS game-test items
 
-**Status:** exploring · **Foundation:** opt-in `[engine]` game-engine layer landed (Unity, shared + per_worktree)
+**Status:** exploring · **Foundation:** opt-in game-engine layer landed (Unity, shared + per_worktree), now riding the general plugin system
 
-The opt-in `[engine]` layer (`docs/FEATURES.md` → "Game-engine projects") already lets a Unity
-project run its dev/sweep cycle against a live Editor MCP in **shared** mode (agent works in place
-on the operator's open Editor; a readiness gate blocks until the Editor + MCP are up) and in
-**per_worktree** mode (one managed Editor per worktree, with reflink/CoW `Library` priming,
-setup/teardown hooks, and MCP-skill seeding via `seed_globs`). Next steps: batchmode `verify_cmd`
-and Godot/Unreal plugins on the same TOML+scripts shape — the authoring path is documented in
-[Writing a Game Engine plugin](game-engine-plugin-guide.md) and
+The opt-in Unity plugin (`docs/FEATURES.md` → "Game-engine projects"), enabled with
+`[plugins] enabled = ["unity"]`, already lets a Unity project run its dev/sweep cycle against a
+live Editor MCP in **shared** mode (agent works in place on the operator's open Editor; a readiness
+gate blocks until the Editor + MCP are up) and in **per_worktree** mode (one managed Editor per
+worktree, with reflink/CoW `Library` priming, setup/teardown hooks, and MCP-skill seeding via
+`seed_globs`). The game-engine layer is no longer bespoke core code — it's a plugin built on the
+general [plugin system](plugin-authoring-guide.md) (the legacy `[engine]` block is a deprecated
+compatibility shim, folded onto `[plugins.unity]` at load time). Next steps: batchmode `verify_cmd`
+and Godot/Unreal plugins on the same `plugin.toml`+scripts shape — the authoring path is documented
+in [Writing a Game Engine plugin](game-engine-plugin-guide.md) and
 [Writing a plugin for a specific Editor MCP](game-engine-mcp-guide.md).
 
 The BMAD **GDS** module (game dev — Unity / Unreal / Godot) carries its own testing track via the

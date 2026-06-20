@@ -51,8 +51,10 @@ mcp = "ivanmurzak"
 
 > **Legacy `[engine]` still works.** A pre-migration `[engine] name = "unity"`
 > block loads with a deprecation warning, folded into the `[plugins]` allowlist
-> plus a `[plugins.unity]` table. A legacy `.automator/engines/unity/` override
-> dir also still loads through a compatibility shim. Migrate to `[plugins]` when
+> plus a `[plugins.unity]` table. The _policy block_ is the only thing folded,
+> though — project-local plugin overrides are now discovered under
+> `.automator/plugins/<name>/`, so move an old `.automator/engines/unity/`
+> override dir to `.automator/plugins/unity/`. Migrate to `[plugins]` when
 > convenient.
 
 ## Mapping the Editor lifecycle onto hook stages
