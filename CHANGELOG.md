@@ -5,10 +5,16 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [Unreleased]
+## [0.4.4] — 2026-06-19
 
 ### Fixed
 
+- Unity `per_worktree`: auto-recover merge-back when a competing Editor leaks asset writes
+  (`.cs.meta` GUIDs, asmdef edits) into the **main** checkout. Previously git refused the merge
+  pre-flight because the target already held the unit's incoming files as dirt, escalating the unit
+  spuriously. Merge-back now cleans only the leaked copies of this branch's incoming files (journaled
+  as `merge-target-cleaned`); dirt outside the branch's path set still escalates as possible operator
+  work, with a distinct message.
 - Unity `per_worktree`: route **every** worktree CLI's MCP config at the worktree's Editor, not
   just the dev agent. When dev and review use different CLIs (e.g. `dev=claude`, `review=codex`),
   the review agent could read a main-repo-seeded config and route its asset writes into the main
@@ -301,6 +307,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.4.4]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.4
 [0.4.3]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.3
 [0.4.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.1

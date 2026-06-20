@@ -12,7 +12,7 @@
       "name": "bauto",
       "source": "./src/automator/data/skills",
       "description": "Automation-mode skills driven by the bmad-auto orchestrator: unattended dev (bmad-auto-dev), adversarial review (bmad-auto-review), and deferred-work sweep triage (bmad-auto-sweep)",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "author": {
         "name": "pinkyd"
       },

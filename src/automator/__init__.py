@@ -6,4 +6,4 @@ on disk: sprint-status.yaml (owned by the skills, read-only here),
 spec files, and the per-run directory under .automator/runs/.
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
