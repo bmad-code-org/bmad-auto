@@ -6,7 +6,7 @@
 
 Plain Python drives the loop — **pick story → implement → adversarially review → verify → commit** — while LLMs do only the creative work, inside disposable, fresh-context coding-agent sessions you can attach to and watch.
 
-[![CI](https://github.com/pbean/bmad-automator/actions/workflows/ci.yml/badge.svg)](https://github.com/pbean/bmad-automator/actions/workflows/ci.yml)
+[![CI](https://github.com/bmad-code-org/bmad-auto/actions/workflows/ci.yml/badge.svg)](https://github.com/bmad-code-org/bmad-auto/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%E2%80%933.14-blue)
 ![CLIs](https://img.shields.io/badge/agents-claude%20%C2%B7%20codex%20%C2%B7%20gemini-8a2be2)
 ![No LLM in the loop](https://img.shields.io/badge/control%20loop-deterministic-success)
@@ -25,7 +25,7 @@ Plain Python drives the loop — **pick story → implement → adversarially re
 
 ## Why bmad-auto
 
-Inspired by the official [bmad-automator](https://github.com/bmad-code-org/bmad-automator), it takes a token-optimized approach in which the orchestrator is ordinary code rather than an LLM session in the control loop:
+Inspired by the original [bmad-automator](https://github.com/bmad-code-org/bmad-automator) (a separate, legacy project), it takes a token-optimized approach in which the orchestrator is ordinary code rather than an LLM session in the control loop:
 
 - 🧠 **No LLM in the control loop.** Story selection, retry budgets, gates, and completion checks are code, not prompts — so they're deterministic, debuggable, and free.
 - 📡 **No pane-scraping.** Coding-agent hooks (`Stop` / `SessionStart` / `SessionEnd` / `PreCompact`) write structured event files the orchestrator watches; skills in automation mode write a machine-readable `result.json` at the end of each workflow.
@@ -204,7 +204,7 @@ Bundle dev sessions can themselves append new deferred entries (split-off goals,
 
 ## Installing the skill module
 
-The orchestrator drives its own forks of the BMAD dev/review skills — your standard BMAD install is never modified. The five skills are bundled in the `bmad-automator` wheel (canonical source: `src/automator/data/skills/`, BMAD module code `bauto`) so `bmad-auto init` lays them down for you:
+The orchestrator drives its own forks of the BMAD dev/review skills — your standard BMAD install is never modified. The five skills are bundled in the `bmad-auto` wheel (canonical source: `src/automator/data/skills/`, BMAD module code `bauto`) so `bmad-auto init` lays them down for you:
 
 | Skill               | Role                                                                      |
 | ------------------- | ------------------------------------------------------------------------- |
@@ -218,10 +218,10 @@ The orchestrator drives its own forks of the BMAD dev/review skills — your sta
 
 ```bash
 # latest from main (tracks HEAD — newest features, less stable):
-uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git"
 
 # OR a pinned release tag (reproducible — recommended for day-to-day use):
-uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git@v0.3.0"
+uv tool install "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git@v0.5.1"
 
 bmad-auto init --project /path/to/project --cli claude   # add --cli codex/gemini as needed
 claude "/bmad-auto-setup accept all defaults"            # registers _bmad/ config + help
@@ -242,15 +242,15 @@ claude "/bmad-auto-setup upgrade"
 ```bash
 # 1. upgrade the tool. --reinstall is required for a git source: a plain
 #    `uv tool upgrade` reuses the cached commit and won't pull new code.
-uv tool upgrade bmad-automator --reinstall                 # follows main or your pinned tag
+uv tool upgrade bmad-auto --reinstall                      # follows main or your pinned tag
 #    to move to a newer tag, re-run install with the new ref:
-#    uv tool install --force "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git@v0.3.0"
+#    uv tool install --force "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git@v0.5.1"
 
 # 2. re-lay the refreshed skills into EACH project that uses bmad-auto:
 bmad-auto init --project /path/to/project --force-skills
 ```
 
-Your `.automator/policy.toml` is left untouched on upgrade — new keys are optional and fall back to their defaults, so configs survive. Check the [CHANGELOG / releases](https://github.com/pbean/bmad-automator/releases) for what changed between tags.
+Your `.automator/policy.toml` is left untouched on upgrade — new keys are optional and fall back to their defaults, so configs survive. Check the [CHANGELOG / releases](https://github.com/bmad-code-org/bmad-auto/releases) for what changed between tags.
 
 **Via the BMAD-method installer.** The installer also copies the five `bmad-auto-*` skills into your project (but not the orchestrator tool). Finish setup with `/bmad-auto-setup`, which installs the tool from Git, asks which coding CLIs to drive, registers their hooks (`init` skips the already-present skills), and runs the preflight:
 

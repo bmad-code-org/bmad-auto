@@ -1,9 +1,20 @@
 # Changelog
 
-All notable changes to `bmad-automator` are documented here. The format is based on
+All notable changes to `bmad-auto` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
+
+## [0.5.1] — 2026-06-20
+
+### Changed
+
+- **Renamed the project and package to `bmad-auto`.** The distributable is now `bmad-auto`
+  (install with `uv tool install 'bmad-auto[tui]'`) and the repo has moved to the BMAD org at
+  [bmad-code-org/bmad-auto](https://github.com/bmad-code-org/bmad-auto). The CLI command, skills
+  (`bmad-auto-*`), tmux sessions, and `BMAD_AUTO_*` env vars are unchanged. The separate legacy
+  [bmad-automator](https://github.com/bmad-code-org/bmad-automator) project is unrelated and stays
+  as-is. Re-run `uv tool upgrade bmad-auto --reinstall` to move an existing install onto the new name.
 
 ## [0.5.0] — 2026-06-20
 
@@ -345,14 +356,15 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
-[0.5.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.5.0
-[0.4.4]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.4
-[0.4.3]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.3
-[0.4.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.2
-[0.4.1]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.1
-[0.4.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.0
-[0.3.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.2
-[0.3.1]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.1
-[0.3.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.3.0
-[0.2.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.2.0
-[0.1.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.1.0
+[0.5.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.1
+[0.5.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.0
+[0.4.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.4
+[0.4.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.3
+[0.4.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.2
+[0.4.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.1
+[0.4.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.0
+[0.3.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.3.2
+[0.3.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.3.1
+[0.3.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.3.0
+[0.2.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.2.0
+[0.1.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.1.0

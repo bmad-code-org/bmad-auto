@@ -620,7 +620,7 @@ def test_cli_tui_hint_without_textual(project, monkeypatch, capsys):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     rc = cli.main(["tui", "--project", str(project.project)])
     assert rc == 1
-    assert "bmad-automator[tui]" in capsys.readouterr().err
+    assert "bmad-auto[tui]" in capsys.readouterr().err
 
 
 async def test_settings_binding_opens_editor(project):

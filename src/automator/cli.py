@@ -723,7 +723,7 @@ def cmd_tui(args: argparse.Namespace) -> int:
         if (e.name or "").partition(".")[0] in ("textual", "tomlkit"):
             print(
                 "error: the TUI requires optional dependencies — "
-                "uv tool install 'bmad-automator[tui]'",
+                "uv tool install 'bmad-auto[tui]'",
                 file=sys.stderr,
             )
             return 1
@@ -879,7 +879,7 @@ def main(argv: list[str] | None = None) -> int:
     tui_p = add(
         "tui",
         cmd_tui,
-        "interactive dashboard (needs `uv tool install 'bmad-automator[tui]'`)",
+        "interactive dashboard (needs `uv tool install 'bmad-auto[tui]'`)",
     )
     tui_p.add_argument(
         "--low-frame-rate",

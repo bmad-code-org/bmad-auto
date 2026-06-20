@@ -1,6 +1,6 @@
 # Setup guide
 
-This module is two things: the five `bmad-auto-*` skills and the `bmad-automator`
+This module is two things: the five `bmad-auto-*` skills and the `bmad-auto`
 orchestrator tool (the Python program that actually drives the loop). The skills do
 nothing on their own — the orchestrator is what spawns the fresh coding-CLI sessions
 that invoke `bmad-auto-dev`, `bmad-auto-review`, `bmad-auto-sweep`, and
@@ -21,7 +21,7 @@ The BMAD-method installer copies the five `bmad-auto-*` skill directories into y
 project. It does **not** carry the orchestrator tool — the installer copies only skill
 directories, not their sibling files, so the tool can't ride along in the skill folder.
 It is installed separately from Git by the setup skill. The canonical source is
-<https://github.com/pbean/bmad-automator>. (Going the other way, the tool's wheel
+<https://github.com/bmad-code-org/bmad-auto>. (Going the other way, the tool's wheel
 bundles the skills, so `bmad-auto init` can install them without the BMAD installer —
 when the installer already placed them, `init` simply skips the existing copies.)
 
@@ -36,9 +36,9 @@ claude "/bmad-auto-setup accept all defaults"
 1. Merges the module's config into `_bmad/config.yaml` (+ personal settings into the
    gitignored `_bmad/config.user.yaml`) and registers its help entries in
    `_bmad/module-help.csv`.
-2. Installs **or upgrades** the `bmad-automator` tool from Git (see
+2. Installs **or upgrades** the `bmad-auto` tool from Git (see
    [Installing the tool and TUI](#installing-the-tool-and-tui)). On an upgrade it runs
-   `uv tool upgrade bmad-automator --reinstall`.
+   `uv tool upgrade bmad-auto --reinstall`.
 3. Asks **which coding CLI(s)** the orchestrator should drive, then runs `bmad-auto init`
    to install the `bmad-auto-*` skills + register hooks + write the `.automator/policy.toml`
    template + add gitignore entries (see [Choosing which CLIs to drive](#choosing-which-clis-to-drive)
@@ -103,7 +103,7 @@ The `[tui]` extra pulls in the Textual dashboard (`textual` + `tomlkit` + `pyte`
 **Together (recommended):**
 
 ```bash
-uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git"
 ```
 
 **Tool first, TUI later (separately):** install the core without the extra, then add the
@@ -111,14 +111,14 @@ dashboard whenever you want it by re-running the same command **with** `[tui]`:
 
 ```bash
 # core tool only
-uv tool install "bmad-automator @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-auto @ git+https://github.com/bmad-code-org/bmad-auto.git"
 
 # add the TUI later — re-run with the extra (uv upgrades the install in place)
-uv tool install --upgrade "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install --upgrade "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git"
 ```
 
 Until the extra is present, `bmad-auto tui` prints a clear error
-(`the TUI requires optional dependencies — uv tool install 'bmad-automator[tui]'`) rather than
+(`the TUI requires optional dependencies — uv tool install 'bmad-auto[tui]'`) rather than
 failing obscurely.
 
 `uv tool install` drops `bmad-auto` into uv's own managed tool environment, so there's no
@@ -126,7 +126,7 @@ PEP 668 externally-managed conflict and no need for a virtualenv, `--user`, or `
 
 To upgrade later, the simplest path is to re-run `/bmad-auto-setup` (or `/bmad-auto-setup
 upgrade`) — it detects the existing install, upgrades the tool with `uv tool upgrade
-bmad-automator --reinstall` (the `--reinstall` is **required** for a git source — a plain
+bmad-auto --reinstall` (the `--reinstall` is **required** for a git source — a plain
 `uv tool upgrade` reuses the cached commit and won't pull new code), and re-lays the
 per-project skills with `bmad-auto init --force-skills`. To do it by hand, run those two
 commands yourself (see the [Upgrading](../README.md#upgrading) section of the README).

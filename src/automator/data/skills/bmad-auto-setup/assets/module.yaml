@@ -1,12 +1,12 @@
 code: bauto
-name: BMAD Automator Skills
+name: BMAD Auto Skills
 description: "Automation-mode skills driven by the bmad-auto orchestrator: unattended dev (bmad-auto-dev), adversarial review (bmad-auto-review), and deferred-work sweep triage (bmad-auto-sweep)"
-module_version: 0.5.0
+module_version: 0.5.1
 default_selected: false
 module_greeting: >
-  BMAD Automator installed — both the four automation skills and the
+  BMAD Auto installed — both the four automation skills and the
   bmad-auto orchestrator tool (the Python program that drives the loop). Setup
-  installed the `bmad-automator` package from its Git repository with
+  installed the `bmad-auto` package from its Git repository with
   `uv tool install`, ran `bmad-auto init` (skills + hooks + policy + gitignore),
   and `bmad-auto validate`
   (preflight). The skills

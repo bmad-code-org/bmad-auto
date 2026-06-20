@@ -1,11 +1,11 @@
 ---
 name: bmad-release
-description: "Development-only release driver for bmad-automator itself: curate the CHANGELOG for a target version, then bump + regenerate assets + commit on a branch ready for PR. Invoked as /bmad-release <version>. NOT a shipped module skill — never installed by bmad-auto init."
+description: "Development-only release driver for bmad-auto itself: curate the CHANGELOG for a target version, then bump + regenerate assets + commit on a branch ready for PR. Invoked as /bmad-release <version>. NOT a shipped module skill — never installed by bmad-auto init."
 ---
 
 # bmad-release
 
-Standardized release prep for the **bmad-automator repo itself**. You curate the
+Standardized release prep for the **bmad-auto repo itself**. You curate the
 CHANGELOG entry (the judgement step) and drive the deterministic engine
 (`scripts/release.py`). The engine handles version stamping, conditional asset
 regeneration, tagging metadata, and the commit; the GitHub tag + release are then
@@ -13,7 +13,7 @@ created automatically by `.github/workflows/release.yml` when the PR merges to `
 
 Read `RELEASING.md` at the repo root for the full standard before you start.
 
-> **Scope:** dev-only. This skill exists only to develop bmad-automator and must
+> **Scope:** dev-only. This skill exists only to develop bmad-auto and must
 > never be added to `MODULE_SKILLS`, `marketplace.json`, `module.yaml`, or
 > `_bmad/module-help.csv`. A project that runs `bmad-auto init` never receives it.
 

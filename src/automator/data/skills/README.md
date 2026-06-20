@@ -1,10 +1,10 @@
-# BMAD Automator module (`bauto`)
+# BMAD Auto module (`bauto`)
 
 A BMAD module pairing the automation skills with the
-[bmad-auto orchestrator tool](https://github.com/pbean/bmad-automator) (the
+[bmad-auto orchestrator tool](https://github.com/bmad-code-org/bmad-auto) (the
 Python program that drives the loop). The skills can be installed by the BMAD
 installer, or laid down by `bmad-auto init` (the orchestrator's wheel **bundles**
-them); either way `bmad-auto-setup` installs the `bmad-automator` package from its
+them); either way `bmad-auto-setup` installs the `bmad-auto` package from its
 Git repository, so installing this module gives you a working system — skills
 plus the orchestrator that invokes them. Standard BMAD installs are never
 modified; the skills are automator-owned forks maintained against their upstream
@@ -12,7 +12,7 @@ counterparts.
 
 | Component           | Forked from          | Role                                                                                                                                              |
 | ------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bmad-automator`    | — (this repo, Git)   | the orchestrator: ralph-loop, hooks, tmux adapters, TUI. CLI `bmad-auto`. Installed by `bmad-auto-setup` from Git.                                |
+| `bmad-auto`         | — (this repo, Git)   | the orchestrator: ralph-loop, hooks, tmux adapters, TUI. CLI `bmad-auto`. Installed by `bmad-auto-setup` from Git.                                |
 | `bmad-auto-dev`     | `bmad-quick-dev`     | unattended implementation: story key / feedback file / dw-bundle → spec + code + result.json                                                      |
 | `bmad-auto-review`  | `bmad-code-review`   | unattended adversarial review of a dev spec in a fresh context                                                                                    |
 | `bmad-auto-resolve` | — (automator-native) | interactive CRITICAL-escalation resolution: a human disambiguates a frozen spec so a paused story can be re-driven (`/bmad-auto-resolve <story>`) |
@@ -25,7 +25,7 @@ The orchestrator tool now bundles these skills, so `bmad-auto init` lays them
 down for you:
 
 ```bash
-uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+uv tool install "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git"
 bmad-auto init --project /path/to/project --cli claude   # add --cli codex/gemini as needed
 claude "/bmad-auto-setup accept all defaults"            # registers _bmad/ config + help
 ```
@@ -57,8 +57,8 @@ overrides as `bmad-auto-dev.toml` / `bmad-auto-review.toml`.
   here, re-copy the skill dirs into both trees.
 - The orchestrator tool is **not** bundled in the skill dirs — the BMAD installer
   copies only the skill directories, so a sibling `tool/` would never reach an
-  installed project. `bmad-auto-setup` installs the `bmad-automator` package from
-  <https://github.com/pbean/bmad-automator> (`src/automator`, `pyproject.toml`
+  installed project. `bmad-auto-setup` installs the `bmad-auto` package from
+  <https://github.com/bmad-code-org/bmad-auto> (`src/automator`, `pyproject.toml`
   are canonical at the repo root). (The skills, by contrast, ride along inside
   the package wheel.)
 - The forks keep the upstream file structure. To pull upstream improvements:

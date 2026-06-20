@@ -1,13 +1,13 @@
 ---
 name: "bmad-auto-setup"
-description: Sets up BMAD Automator Skills module in a project. Use when the user requests to 'install bmad-auto module', 'configure BMAD Automator Skills', or 'setup BMAD Automator Skills'.
+description: Sets up BMAD Auto Skills module in a project. Use when the user requests to 'install bmad-auto module', 'configure BMAD Auto Skills', or 'setup BMAD Auto Skills'.
 ---
 
 # Module Setup
 
 ## Overview
 
-Installs, configures, **and upgrades** a BMad module in a project. This module is special: alongside the four automation skills it relies on the **bmad-auto orchestrator tool** (the Python program that drives the loop), installed as the `bmad-automator` package from its public Git repository. So setup does two jobs — (1) register module config + help entries, and (2) install **or upgrade** the orchestrator tool and bootstrap the project so it is ready to run.
+Installs, configures, **and upgrades** a BMad module in a project. This module is special: alongside the four automation skills it relies on the **bmad-auto orchestrator tool** (the Python program that drives the loop), installed as the `bmad-auto` package from its public Git repository. So setup does two jobs — (1) register module config + help entries, and (2) install **or upgrade** the orchestrator tool and bootstrap the project so it is ready to run.
 
 The same skill handles both first-time setup and **upgrades**. When it detects an existing bmad-auto install (or you ask it to `upgrade`), it upgrades the orchestrator tool, refreshes the per-project `bmad-auto-*` skill copies, and re-stamps config — the two-step upgrade ritual, run for you. A plain re-run on an already-installed project is treated as an upgrade.
 
@@ -34,7 +34,7 @@ Both config scripts use an anti-zombie pattern — existing entries for this mod
 
 - The user asked for one in their arguments — `upgrade`, `update`, `upgrade tool and skills`, or similar.
 - `{project-root}/_bmad/config.yaml` already has a `bauto` section (step 2 above).
-- The orchestrator tool is already installed under uv: run `uv tool list` and look for a `bmad-automator` entry. (A bare `bmad-auto --version` is **not** sufficient on its own — it can be satisfied by a source checkout or unrelated virtualenv; see step 1 of "Install the Orchestrator Tool".)
+- The orchestrator tool is already installed under uv: run `uv tool list` and look for a `bmad-auto` entry. (A bare `bmad-auto --version` is **not** sufficient on its own — it can be satisfied by a source checkout or unrelated virtualenv; see step 1 of "Install the Orchestrator Tool".)
 
 Otherwise it is a **fresh install**. State the decision to the user before proceeding — e.g. "Detected an existing bmad-auto install — running an upgrade: tool + skills + config" or "No existing install detected — running a fresh setup". When the signals conflict (e.g. config has a `bauto` section but the tool isn't uv-managed), prefer the upgrade path for whatever **is** present and call out what's missing.
 
@@ -71,37 +71,37 @@ After writing config, create any output directories that were configured. For fi
 
 ## Install the Orchestrator Tool
 
-This module ships the **bmad-auto orchestrator** — the Python program that actually drives the loop — as the `bmad-automator` Python package, installed from its public Git repository. The four skills do nothing on their own: the orchestrator is what spawns the fresh Claude Code sessions that invoke `bmad-auto-dev`, `bmad-auto-review`, and `bmad-auto-sweep`, watches their hook signals, and verifies their artifacts. Installing the tool is therefore part of setup, not an optional extra.
+This module ships the **bmad-auto orchestrator** — the Python program that actually drives the loop — as the `bmad-auto` Python package, installed from its public Git repository. The four skills do nothing on their own: the orchestrator is what spawns the fresh Claude Code sessions that invoke `bmad-auto-dev`, `bmad-auto-review`, and `bmad-auto-sweep`, watches their hook signals, and verifies their artifacts. Installing the tool is therefore part of setup, not an optional extra.
 
-> **Why is the tool installed from Git?** The BMAD installer copies only the four skill directories into a project — it does **not** carry sibling files, so the tool can't ride along in the skill folder; it's installed from Git instead. The canonical source is <https://github.com/pbean/bmad-automator>. (The reverse holds, though: the tool's wheel **bundles** the four skills, so `bmad-auto init` lays them down into a project's skill trees on its own — see step 3.)
+> **Why is the tool installed from Git?** The BMAD installer copies only the four skill directories into a project — it does **not** carry sibling files, so the tool can't ride along in the skill folder; it's installed from Git instead. The canonical source is <https://github.com/bmad-code-org/bmad-auto>. (The reverse holds, though: the tool's wheel **bundles** the four skills, so `bmad-auto init` lays them down into a project's skill trees on its own — see step 3.)
 
 Unless the user explicitly asked to skip it (e.g. `skills only` / `--no-tool`), install **or upgrade** and bootstrap now. Which branch you take in step 2 follows the fresh-install-vs-upgrade decision from "On Activation". In the commands below, resolve `{project-root}` to the real project path before running.
 
-1. **Check what's already on PATH:** run `bmad-auto --version`. A version printing here does **not** mean this project is set up — it only means _some_ `bmad-auto` is importable in the current environment. Before trusting it, run `uv tool list` and look for `bmad-automator`: if it's absent (the on-PATH copy comes from a source checkout or an unrelated virtualenv), warn the user that the active environment is shadowing a clean install and that the project would be relying on that checkout. Unless the user explicitly declines, install/upgrade from the canonical source below so the project doesn't depend on an incidental dev environment. Only skip the install if the user confirms the on-PATH copy is the one they want this project to use.
+1. **Check what's already on PATH:** run `bmad-auto --version`. A version printing here does **not** mean this project is set up — it only means _some_ `bmad-auto` is importable in the current environment. Before trusting it, run `uv tool list` and look for `bmad-auto`: if it's absent (the on-PATH copy comes from a source checkout or an unrelated virtualenv), warn the user that the active environment is shadowing a clean install and that the project would be relying on that checkout. Unless the user explicitly declines, install/upgrade from the canonical source below so the project doesn't depend on an incidental dev environment. Only skip the install if the user confirms the on-PATH copy is the one they want this project to use.
 
 2. **Install or upgrade from the Git repository** (the `[tui]` extra pulls in the Textual dashboard so `bmad-auto tui` works). `uv tool install` puts `bmad-auto` in uv's own managed environment, so there's no PEP 668 externally-managed conflict and no need for `--user`, an activated virtualenv, or `--break-system-packages`.
 
-   - **Fresh install** (no uv-managed `bmad-automator`):
+   - **Fresh install** (no uv-managed `bmad-auto`):
 
      ```bash
-     uv tool install "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git"
+     uv tool install "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git"
      ```
 
      Pin a release tag for reproducibility by appending `@v<X.Y.Z>` to the Git URL.
 
-   - **Upgrade** (uv already manages `bmad-automator`, per the "On Activation" decision):
+   - **Upgrade** (uv already manages `bmad-auto`, per the "On Activation" decision):
 
      1. Record the current version first so you can report the delta: `bmad-auto --version`.
      2. Default — follow `main` (or the currently pinned tag):
 
         ```bash
-        uv tool upgrade bmad-automator --reinstall
+        uv tool upgrade bmad-auto --reinstall
         ```
 
         The `--reinstall` is **required** for a Git source: a plain `uv tool upgrade` reuses the cached commit and won't pull new code. Then **offer to pin a release tag** for reproducibility — if the user wants a specific version, move to it with:
 
         ```bash
-        uv tool install --force "bmad-automator[tui] @ git+https://github.com/pbean/bmad-automator.git@v<X.Y.Z>"
+        uv tool install --force "bmad-auto[tui] @ git+https://github.com/bmad-code-org/bmad-auto.git@v<X.Y.Z>"
         ```
 
      3. Re-run `bmad-auto --version` and note the before → after for the confirmation step.

@@ -1,4 +1,4 @@
-# Releasing `bmad-automator`
+# Releasing `bmad-auto`
 
 One standardized flow. Cutting a release is: **pick a version → curate the
 CHANGELOG → run `prepare` → open a PR → merge.** Everything mechanical (version
@@ -98,7 +98,7 @@ messages or raw info dumps**:
 
 ## The `/bmad-release` skill
 
-`/bmad-release` is a **development-only** skill for working on `bmad-automator`
+`/bmad-release` is a **development-only** skill for working on `bmad-auto`
 itself. It takes the target version, runs `release.py commits`, curates the
 CHANGELOG entry, shows it to you for approval, then runs `release.py prepare`.
 

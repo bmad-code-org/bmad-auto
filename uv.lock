@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
-name = "bmad-automator"
-version = "0.5.0"
+name = "bmad-auto"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
