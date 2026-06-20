@@ -5,7 +5,7 @@ All notable changes to `bmad-automator` are documented here. The format is based
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [Unreleased]
+## [0.5.0] — 2026-06-20
 
 ### Added
 
@@ -21,6 +21,12 @@ breaking changes may land in a minor release.
   (presentation only; defaults/options referenced from the `policy.py` dataclasses, never
   duplicated), the TUI settings screen renders from a registry, and an enabled plugin's
   `[[settings]]` appear under `[plugins.<name>]`.
+- **Workflow plugins.** A plugin can declare a `[workflows.<name>]` table that injects an extra
+  agent session at a lifecycle stage (`post_dev_phase` / `post_review_result`, run by the `dev` or
+  `review` adapter); the prompt substitutes `{story_key}`/`{run_id}`/`{scripts}`. Non-blocking by
+  default (advisory); a blocking workflow that fails routes through the normal defer path. Ships
+  with a worked-example plugin (`examples/plugins/guardrails/`) exercising every extension point and
+  a full [plugin-authoring guide](docs/plugin-authoring-guide.md).
 
 ### Changed
 
@@ -339,6 +345,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.5.0]: https://github.com/pbean/bmad-automator/releases/tag/v0.5.0
 [0.4.4]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.4
 [0.4.3]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.3
 [0.4.2]: https://github.com/pbean/bmad-automator/releases/tag/v0.4.2

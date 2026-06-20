@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bmad-automator"
-version = "0.4.4"
+version = "0.5.0"
 description = "Deterministic ralph-loop orchestrator for the BMAD implementation phase"
 readme = "README.md"
 requires-python = ">=3.11"
