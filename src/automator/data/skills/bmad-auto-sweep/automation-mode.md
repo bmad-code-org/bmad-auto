@@ -14,9 +14,7 @@ field-by-field, and will kill this session after your final turn.
   {
     "workflow": "deferred-sweep-triage",
     "open_ids": ["DW-1", "DW-3", "..."],
-    "already_resolved": [
-      { "id": "DW-1", "evidence": "<file:line or commit that resolved it>" }
-    ],
+    "already_resolved": [{ "id": "DW-1", "evidence": "<file:line or commit that resolved it>" }],
     "bundles": [
       {
         "name": "<kebab-case-name>",
@@ -24,9 +22,7 @@ field-by-field, and will kill this session after your final turn.
         "intent": "<2-6 sentences: the one cohesive goal>"
       }
     ],
-    "blocked": [
-      { "id": "DW-4", "blocker": "<named story/epic that must land first>" }
-    ],
+    "blocked": [{ "id": "DW-4", "blocker": "<named story/epic that must land first>" }],
     "skip": [{ "id": "DW-9", "reason": "<why this is moot/superseded>" }],
     "decisions": [
       {

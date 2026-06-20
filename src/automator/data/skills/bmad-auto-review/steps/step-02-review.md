@@ -1,5 +1,5 @@
 ---
-failed_layers: "" # set at runtime: comma-separated list of layers that failed or returned empty
+failed_layers: '' # set at runtime: comma-separated list of layers that failed or returned empty
 ---
 
 # Step 2: Review

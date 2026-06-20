@@ -35,6 +35,11 @@ lint:
     - linters: [bandit]
       paths:
         - tests/**
+    # CODE_OF_CONDUCT.md is the verbatim Contributor Covenant; keep it byte-identical to
+    # upstream (prettier would rewrite its * bullets). Mirrors BMAD-METHOD's ignore.
+    - linters: [markdownlint, prettier]
+      paths:
+        - .github/CODE_OF_CONDUCT.md
 actions:
   disabled:
     - trunk-announce

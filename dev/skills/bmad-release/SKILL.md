@@ -1,6 +1,6 @@
 ---
 name: bmad-release
-description: "Development-only release driver for bmad-auto itself: curate the CHANGELOG for a target version, then bump + regenerate assets + commit on a branch ready for PR. Invoked as /bmad-release <version>. NOT a shipped module skill — never installed by bmad-auto init."
+description: 'Development-only release driver for bmad-auto itself: curate the CHANGELOG for a target version, then bump + regenerate assets + commit on a branch ready for PR. Invoked as /bmad-release <version>. NOT a shipped module skill — never installed by bmad-auto init.'
 ---
 
 # bmad-release

@@ -7,6 +7,9 @@ name = "bmad-auto"
 version = "0.5.1"
 description = "Deterministic ralph-loop orchestrator for the BMAD implementation phase"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "BMad Code, LLC" }]
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6.0"]
 

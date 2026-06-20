@@ -20,3 +20,10 @@ guides below go deeper, roughly in the order you'll need them.
 - **[Roadmap](ROADMAP.md)** — planned and intentionally-deferred work.
 
 For released changes, see the [CHANGELOG](../CHANGELOG.md).
+
+## Contributing & community
+
+- **[Contributing guide](../CONTRIBUTING.md)** — dev setup (uv + trunk), PR guidelines, and conventional commits.
+- **[Code of Conduct](../.github/CODE_OF_CONDUCT.md)** — the Contributor Covenant we follow.
+- **[Security policy](../SECURITY.md)** — how to report a vulnerability and what's in scope.
+- **[Trademark guidelines](../TRADEMARK.md)** — proper use of the BMad name and brand.

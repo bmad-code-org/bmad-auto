@@ -1,5 +1,5 @@
 ---
-name: "bmad-auto-setup"
+name: 'bmad-auto-setup'
 description: Sets up BMAD Auto Skills module in a project. Use when the user requests to 'install bmad-auto module', 'configure BMAD Auto Skills', or 'setup BMAD Auto Skills'.
 ---
 

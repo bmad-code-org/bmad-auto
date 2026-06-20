@@ -1,14 +1,24 @@
-# Prettier friendly markdownlint config (all formatting rules disabled)
-extends: markdownlint/style/prettier
-# MD033 (no-inline-html) and MD036 (no-emphasis-as-heading) misfire on this repo's
-# content: the skill templates use angle-bracket *notation* (placeholders like
-# <branch>/<base>, decision markers like <D> <P> <W>, pseudo-tags like
-# <frozen-after-approval>) that markdownlint reads as HTML, and inline bold labels
-# (e.g. **Steps**, status banners) that are deliberately emphasis, not headings.
-MD033: false
-MD036: false
-# MD024 (no-duplicate-heading): CHANGELOG.md repeats ### Added / ### Changed /
-# ### Fixed under every version, which is the Keep a Changelog format. Restrict the
-# rule to sibling headings so same-named sections under different ## versions are fine.
+# Rule set mirrored from bmad-code-org/BMAD-METHOD (.markdownlint-cli2.yaml) so docs
+# render consistently with the rest of the org. Formatting is owned by prettier
+# (see prettier.config.mjs); markdownlint only enforces a small set of correctness rules.
+
+# Disable all rules by default; opt in to the few below.
+default: false
+
+# Heading levels should increment by one (h1 -> h2 -> h3, not h1 -> h3).
+MD001: true
+
+# Duplicate sibling headings only — CHANGELOG.md repeats ### Added / ### Changed /
+# ### Fixed under every ## version (Keep a Changelog), which must stay allowed.
 MD024:
   siblings_only: true
+
+# Trailing commas in headings (likely typos).
+MD026:
+  punctuation: ","
+
+# Bare URLs may not render as links in all parsers; use <url> or [text](url).
+MD034: true
+
+# Spaces inside emphasis markers break rendering (e.g. "* text *").
+MD037: true

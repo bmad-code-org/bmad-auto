@@ -1,6 +1,6 @@
 ---
 name: bmad-auto-review
-description: "Adversarial parallel-layer code review (Blind Hunter, Edge Case Hunter, Acceptance Auditor) with structured triage for the bmad-auto orchestrator: reviews a dev spec in a fresh context and writes result.json. Invoked as /bmad-auto-review <spec-file> by bmad-auto runs; for interactive review prefer bmad-code-review."
+description: 'Adversarial parallel-layer code review (Blind Hunter, Edge Case Hunter, Acceptance Auditor) with structured triage for the bmad-auto orchestrator: reviews a dev spec in a fresh context and writes result.json. Invoked as /bmad-auto-review <spec-file> by bmad-auto runs; for interactive review prefer bmad-code-review.'
 ---
 
 # Code Review Workflow

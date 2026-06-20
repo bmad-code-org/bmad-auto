@@ -1,8 +1,8 @@
 ---
-diff_output: "" # set at runtime
-spec_file: "" # set at runtime (path or empty)
-review_mode: "" # set at runtime: "full" or "no-spec"
-story_key: "" # set at runtime when discovered from sprint status
+diff_output: '' # set at runtime
+spec_file: '' # set at runtime (path or empty)
+review_mode: '' # set at runtime: "full" or "no-spec"
+story_key: '' # set at runtime when discovered from sprint status
 ---
 
 # Step 1: Gather Context

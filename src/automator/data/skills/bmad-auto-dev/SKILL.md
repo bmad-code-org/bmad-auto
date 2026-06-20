@@ -1,6 +1,6 @@
 ---
 name: bmad-auto-dev
-description: "Unattended implementation workflow for the bmad-auto orchestrator: turns a sprint story key, feedback file, or deferred-work bundle into a spec and working code, then writes result.json. Invoked as /bmad-auto-dev <story-key> by bmad-auto runs; for interactive development prefer bmad-quick-dev."
+description: 'Unattended implementation workflow for the bmad-auto orchestrator: turns a sprint story key, feedback file, or deferred-work bundle into a spec and working code, then writes result.json. Invoked as /bmad-auto-dev <story-key> by bmad-auto runs; for interactive development prefer bmad-quick-dev.'
 ---
 
 # Quick Dev Workflow

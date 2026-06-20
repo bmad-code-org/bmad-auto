@@ -1,0 +1,123 @@
+name: Bug Report
+description: File a bug report to help us improve bmad-auto
+title: "[BUG] "
+labels: bug
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report! Please fill out the information below to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Clear and concise description of what the bug is
+      placeholder: e.g., When I start a run, the loop hangs after the dev session ends
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the behavior
+      placeholder: |
+        1. Run 'bmad-auto run <story-key>'
+        2. Watch the TUI / journal
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen
+      placeholder: The run should advance to the review stage
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened
+      placeholder: The run stalled with no further journal output
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Add screenshots if applicable (paste images directly)
+      placeholder: Paste any relevant screenshots here
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area is this for?
+      description: Select the part of bmad-auto this issue relates to
+      options:
+        - Orchestrator / control loop
+        - TUI (dashboard)
+        - Plugins
+        - Skills (bmad-auto-*)
+        - CLI adapters & profiles
+        - Setup / init
+        - Not sure / Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: bmad-auto Version
+      description: "Check with: bmad-auto --version"
+      placeholder: e.g., 0.5.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cli
+    attributes:
+      label: Which coding CLI are you using?
+      options:
+        - Claude (claude)
+        - Codex (codex)
+        - Gemini (gemini)
+        - Cursor (cursor)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating System
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Copy and paste any relevant log output (journal, run directory, tmux session)
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirm
+      options:
+        - label: I've searched for existing issues
+          required: true
+        - label: I'm using the latest version
+          required: false

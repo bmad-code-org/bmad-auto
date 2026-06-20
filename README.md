@@ -10,6 +10,7 @@ Plain Python drives the loop — **pick story → implement → adversarially re
 ![Python](https://img.shields.io/badge/python-3.11%E2%80%933.14-blue)
 ![CLIs](https://img.shields.io/badge/agents-claude%20%C2%B7%20codex%20%C2%B7%20gemini-8a2be2)
 ![No LLM in the loop](https://img.shields.io/badge/control%20loop-deterministic-success)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 <img src="docs/images/dashboard.png" alt="The bmad-auto TUI dashboard: run picker, sprint tree, deferred-work ledger, a live per-story task table, and a colour-coded journal." width="900">
 
@@ -462,3 +463,11 @@ The hero **demo GIF** (`docs/images/demo.gif`) is generated the same headless wa
 - **[docs/tui-guide.md](docs/tui-guide.md)** — the complete TUI reference.
 - **[src/automator/data/skills/README.md](src/automator/data/skills/README.md)** — the `bauto` skill module overview.
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — planned/deferred orchestrator work and the rationale behind it.
+
+## Contributing
+
+Contributions are welcome. Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** — for anything bigger than a typo or small bug fix, talk to a maintainer on [Discord](https://discord.gg/gk8jAdXWmj) first. By participating you agree to our [Code of Conduct](.github/CODE_OF_CONDUCT.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## License
+
+bmad-auto is released under the [MIT License](LICENSE), © BMad Code, LLC. The BMad name and brand are trademarks of BMad Code, LLC and are **not** covered by the MIT License — see [TRADEMARK.md](TRADEMARK.md).
