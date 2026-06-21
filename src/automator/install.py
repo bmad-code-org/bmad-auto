@@ -4,7 +4,7 @@
 - idempotently merges hook registrations into each selected CLI's hook config
   (dialect + native->canonical event map come from the CLI profile)
 - installs the bundled bmad-auto-* skills into each selected CLI's skill tree
-  (.claude/skills for claude, .agents/skills for codex/gemini)
+  (.claude/skills for claude, .agents/skills for codex/gemini/copilot)
 - writes .automator/policy.toml from the template (if missing)
 - gitignores generated dirs: .automator/runs/ (per-run state) and
   .automator/cache/ (engine plugins' rebuildable caches, e.g. the Unity Library)
@@ -28,8 +28,12 @@ from .adapters.profile import ALIASES, CLIProfile, ProfileError, load_profiles
 from .policy import POLICY_TEMPLATE
 
 HOOK_SCRIPT_REL = ".automator/bmad_auto_hook.py"
-HOOK_MARKER = "bmad_auto_hook.py"
+# Dedup marker: matches any bmad-auto-managed hook command — both the signal
+# relay (bmad_auto_hook.py) and the probe-adapter capture hook
+# (bmad_auto_probe_hook.py) — so merge_hooks stays idempotent for either.
+HOOK_MARKER = "bmad_auto"
 GEMINI_HOOK_TIMEOUT_MS = 60_000
+COPILOT_HOOK_TIMEOUT_SEC = 60
 
 # The bmad-auto-* skills bundled in the wheel (automator/data/skills/) that
 # `bmad-auto init` lays down. They must be installed together — bmad-auto-review
@@ -56,6 +60,9 @@ def _hook_entry(dialect: str, command: str) -> dict:
     if dialect == "gemini-settings-json":
         handler["timeout"] = GEMINI_HOOK_TIMEOUT_MS  # Gemini timeouts are milliseconds
         return {"matcher": "", "hooks": [handler]}
+    if dialect == "copilot-settings-json":
+        handler["timeoutSec"] = COPILOT_HOOK_TIMEOUT_SEC  # Copilot timeouts are seconds
+        return handler  # Copilot stores the handler directly in the event list
     # claude-settings-json and codex-hooks-json share the schema
     return {"hooks": [handler]}
 
@@ -63,14 +70,19 @@ def _hook_entry(dialect: str, command: str) -> dict:
 def merge_hooks(config: dict, registrations: dict[str, str], dialect: str) -> tuple[dict, bool]:
     """Add relay registrations (native event -> command) to a hook config dict."""
     changed = False
+    if dialect == "copilot-settings-json":
+        config.setdefault("version", 1)  # Copilot hook configs are versioned
     hooks = config.setdefault("hooks", {})
     for native_event, command in registrations.items():
         matchers = hooks.setdefault(native_event, [])
+        # claude/codex/gemini nest handlers under "hooks"; copilot stores the
+        # handler dict directly in the event list — check both shapes so a re-run
+        # stays idempotent for every dialect.
         already = any(
             HOOK_MARKER in handler.get("command", "")
-            for matcher in matchers
-            if isinstance(matcher, dict)
-            for handler in matcher.get("hooks", [])
+            for entry in matchers
+            if isinstance(entry, dict)
+            for handler in (entry, *entry.get("hooks", []))
             if isinstance(handler, dict)
         )
         if not already:

@@ -113,8 +113,10 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 - Generic tmux adapter drives any CLI fitting the tmux-injection + hook-signal transport; CLI specifics live in declarative TOML profiles.
 - Supported, E2E-verified: `claude` (reference), `codex` (≥ 0.139), `gemini` (≥ 0.46).
+- Bundled but pending live E2E verification: `copilot` (GitHub Copilot CLI ≥ 2026-02; VS Code-compatible `Stop` hook, `-i` interactive launch, `--allow-all-tools`).
 - Per-stage CLI/model overrides: run dev on one CLI/model, review on another (`[adapter.dev]`, `[adapter.review]`, `[adapter.triage]`).
 - Add a CLI without touching Python: drop a TOML profile in `.automator/profiles/<name>.toml` (binary, prompt template, bypass flags, hook dialect, native→canonical event map).
+- `bmad-auto probe-adapter` collects + sanitizes the data needed to finalize/add a profile (hook payload shape, transcript location/format, token schema): a zero-launch scan by default, opt-in `--probe` for live capture. See the [adapter authoring guide](adapter-authoring-guide.md).
 
 ### Budgeting & cost tracking
 
@@ -170,4 +172,5 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - `bmad-auto cleanup` — remove leftover tmux artifacts for finished/stopped runs.
 - `bmad-auto clean` — reclaim disk from concluded runs per `[cleanup]`: tear down worktrees a mid-flight stop orphaned, trim heavy `worktrees/` from runs kept for history, archive/delete past the retention window (`--dry-run`, `--keep`, `--retain N`, `--hard`).
 - `bmad-auto tui` — the interactive dashboard (`--low-frame-rate` for slow/SSH links).
+- `bmad-auto probe-adapter <cli>` (`collect-adapter-data`) — collect + sanitize adapter-finalization data for a CLI profile; default zero-launch scan, opt-in `--probe` live capture.
 - Every command takes `--project <dir>` (default: current directory). Any `<run-id>` accepts a partial — the tail after the last `-`, shortened to any unique prefix.

@@ -60,6 +60,55 @@ def test_merge_hooks_gemini_entry_shape():
     assert handler["command"].endswith("bmad_auto_hook.py Stop")
 
 
+def test_merge_hooks_copilot_entry_shape():
+    profile = get_profile("copilot")
+    settings, _ = merge_hooks({}, _registrations(profile), profile.hooks.dialect)
+    assert settings["version"] == 1  # Copilot hook configs are versioned
+    # Copilot stores the handler dict directly in the event list (no "hooks" wrapper)
+    handler = settings["hooks"]["Stop"][0]
+    assert handler["type"] == "command"
+    assert handler["timeoutSec"] == 60  # Copilot hook timeouts are seconds
+    # registered under the native event but relaying the canonical name
+    assert handler["command"].endswith("bmad_auto_hook.py Stop")
+
+
+def test_merge_hooks_copilot_idempotent():
+    # the bare-handler shape must still dedupe on a re-run
+    profile = get_profile("copilot")
+    settings, _ = merge_hooks({}, _registrations(profile), profile.hooks.dialect)
+    again, changed = merge_hooks(settings, _registrations(profile), profile.hooks.dialect)
+    assert not changed
+    for event in profile.hooks.events:
+        assert len(again["hooks"][event]) == 1
+
+
+def test_copilot_profile_render_prompt():
+    # {skill} must expand plainly (no codex-style $ prefix) into the SKILL.md path
+    profile = get_profile("copilot")
+    rendered = profile.render_prompt("/bmad-auto-dev 1-2-a")
+    assert ".agents/skills/bmad-auto-dev/SKILL.md" in rendered
+    assert "1-2-a" in rendered
+
+
+def test_install_into_copilot(tmp_path):
+    assert install_into(tmp_path, clis=("copilot",)) == 0
+    settings = json.loads((tmp_path / ".github" / "copilot" / "settings.json").read_text())
+    assert settings["version"] == 1
+    # registered under VS Code-compatible PascalCase names (snake_case payloads)
+    assert set(settings["hooks"]) == {"Stop", "SessionStart", "SessionEnd", "PreCompact"}
+    cmd = settings["hooks"]["Stop"][0]["command"]
+    # absolute path baked in (no $CLAUDE_PROJECT_DIR equivalent in copilot)
+    assert str(tmp_path.resolve()) in cmd and cmd.endswith(" Stop")
+    # skills land in the shared .agents/skills tree
+    for skill in MODULE_SKILLS:
+        assert (tmp_path / ".agents" / "skills" / skill / "SKILL.md").is_file()
+
+    # idempotent re-run does not duplicate the bare handler
+    assert install_into(tmp_path, clis=("copilot",)) == 0
+    settings = json.loads((tmp_path / ".github" / "copilot" / "settings.json").read_text())
+    assert len(settings["hooks"]["Stop"]) == 1
+
+
 def test_install_into_full(tmp_path):
     assert install_into(tmp_path) == 0
     assert (tmp_path / ".automator" / "bmad_auto_hook.py").is_file()

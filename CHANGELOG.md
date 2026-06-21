@@ -5,6 +5,28 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.6.2] — 2026-06-21
+
+### Added
+
+- **`bmad-auto probe-adapter` (alias `collect-adapter-data`).** A self-service command that
+  collects and sanitizes everything needed to finalize a CLI adapter profile — the hook payload
+  shape, transcript location/format, and token-usage schema for a `usage_parser` — so a user of
+  any coding CLI can paste back a clean, content-free report. A default zero-launch **scan** reads
+  on-disk conventions; opt-in `--probe` does a live capture in an ephemeral workspace. All output
+  passes through one audited PII sanitizer (token counts and field names survive; paths, prose, and
+  emails are redacted).
+- **GitHub Copilot CLI profile.** Bundled `copilot` profile (Copilot CLI ≥ 2026-02): `-i`
+  interactive launch, VS Code-compatible `Stop` hook, `--allow-all-tools` for unattended runs.
+  Still pending live E2E and a `usage_parser` — `probe-adapter` captures the token schema to write
+  one.
+
+### Docs
+
+- **Adapter authoring guide.** New [adapter authoring guide](docs/adapter-authoring-guide.md)
+  walks through finalizing a CLI profile with `probe-adapter` (scan vs probe, the PII model, and
+  the parser-writing loop); `probe-adapter` is added to both command references.
+
 ## [0.6.1] — 2026-06-20
 
 ### Added
@@ -429,6 +451,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.6.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.2
 [0.6.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.1
 [0.6.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.0
 [0.5.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.0
