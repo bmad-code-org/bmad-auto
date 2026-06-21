@@ -11,6 +11,7 @@ guides below go deeper, roughly in the order you'll need them.
 
 ## Extending bmad-auto
 
+- **[Finalizing a CLI adapter profile](adapter-authoring-guide.md)** — using `bmad-auto probe-adapter` to collect + sanitize the hook payload shape, transcript location, and token schema a new CLI profile needs.
 - **[Writing a bmad-auto plugin](plugin-authoring-guide.md)** — the plugin system: `plugin.toml` manifest, hooks, lifecycle stages, settings, the trust model, and workflow injection, with a worked walkthrough.
 - **[Writing a Game Engine plugin](game-engine-plugin-guide.md)** — the game-engine layer (built on the plugin system): driving a live engine Editor, the `editor_mode` ↔ `[scm] isolation` coupling, a minimal Godot example.
 - **[Writing a plugin for a specific Editor MCP](game-engine-mcp-guide.md)** — Editor-MCP specifics for the bundled Unity plugin: IvanMurzak vs CoplayDev, readiness probes, `per_worktree` isolation, and the full `BMAD_AUTO_*` env-var reference.

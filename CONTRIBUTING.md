@@ -182,7 +182,7 @@ Keep messages under 72 characters. Each commit = one logical change.
 - **Tests** live under `tests/`; add or update them for behavior changes. The mock adapter lets most of the loop run without a live CLI.
 - **Skills** ship as markdown under `src/automator/data/skills/` (the `bmad-auto-*` automation skills).
 - **Plugins** extend the orchestrator via a `plugin.toml` manifest — see the [plugin authoring guide](docs/plugin-authoring-guide.md).
-- **New coding CLIs** are usually a TOML profile, not Python — see the CLI adapter section in the [README](README.md).
+- **New coding CLIs** are usually a TOML profile, not Python — see the CLI adapter section in the [README](README.md) and the [adapter authoring guide](docs/adapter-authoring-guide.md) (use `bmad-auto probe-adapter` to collect the hook/transcript/token data a profile needs).
 
 ---
 
