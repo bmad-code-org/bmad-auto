@@ -55,17 +55,19 @@ reliable enough to trust unattended.
 
 ## Integrate BMAD test-design + test-automation runs (TEA / testarch)
 
-**Status:** exploring
+**Status:** exploring · **Foundation:** experimental opt-in `tea` plugin landed (v0.5.1)
 
-BMAD ships a Test Architect (TEA) suite the orchestrator doesn't yet use:
-`bmad-testarch-test-design`, `bmad-testarch-automate`, plus `-atdd`, `-ci`, `-framework`, `-nfr`,
-`-trace`, `-test-review`, and the `bmad-tea` agent. Today bmad-auto orchestrates only
-`dev / review / resolve / sweep / setup`.
+The bundled, **experimental** `tea` plugin (`[plugins] enabled = ["tea"]`, see the
+[TEA plugin guide](tea-plugin-guide.md)) now wires the BMAD Test Architect (TEA) suite —
+`bmad-testarch-test-design`, `-automate`, `-atdd`, `-nfr`, `-trace`, `-test-review`, and the
+`bmad-tea` agent — into every run and sweep as **advisory-by-default** quality steps (the three
+gate steps can be flipped to blocking). It's experimental: the workflows ride the generic
+`[workflows.<name>]` session-injection layer rather than being first-class orchestrated runs.
 
-The goal is to drive **test design** (derive a test plan / coverage map for a feature or backlog) and
-**test automation** (generate + run the actual tests) as first-class orchestrated runs — closing the
-loop that retro items like `epic-5-retro-item-1-test-design-and-backfill-prior-epics` currently call
-out by hand.
+The remaining work is to drive **test design** (derive a test plan / coverage map for a feature or
+backlog) and **test automation** (generate + run the actual tests) as first-class orchestrated runs —
+closing the loop that retro items like `epic-5-retro-item-1-test-design-and-backfill-prior-epics`
+currently call out by hand.
 
 **Open questions:** is this a new `test` run type, or a phase wired into the existing story/review
 pipeline? How does generated-test output feed verification (gate a story on its test plan / coverage)?
