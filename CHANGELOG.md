@@ -416,7 +416,6 @@ enforced in CI.
   resumable on-disk run state.
 
 [0.6.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.0
-[0.5.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.1
 [0.5.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.0
 [0.4.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.4
 [0.4.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.3
