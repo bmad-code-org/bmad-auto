@@ -17,11 +17,18 @@ class ProjectPaths:
     project: Path
     implementation_artifacts: Path
     planning_artifacts: Path
+    # the BMAD output root (parent of the artifact dirs, holds project-context,
+    # test-artifacts, story-automator, …). Protected wholesale on rollback so a
+    # failed attempt never deletes generated BMAD output. Defaults to
+    # {project-root}/_bmad-output when the config omits `output_folder`.
+    output_folder: Path = field(default=None)  # type: ignore[assignment]
     # the git root code/git work happens against; defaults to `project`. Phase 1
     # foundation for worktree isolation — see ProjectPaths.rebased and Workspace.
     repo_root: Path = field(default=None)  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.output_folder is None:
+            object.__setattr__(self, "output_folder", (self.project / "_bmad-output").resolve())
         if self.repo_root is None:
             object.__setattr__(self, "repo_root", self.project)
 
@@ -51,6 +58,7 @@ class ProjectPaths:
             project=new_root,
             implementation_artifacts=rebase(self.implementation_artifacts),
             planning_artifacts=rebase(self.planning_artifacts),
+            output_folder=rebase(self.output_folder),
             repo_root=new_root,
         )
 
@@ -77,9 +85,12 @@ def load_paths(project: Path) -> ProjectPaths:
         )
     repo_root_raw = doc.get("repo_root")
     repo_root = _resolve(str(repo_root_raw), project) if repo_root_raw else project
+    out_raw = doc.get("output_folder")
+    output_folder = _resolve(str(out_raw), project) if out_raw else (project / "_bmad-output")
     return ProjectPaths(
         project=project,
         implementation_artifacts=_resolve(str(impl), project),
         planning_artifacts=_resolve(str(plan), project),
+        output_folder=output_folder.resolve(),
         repo_root=repo_root,
     )

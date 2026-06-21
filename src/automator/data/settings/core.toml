@@ -195,6 +195,12 @@ kind = "switch"
 default_ref = "ScmPolicy.keep_failed"
 description = "worktree mode: keep a failed unit's worktree + branch mounted for inspection"
 [[section.field]]
+key = "rollback_on_failure"
+kind = "switch"
+default_ref = "ScmPolicy.rollback_on_failure"
+label = "auto-rollback failed attempts"
+description = "⚠ in-place mode (isolation=none): when ON, a failed attempt's tracked changes are auto-reverted and the untracked files this run created are deleted (its uncommitted work is lost). When OFF (default), the orchestrator never touches your tree — it pauses with manual recovery steps. Prefer isolation=worktree to keep failures off your main checkout."
+[[section.field]]
 key = "seed_adapter_defaults"
 kind = "switch"
 default_ref = "ScmPolicy.seed_adapter_defaults"

@@ -24,6 +24,7 @@ from automator.policy import (
     NotifyPolicy,
     Policy,
     ReviewPolicy,
+    ScmPolicy,
     SweepPolicy,
 )
 from automator.sweep import DecisionPrompter, SweepEngine, validate_migration, validate_triage
@@ -53,7 +54,12 @@ def make_sweep(project, script, policy=None, answers=(), prompting=False, **kwar
     prompter = DecisionPrompter(input_fn=lambda _: next(inputs), print_fn=lambda _line: None)
     engine = SweepEngine(
         paths=project,
-        policy=policy or Policy(gates=GatesPolicy(mode="none"), notify=QUIET),
+        policy=policy
+        or Policy(
+            gates=GatesPolicy(mode="none"),
+            notify=QUIET,
+            scm=ScmPolicy(rollback_on_failure=True),
+        ),
         adapter=adapter,
         run_dir=run_dir,
         journal=Journal(run_dir),
@@ -312,7 +318,6 @@ def test_sweep_worktree_bundle_merges_to_target(project):
     closes land on the target branch and the worktree is cleaned up."""
     from conftest import _spec_baseline, write_spec
 
-    from automator.policy import ScmPolicy
     from automator.verify import branch_exists, rev_parse_head, worktree_list
 
     write_ledger(project, {"DW-1": "open"})  # committed → visible in the worktree
@@ -1040,6 +1045,7 @@ def test_repeat_failed_bundle_not_rebuilt(project):
         notify=QUIET,
         sweep=SweepPolicy(repeat=True),
         limits=LimitsPolicy(max_review_cycles=1, max_dev_attempts=1),
+        scm=ScmPolicy(rollback_on_failure=True),  # exercise defer-and-continue
     )
     engine, adapter = make_sweep(
         project,

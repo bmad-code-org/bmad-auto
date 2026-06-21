@@ -33,7 +33,7 @@ from automator.plugins.model import (
     PythonSpec,
     WorkflowSpec,
 )
-from automator.policy import GatesPolicy, NotifyPolicy, PluginsPolicy, Policy
+from automator.policy import GatesPolicy, NotifyPolicy, PluginsPolicy, Policy, ScmPolicy
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 EXAMPLE_DIR = Path(__file__).resolve().parents[1] / "examples" / "plugins" / "guardrails"
@@ -64,7 +64,12 @@ def make_engine(project, script, registry=None, policy=None, **kw):
     state = RunState(run_id="wf-run", project=str(project.project), started_at="now")
     engine = Engine(
         paths=project,
-        policy=policy or Policy(gates=GatesPolicy(mode="none"), notify=QUIET),
+        policy=policy
+        or Policy(
+            gates=GatesPolicy(mode="none"),
+            notify=QUIET,
+            scm=ScmPolicy(rollback_on_failure=True),
+        ),
         adapter=adapter,
         run_dir=run_dir,
         journal=Journal(run_dir),

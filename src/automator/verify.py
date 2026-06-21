@@ -121,16 +121,61 @@ def has_changes_since(repo: Path, baseline: str) -> bool:
     return rc == 0 and out != ""
 
 
-def reset_hard(repo: Path, baseline: str, keep: tuple[str, ...] = (".automator",)) -> None:
+def untracked_files(repo: Path) -> set[str]:
+    """Untracked, non-ignored paths (repo-relative posix), mirroring what a
+    plain `git clean -fd` (no -x) treats as removable. Ignored files are
+    excluded, so they are never rollback candidates."""
+    rc, out = _git(repo, "ls-files", "--others", "--exclude-standard")
+    if rc != 0:
+        raise GitError(f"git ls-files --others failed in {repo}: {out}")
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def safe_rollback(
+    repo: Path,
+    baseline: str,
+    *,
+    baseline_untracked: list[str] | None,
+    keep: tuple[str, ...] = (".automator",),
+) -> None:
+    """Undo a failed attempt WITHOUT a blanket `git clean`.
+
+    Reverts tracked changes to `baseline` (the dev attempt's commits/edits),
+    then removes only untracked files that appeared since `baseline` — i.e.
+    files this run created. Untracked files already present at baseline, every
+    ignored file, and anything under a `keep` dir are preserved. The orchestrator
+    therefore never runs `git clean -fd`, so it can't eat a user's pre-existing
+    untracked work. `baseline_untracked` is the snapshot taken when the baseline
+    was captured; None (a pre-upgrade run with no snapshot) removes nothing.
+    """
     rc, out = _git(repo, "reset", "--hard", baseline)
     if rc != 0:
         raise GitError(f"git reset --hard {baseline} failed: {out}")
-    clean_args = ["clean", "-fd"]
-    for path in keep:
-        clean_args += ["-e", path]
-    rc, out = _git(repo, *clean_args)
-    if rc != 0:
-        raise GitError(f"git clean failed: {out}")
+    if baseline_untracked is None:
+        return  # no snapshot to diff against: never delete untracked files
+    created = untracked_files(repo) - set(baseline_untracked)
+    repo = repo.resolve()
+    keep_roots = [(repo / k).resolve() for k in keep]
+    for rel in sorted(created):
+        path = (repo / rel).resolve()
+        if any(path == root or path.is_relative_to(root) for root in keep_roots):
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        _prune_empty_parents(path.parent, repo)
+
+
+def _prune_empty_parents(start: Path, repo: Path) -> None:
+    """Remove now-empty directories from `start` up to (not including) `repo`."""
+    d = start.resolve()
+    while d != repo and d.is_relative_to(repo):
+        try:
+            d.rmdir()  # succeeds only when empty
+        except OSError:
+            break
+        d = d.parent
 
 
 # --------------------------------------------------------------------------

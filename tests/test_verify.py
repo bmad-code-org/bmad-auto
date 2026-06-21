@@ -204,18 +204,73 @@ def test_verify_review_bundle_missing_entry_fails(project):
     assert not out.ok and out.fixable and "DW-2" in out.reason
 
 
-def test_reset_hard_keeps_automator_dir(project):
-    baseline = verify.rev_parse_head(project.project)
-    (project.project / "src.txt").write_text("dirty\n")
-    (project.project / "junk.txt").write_text("untracked\n")
-    keep = project.project / ".automator" / "runs" / "r1"
+def test_safe_rollback_reverts_tracked_and_removes_run_created(project):
+    repo = project.project
+    baseline = verify.rev_parse_head(repo)
+    snap = sorted(verify.untracked_files(repo))  # snapshot before the attempt
+    (repo / "src.txt").write_text("dirty\n")  # tracked edit
+    (repo / "junk.txt").write_text("run-created\n")  # untracked, created now
+    keep = repo / ".automator" / "runs" / "r1"
     keep.mkdir(parents=True)
     (keep / "state.json").write_text("{}")
 
-    verify.reset_hard(project.project, baseline)
-    assert (project.project / "src.txt").read_text() == "original\n"
-    assert not (project.project / "junk.txt").exists()
-    assert (keep / "state.json").exists()
+    verify.safe_rollback(repo, baseline, baseline_untracked=snap, keep=(".automator",))
+    assert (repo / "src.txt").read_text() == "original\n"  # tracked reverted
+    assert not (repo / "junk.txt").exists()  # run-created removed
+    assert (keep / "state.json").exists()  # .automator preserved
+
+
+def test_safe_rollback_preserves_preexisting_untracked(project):
+    repo = project.project
+    (repo / "_bmad-output").mkdir(exist_ok=True)
+    (repo / "_bmad-output" / "project-context.md").write_text("keep me\n")
+    (repo / ".design-build").mkdir()
+    (repo / ".design-build" / "x").write_text("keep me too\n")
+    baseline = verify.rev_parse_head(repo)
+    snap = sorted(verify.untracked_files(repo))  # includes the two files above
+    (repo / "junk.txt").write_text("run-created\n")
+
+    verify.safe_rollback(repo, baseline, baseline_untracked=snap, keep=(".automator",))
+    assert (repo / "_bmad-output" / "project-context.md").read_text() == "keep me\n"
+    assert (repo / ".design-build" / "x").read_text() == "keep me too\n"
+    assert not (repo / "junk.txt").exists()  # only run-created file removed
+
+
+def test_safe_rollback_keep_dir_protects_run_created(project):
+    repo = project.project
+    baseline = verify.rev_parse_head(repo)
+    snap = sorted(verify.untracked_files(repo))
+    out = repo / "_bmad-output"
+    out.mkdir(exist_ok=True)
+    (out / "fresh-artifact.md").write_text("generated this run\n")  # run-created
+
+    verify.safe_rollback(
+        repo, baseline, baseline_untracked=snap, keep=(".automator", "_bmad-output")
+    )
+    assert (out / "fresh-artifact.md").exists()  # protected by keep even though new
+
+
+def test_safe_rollback_none_snapshot_removes_nothing(project):
+    repo = project.project
+    baseline = verify.rev_parse_head(repo)
+    (repo / "src.txt").write_text("dirty\n")
+    (repo / "junk.txt").write_text("untracked\n")
+
+    verify.safe_rollback(repo, baseline, baseline_untracked=None, keep=(".automator",))
+    assert (repo / "src.txt").read_text() == "original\n"  # tracked still reverted
+    assert (repo / "junk.txt").exists()  # no snapshot => never delete untracked
+
+
+def test_safe_rollback_prunes_emptied_dirs(project):
+    repo = project.project
+    baseline = verify.rev_parse_head(repo)
+    snap = sorted(verify.untracked_files(repo))
+    nested = repo / "tmpdir" / "sub"
+    nested.mkdir(parents=True)
+    (nested / "f.txt").write_text("x\n")
+
+    verify.safe_rollback(repo, baseline, baseline_untracked=snap, keep=(".automator",))
+    assert not (repo / "tmpdir").exists()  # emptied parent dirs pruned
 
 
 def test_worktree_clean_ignores_policy_file(project):

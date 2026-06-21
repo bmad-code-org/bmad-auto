@@ -159,6 +159,17 @@ class ScmPolicy:
     merge_strategy: str = "merge"  # ff | merge | squash
     delete_branch: bool = True  # delete the unit branch after a successful merge
     keep_failed: bool = True  # keep a failed unit's worktree+branch for inspection
+    # rollback_on_failure governs in-place (isolation = "none") recovery after a
+    # failed attempt / rejected review. Default OFF: the orchestrator never
+    # touches the working tree — it pauses the run with manual recovery
+    # instructions, so a half-finished attempt is left for you to inspect. ON:
+    # the orchestrator auto-reverts the attempt's tracked changes and removes the
+    # untracked files THIS run created (never a blanket `git clean`; pre-existing
+    # untracked files and the whole _bmad-output/ are preserved) — convenient but
+    # it discards the attempt's uncommitted work, so a warning is journalled when
+    # it fires. Worktree isolation sidesteps this entirely (failed work stays in
+    # its worktree), so this knob only matters for isolation = "none".
+    rollback_on_failure: bool = False
     # failed_diff_max_mb caps the per-file size (MB) of untracked files captured
     # into a kept-failed unit's forensic changes.patch, so a stray build dir or
     # huge log can't blow it up; oversized files are skipped with a labelled
@@ -414,6 +425,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         merge_strategy=str(scm_d.get("merge_strategy", ScmPolicy.merge_strategy)),
         delete_branch=bool(scm_d.get("delete_branch", ScmPolicy.delete_branch)),
         keep_failed=bool(scm_d.get("keep_failed", ScmPolicy.keep_failed)),
+        rollback_on_failure=bool(scm_d.get("rollback_on_failure", ScmPolicy.rollback_on_failure)),
         failed_diff_max_mb=int(scm_d.get("failed_diff_max_mb", ScmPolicy.failed_diff_max_mb)),
         failed_diff_unlimited=bool(
             scm_d.get("failed_diff_unlimited", ScmPolicy.failed_diff_unlimited)
@@ -600,6 +612,7 @@ target_branch = ""           # "" = the branch checked out at run start
 merge_strategy = "merge"     # ff | merge | squash (worktree mode merges the unit branch into target locally)
 delete_branch = true         # delete the unit branch after a successful merge
 keep_failed = true           # keep a failed unit's worktree+branch for inspection
+rollback_on_failure = false  # in-place (isolation="none") recovery after a failed attempt. false = never touch the tree; pause with manual recovery steps. true = auto-revert the attempt's tracked changes + remove only the untracked files this run created (WARNING: discards the attempt's uncommitted work; never a blanket git clean). Prefer isolation="worktree" to avoid touching your main checkout.
 failed_diff_max_mb = 5       # per-file size cap (MB) for untracked files in a kept-failed unit's changes.patch; oversized files are skipped with a marker
 failed_diff_unlimited = false # true = capture the failed-unit diff with no size cap (may produce very large patches; warns when active)
 # commit_message_template: when set, the commit message dev sessions use for a

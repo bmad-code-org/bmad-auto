@@ -538,7 +538,7 @@ class SweepEngine(Engine):
                 task.worktree_path = ""
                 task.branch = ""
             elif task.baseline_commit:
-                self._reset_to(task.baseline_commit)
+                self._rollback_or_pause(task)
             task.phase = Phase.PENDING  # deliberate reset, not a normal transition
         dirname = bundle.name if cycle == 1 else f"c{cycle}-{bundle.name}"
         task.bundle_file = str(self._write_intent(bundle, dirname))
@@ -567,11 +567,12 @@ class SweepEngine(Engine):
             if task.phase == Phase.ESCALATED:
                 task.attempt = 0  # the human resumed deliberately; fresh budget
             if task.baseline_commit and not verify.worktree_clean(self.workspace.root):
-                self._reset_to(task.baseline_commit)  # a session died mid-rewrite
+                self._safe_reset(task)  # a session died mid-rewrite; restore our ledger
                 text = ledger.read_text(encoding="utf-8") if ledger.is_file() else ""
             task.phase = Phase.PENDING  # deliberate reset, not a normal transition
         if not task.baseline_commit:
             task.baseline_commit = verify.rev_parse_head(self.workspace.root)
+            task.baseline_untracked = sorted(verify.untracked_files(self.workspace.root))
 
         legacy = deferredwork.parse_legacy(text)
         pre_canonical = {e.id: e.status for e in deferredwork.parse_ledger(text)}
@@ -640,7 +641,7 @@ class SweepEngine(Engine):
             # never re-prompt over a half-broken rewrite; the baseline reset
             # covers tracked files, the explicit write covers an untracked
             # ledger that `git reset` cannot restore
-            self._reset_to(task.baseline_commit)
+            self._safe_reset(task)
             ledger.parent.mkdir(parents=True, exist_ok=True)
             ledger.write_text(text, encoding="utf-8")
             if task.attempt >= self.policy.sweep.max_migration_attempts:

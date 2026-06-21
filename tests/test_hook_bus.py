@@ -31,7 +31,7 @@ from automator.plugins import (
 )
 from automator.plugins.bus import _HookError, _run_subprocess
 from automator.plugins.model import HookSpec, LoadedPlugin
-from automator.policy import GatesPolicy, LimitsPolicy, NotifyPolicy, Policy
+from automator.policy import GatesPolicy, LimitsPolicy, NotifyPolicy, Policy, ScmPolicy
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 
@@ -361,6 +361,7 @@ def test_session_veto_retries_then_defers(project):
         gates=GatesPolicy(mode="none"),
         notify=QUIET,
         limits=LimitsPolicy(max_dev_attempts=2),
+        scm=ScmPolicy(rollback_on_failure=True),  # exercise retry/defer continuation
     )
     # no adapter calls happen (every session is vetoed before launch)
     engine, _ = make_engine(project, one_story(project), registry_of(py_plugin(P, "sv")), policy)

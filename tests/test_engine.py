@@ -24,6 +24,7 @@ from automator.policy import (
     LimitsPolicy,
     NotifyPolicy,
     Policy,
+    ScmPolicy,
     StageAdapterPolicy,
     SweepPolicy,
     VerifyPolicy,
@@ -39,7 +40,15 @@ def make_engine(project, script, policy=None, **kwargs) -> tuple[Engine, MockAda
     state = RunState(run_id="test-run", project=str(project.project), started_at="now")
     engine = Engine(
         paths=project,
-        policy=policy or Policy(gates=GatesPolicy(mode="none"), notify=QUIET),
+        policy=policy
+        or Policy(
+            gates=GatesPolicy(mode="none"),
+            notify=QUIET,
+            # in-place tests exercise the retry/defer continuation path, which
+            # needs auto-rollback on; the OFF (pause) default is covered by its
+            # own tests.
+            scm=ScmPolicy(rollback_on_failure=True),
+        ),
         adapter=adapter,
         run_dir=run_dir,
         journal=Journal(run_dir),
@@ -339,6 +348,64 @@ def test_defer_preserves_deferred_work_additions(project):
     summary = engine.run()
     assert summary.deferred == 1
     assert "DW-1: pre-existing flaky retry" in project.deferred_work.read_text()
+
+
+def test_rollback_off_pauses_with_manual_notice(project):
+    """Production default (rollback_on_failure=False): a would-be defer reset
+    never touches the tree — it pauses with bold manual-recovery instructions."""
+    from automator.model import PAUSE_ESCALATION
+
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=False),
+    )
+    engine, _ = make_engine(
+        project,
+        [dev_effect(project, "1-1-a")]
+        + [review_effect(project, "1-1-a", clean=False, patched=1) for _ in range(3)],
+        policy=policy,
+    )
+    precious = project.project / "keep-me.txt"
+    precious.write_text("precious\n")  # an untracked file the user wants kept
+    summary = engine.run()
+
+    assert summary.paused
+    state = load_state(engine.run_dir)
+    assert state.paused_stage == PAUSE_ESCALATION
+    reason = state.paused_reason.lower()
+    assert "manual rollback" in reason and "back up" in reason
+    # the orchestrator left the tree exactly as-is — no reset, nothing deleted
+    assert not worktree_clean(project.project)
+    assert precious.read_text() == "precious\n"
+    kinds = [e["kind"] for e in engine.journal.entries()]
+    assert "rollback-manual-required" in kinds
+
+
+def test_rollback_on_preserves_preexisting_untracked(project):
+    """With rollback_on_failure=True the auto-rollback reverts tracked changes
+    but never deletes untracked files that predate the attempt."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(
+        project,
+        [dev_effect(project, "1-1-a")]
+        + [review_effect(project, "1-1-a", clean=False, patched=1) for _ in range(3)],
+        policy=policy,
+    )
+    precious = project.project / "user-notes.txt"
+    precious.write_text("keep me\n")  # untracked, present before baseline capture
+    summary = engine.run()
+
+    assert summary.deferred == 1 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert rev_parse_head(project.project) == task.baseline_commit  # tracked reverted
+    assert precious.read_text() == "keep me\n"  # pre-existing untracked survives
 
 
 def test_dev_stall_retries_then_succeeds(project):

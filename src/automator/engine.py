@@ -636,20 +636,79 @@ class Engine:
                 continue
             return story
 
-    def _reset_to(self, baseline: str) -> None:
-        """Roll back code changes, preserving run state and BMAD artifacts
-        (sprint-status etc. may be untracked in young projects — `git clean`
-        must never eat them)."""
+    def _rollback_or_pause(self, task: StoryTask) -> None:
+        """Recover from a failed in-place attempt.
+
+        With ``scm.rollback_on_failure`` OFF (default) the orchestrator never
+        touches the working tree: it emits a bold manual-recovery notice and
+        pauses the run (stop-and-wait), so nothing proceeds on a half-finished
+        tree. With it ON, it does the safest possible automatic rollback —
+        revert the attempt's tracked changes to baseline and delete only the
+        untracked files this run created (the whole BMAD output folder and every
+        pre-existing untracked file are preserved; there is no blanket
+        ``git clean``)."""
+        if not self.policy.scm.rollback_on_failure:
+            self._pause_for_manual_recovery(task, task.baseline_commit or "")
+            return  # unreachable: _pause_for_manual_recovery always raises
+        self.journal.append(
+            "rollback-auto",
+            story_key=task.story_key,
+            baseline=task.baseline_commit or "",
+            note="reverting tracked changes + run-created untracked files",
+        )
+        self._safe_reset(task)
+
+    def _safe_reset(self, task: StoryTask) -> None:
+        """Revert tracked changes to the task baseline and remove only the
+        untracked files this run created — never a blanket `git clean`. Used by
+        the gated rollback (when enabled) and by internal ledger recovery (sweep
+        migration), which restores the orchestrator's own state and must not
+        pause."""
         keep = [".automator"]
-        for artifact_dir in (
+        for protected in (
+            self.workspace.paths.output_folder,
             self.workspace.paths.implementation_artifacts,
             self.workspace.paths.planning_artifacts,
         ):
             try:
-                keep.append(str(artifact_dir.relative_to(self.workspace.root)))
+                keep.append(str(protected.relative_to(self.workspace.root)))
             except ValueError:
-                pass  # artifacts configured outside the repo; nothing to protect
-        verify.reset_hard(self.workspace.root, baseline, keep=tuple(keep))
+                pass  # configured outside the repo; nothing to protect here
+        verify.safe_rollback(
+            self.workspace.root,
+            task.baseline_commit or "",
+            baseline_untracked=task.baseline_untracked,
+            keep=tuple(keep),
+        )
+
+    def _pause_for_manual_recovery(self, task: StoryTask, baseline: str) -> None:
+        """OFF path: leave the tree untouched, surface bold manual-recovery
+        instructions, and pause the run. Always raises RunPaused."""
+        short = baseline[:12] or "the run's baseline commit"
+        notice = (
+            "**ACTION REQUIRED — manual rollback needed**\n"
+            f"Story **{task.story_key}** failed and auto-rollback is OFF, so the "
+            "working tree was left exactly as-is for you to inspect.\n"
+            "To discard this attempt yourself:\n"
+            "  1. **BACK UP any untracked files you want to keep** — the reset "
+            "below deletes uncommitted work.\n"
+            f"  2. `git reset --hard {short}` then review/remove leftover "
+            "untracked files.\n"
+            "  3. **Restore the files you backed up in step 1.**\n"
+            f"Then run `bmad-auto resume {self.state.run_id}`. To let the "
+            "orchestrator do a safe automatic rollback next time, enable "
+            "`[scm] rollback_on_failure` (it discards the attempt's uncommitted "
+            "work but never deletes pre-existing untracked files)."
+        )
+        self.journal.append("rollback-manual-required", story_key=task.story_key, baseline=baseline)
+        gates.notify(
+            self.policy,
+            self.run_dir,
+            f"ACTION REQUIRED: manual rollback for {task.story_key}",
+            notice,
+        )
+        self._save()
+        raise RunPaused(notice, PAUSE_ESCALATION, task.story_key)
 
     def _finish_inflight(self) -> None:
         """Complete or roll back tasks interrupted by a pause or crash."""
@@ -681,7 +740,7 @@ class Engine:
                     task.worktree_path = ""
                     task.branch = ""
                 elif task.baseline_commit:
-                    self._reset_to(task.baseline_commit)
+                    self._rollback_or_pause(task)
                 task.phase = Phase.PENDING  # deliberate reset, not a normal transition
                 self._save()
                 self._run_story(task)
@@ -914,6 +973,9 @@ class Engine:
         if self._vetoed(self._emit("pre_dev_phase", task), task):
             return False
         task.baseline_commit = verify.rev_parse_head(self.workspace.root)
+        # snapshot untracked files now so a later rollback removes only what THIS
+        # attempt creates, never files the user already had on disk.
+        task.baseline_untracked = sorted(verify.untracked_files(self.workspace.root))
         feedback: Path | None = None
         while True:
             task.attempt += 1
@@ -962,7 +1024,7 @@ class Engine:
                     feedback = self._write_feedback(task, decision.reason)
                 else:
                     feedback = None
-                    self._reset_to(task.baseline_commit)
+                    self._rollback_or_pause(task)
                 continue
             if decision.action == Action.DEFER:
                 self._defer(task, decision.reason)
@@ -1291,7 +1353,7 @@ class Engine:
             snapshot = (
                 deferred_work.read_text(encoding="utf-8") if deferred_work.is_file() else None
             )
-            self._reset_to(task.baseline_commit)
+            self._rollback_or_pause(task)
             # reset reverts tracked deferred-work.md edits; restore review-found
             # defer entries — they are real knowledge worth keeping
             if snapshot is not None:

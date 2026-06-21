@@ -123,6 +123,11 @@ class StoryTask:
     attempt: int = 0
     review_cycle: int = 0
     baseline_commit: str | None = None
+    # untracked, non-ignored paths present at baseline capture (repo-relative
+    # posix). On rollback only paths NOT in this set are removed, so files the
+    # user already had on disk are never deleted. None = pre-upgrade run (no
+    # snapshot); rollback then removes no untracked files at all.
+    baseline_untracked: list[str] | None = None
     spec_file: str | None = None
     commit_sha: str | None = None
     defer_reason: str | None = None
@@ -155,6 +160,7 @@ class StoryTask:
             "attempt": self.attempt,
             "review_cycle": self.review_cycle,
             "baseline_commit": self.baseline_commit,
+            "baseline_untracked": self.baseline_untracked,
             "spec_file": self._serialized_spec_file(),
             "commit_sha": self.commit_sha,
             "defer_reason": self.defer_reason,
@@ -187,6 +193,11 @@ class StoryTask:
             attempt=int(d.get("attempt", 0)),
             review_cycle=int(d.get("review_cycle", 0)),
             baseline_commit=d.get("baseline_commit"),
+            baseline_untracked=(
+                [str(p) for p in d["baseline_untracked"]]
+                if d.get("baseline_untracked") is not None
+                else None
+            ),
             spec_file=d.get("spec_file"),
             commit_sha=d.get("commit_sha"),
             defer_reason=d.get("defer_reason"),
