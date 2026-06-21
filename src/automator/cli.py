@@ -885,6 +885,56 @@ def cmd_tui(args: argparse.Namespace) -> int:
     return run_tui(project)
 
 
+def cmd_probe(args: argparse.Namespace) -> int:
+    from . import probe as probe_mod
+    from .adapters.profile import ProfileError, get_profile
+
+    project = _project(args)
+    hints = probe_mod.Hints(
+        binary=args.binary,
+        transcript=args.transcript,
+        session_dir=args.session_dir,
+        model=args.model,
+    )
+
+    profile = None
+    try:
+        profile = get_profile(args.cli, project)
+    except ProfileError as e:
+        if not args.binary:
+            print(f"FAIL: {e}", file=sys.stderr)
+            return 1
+        print(f"  ok: unknown profile {args.cli!r}; reduced report from --binary {args.binary}")
+
+    if args.probe:
+        if profile is None:
+            print("FAIL: --probe needs a known profile (its hook dialect/events)", file=sys.stderr)
+            return 1
+        finding = probe_mod.probe(
+            cli=args.cli,
+            profile=profile,
+            project=project,
+            hints=hints,
+            timeout_s=args.timeout,
+            keep_temp=args.keep_temp,
+        )
+    else:
+        finding = probe_mod.scan(cli=args.cli, profile=profile, project=project, hints=hints)
+
+    report = probe_mod.render_markdown(finding)
+    if args.json:
+        report = report + "\n\n## JSON\n\n```json\n" + probe_mod.render_json(finding) + "\n```\n"
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.write_text(report, encoding="utf-8")
+        print(f"  ok: report written to {out_path} ({len(finding.warnings)} warning(s))")
+    else:
+        print(report)
+        print(f"  ok: {finding.mode} report for {args.cli} ({len(finding.warnings)} warning(s))")
+    return 0
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     from .install import install_into
 
@@ -934,6 +984,36 @@ def main(argv: list[str] | None = None) -> int:
         help="overwrite bmad-auto-* skill dirs that already exist (default: skip them)",
     )
     add("validate", cmd_validate, "preflight checks; exit non-zero on failure")
+
+    probe_p = add(
+        "probe-adapter",
+        cmd_probe,
+        "collect + sanitize adapter-finalization data for a coding CLI",
+        aliases=["collect-adapter-data"],
+    )
+    probe_p.add_argument(
+        "cli", help="CLI profile name (claude | codex | gemini | copilot | custom)"
+    )
+    probe_p.add_argument(
+        "--probe",
+        action="store_true",
+        help="opt-in LIVE capture: launch one trivial content-free turn in a temp "
+        "workspace and capture real hook payloads (default: zero-launch scan)",
+    )
+    probe_p.add_argument(
+        "--transcript", help="exact transcript file to inspect (overrides discovery)"
+    )
+    probe_p.add_argument(
+        "--session-dir", help="dir to glob for the newest transcript (custom CLIs)"
+    )
+    probe_p.add_argument("--binary", help="binary name for a CLI with no profile yet")
+    probe_p.add_argument("--model", help="model passed to the probe turn (probe mode)")
+    probe_p.add_argument(
+        "--timeout", type=float, default=90, help="probe turn timeout (default: 90s)"
+    )
+    probe_p.add_argument("--out", help="write the report to this file instead of stdout")
+    probe_p.add_argument("--json", action="store_true", help="append a machine-readable JSON block")
+    probe_p.add_argument("--keep-temp", action="store_true", help=argparse.SUPPRESS)
 
     run_p = add("run", cmd_run, "run the orchestration loop")
     run_p.add_argument("--epic", type=int, help="only stories from this epic")

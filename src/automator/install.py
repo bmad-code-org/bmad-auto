@@ -28,7 +28,10 @@ from .adapters.profile import ALIASES, CLIProfile, ProfileError, load_profiles
 from .policy import POLICY_TEMPLATE
 
 HOOK_SCRIPT_REL = ".automator/bmad_auto_hook.py"
-HOOK_MARKER = "bmad_auto_hook.py"
+# Dedup marker: matches any bmad-auto-managed hook command — both the signal
+# relay (bmad_auto_hook.py) and the probe-adapter capture hook
+# (bmad_auto_probe_hook.py) — so merge_hooks stays idempotent for either.
+HOOK_MARKER = "bmad_auto"
 GEMINI_HOOK_TIMEOUT_MS = 60_000
 COPILOT_HOOK_TIMEOUT_SEC = 60
 
