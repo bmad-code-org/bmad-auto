@@ -1,0 +1,34 @@
+# GitHub Copilot CLI (GA since 2026-02). `-i "<prompt>"` starts an interactive
+# session and auto-runs the prompt (a bare `-p` prompt runs headless and exits).
+# Copilot has no native skill discovery, so the prompt tells it to read the
+# SKILL.md directly (skills live in .agents/skills/, shared with codex/gemini and
+# matching upstream BMAD-METHOD's github-copilot installer). "use subagents as
+# needed" keeps parallel skill phases (e.g. review layers) actually spawning
+# subagents, same as codex.
+#
+# Hook events are registered under Copilot's VS Code-compatible PascalCase names
+# (Stop/SessionStart/SessionEnd/PreCompact, same set as claude). That casing makes
+# Copilot emit SNAKE_CASE payloads (session_id, transcript_path, cwd) — exactly
+# what the shared relay reads — and the Stop payload carries transcript_path, so no
+# relay change is needed and a future usage_parser gets the transcript for free.
+# (The camelCase names agentStop/sessionStart emit camelCase payloads the relay
+# would miss.) NOTE: an enterprise policy permissions.disableBypassPermissionsMode
+# = 'disable' suppresses the --allow-all-* flags and will block unattended runs.
+name = "copilot"
+binary = "copilot"
+prompt_template = "LOAD the FULL .agents/skills/{skill}/SKILL.md, read its entire contents and follow its directions exactly, using subagents as needed: {args}"
+launch_args = ["-i"]
+bypass_args = ["--allow-all-tools", "--allow-all-paths"]
+model_flag = "--model"
+usage_parser = "none"
+first_run_note = "run `copilot` once and authenticate (gh / Copilot subscription); requires Copilot CLI GA (>= 2026-02)"
+skill_tree = ".agents/skills"
+# .github/copilot/settings.json is the inline hook config (and can also hold MCP
+# servers) — gitignored in many projects, so a worktree checkout omits it and
+# isolated sessions lose it; seeded first, then the Stop hook is merged in.
+seed_files = [".github/copilot/settings.json"]
+
+[hooks]
+dialect = "copilot-settings-json"
+config_path = ".github/copilot/settings.json"
+events = { Stop = "Stop", SessionStart = "SessionStart", SessionEnd = "SessionEnd", PreCompact = "PreCompact" }

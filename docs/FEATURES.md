@@ -113,6 +113,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 - Generic tmux adapter drives any CLI fitting the tmux-injection + hook-signal transport; CLI specifics live in declarative TOML profiles.
 - Supported, E2E-verified: `claude` (reference), `codex` (≥ 0.139), `gemini` (≥ 0.46).
+- Bundled but pending live E2E verification: `copilot` (GitHub Copilot CLI ≥ 2026-02; VS Code-compatible `Stop` hook, `-i` interactive launch, `--allow-all-tools`).
 - Per-stage CLI/model overrides: run dev on one CLI/model, review on another (`[adapter.dev]`, `[adapter.review]`, `[adapter.triage]`).
 - Add a CLI without touching Python: drop a TOML profile in `.automator/profiles/<name>.toml` (binary, prompt template, bypass flags, hook dialect, native→canonical event map).
 

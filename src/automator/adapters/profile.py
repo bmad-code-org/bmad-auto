@@ -19,7 +19,12 @@ from importlib import resources
 from pathlib import Path
 
 USAGE_PARSERS = {"claude-jsonl", "codex-rollout", "gemini-chat", "none"}
-HOOK_DIALECTS = {"claude-settings-json", "codex-hooks-json", "gemini-settings-json"}
+HOOK_DIALECTS = {
+    "claude-settings-json",
+    "codex-hooks-json",
+    "gemini-settings-json",
+    "copilot-settings-json",
+}
 CANONICAL_EVENTS = {"SessionStart", "Stop", "SessionEnd", "PreCompact"}
 USER_PROFILES_REL = Path(".automator") / "profiles"
 
