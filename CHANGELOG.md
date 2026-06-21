@@ -5,6 +5,22 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.6.3] — 2026-06-21
+
+### Fixed
+
+- **GitHub Copilot adapter (CLI 1.0.63).** Turn-end is `agentStop`, not PascalCase `Stop`
+  (which never fires) — every session previously read as a timeout. Remapped events, dropped
+  the non-existent `PreCompact`, and the shared hook relay now reads camelCase payload keys
+  (`sessionId`/`transcriptPath`). Probe mode sends its prompt verbatim so a skill-templating
+  `prompt_template` no longer renders a missing-skill path that stalls the turn.
+
+### Added
+
+- **Copilot token accounting.** New `copilot-events` `usage_parser` reads
+  `~/.copilot/session-state/*/events.jsonl` (`data.modelMetrics.<model>.usage.*`); the `copilot`
+  profile is wired to it (was `usage_parser = "none"`).
+
 ## [0.6.2] — 2026-06-21
 
 ### Added
@@ -451,6 +467,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.6.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.3
 [0.6.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.2
 [0.6.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.1
 [0.6.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.0
