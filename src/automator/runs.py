@@ -289,6 +289,134 @@ def archive_run(project: Path, run_dir: Path) -> Path:
     return dest
 
 
+# ------------------------------------------------------- reclaim / retention
+
+# Heavy per-run scaffolding trimmed from a concluded run dir while the
+# TUI-visible core (state.json, journal.jsonl, logs/, ATTENTION) is preserved,
+# so the run still lists and renders in the dashboard. The value mirrors
+# workspace.WORKTREE_DIRNAME; kept literal here to avoid an import cycle
+# (workspace imports nothing from runs, but runs stays leaf-light on purpose).
+_HEAVY_RUN_ENTRIES = ("worktrees",)
+
+
+def _state_or_none(run_dir: Path):
+    """Parsed run state, or None when it cannot be read — never classify (and so
+    never reclaim) what you cannot positively read."""
+    try:
+        return load_state(run_dir)
+    except Exception:  # noqa: BLE001 - unreadable/corrupt state ⇒ leave it alone
+        return None
+
+
+def is_finished(run_dir: Path) -> bool:
+    """A finished, no-longer-live run. `resume` refuses these (cli checks
+    state.finished), so tearing down their worktrees can never strand a resume —
+    the safe predicate for the *automatic* reconcile paths."""
+    if engine_alive(run_dir):
+        return False
+    state = _state_or_none(run_dir)
+    return bool(state and state.finished)
+
+
+def reclaimable(run_dir: Path) -> bool:
+    """A terminal run (finished or stopped) with no live engine — eligible for
+    the *explicit* `clean` command. A stopped run is technically resumable, so
+    reclaiming its worktree ends that; `clean` is an opt-in reclaim (guarded by
+    --keep / --dry-run). Paused, interrupted (crashed) and running/unknown-host
+    runs are never reclaimed: paused/interrupted are actively resumable, and a
+    missing pid could mean a foreign-host run, so we require positive local
+    termination evidence (finished or stopped)."""
+    if engine_alive(run_dir):
+        return False
+    state = _state_or_none(run_dir)
+    return bool(state and (state.finished or state.stopped))
+
+
+def reconcile_orphan_worktrees(repo: Path, run_dir: Path, *, dry_run: bool = False) -> list[Path]:
+    """Force-remove every git worktree whose path lies under ``run_dir``, then
+    prune git's admin entries. Reconciles from ``git worktree list`` (on-disk
+    truth), NOT from policy — orphans created under a previous isolation=worktree
+    config persist after a switch back to isolation=none. Returns the worktree
+    paths handled (or that would be, under dry_run). Callers gate on
+    ``reclaimable``; the main checkout is never under a run dir, so it is safe."""
+    run_res = run_dir.resolve()
+    try:
+        worktrees = verify.worktree_list(repo)
+    except verify.GitError:
+        return []
+    handled: list[Path] = []
+    for wt in worktrees:
+        try:
+            wt.resolve().relative_to(run_res)
+        except (ValueError, OSError):
+            continue  # not this run's worktree (incl. the main checkout)
+        handled.append(wt)
+        if not dry_run:
+            try:
+                verify.worktree_remove(repo, wt, force=True)
+            except verify.GitError:
+                shutil.rmtree(wt, ignore_errors=True)
+    if handled and not dry_run:
+        verify.worktree_prune(repo)
+    return handled
+
+
+def reconcile_stale_worktrees(repo: Path, project: Path, *, dry_run: bool = False) -> list[Path]:
+    """Safety net for the automatic paths (run/sweep start): tear down worktrees
+    left behind by a *finished* run whose clean-finish GC didn't complete (e.g. a
+    crash between merge and teardown). Deliberately finished-ONLY — a stopped run
+    is still resumable, so its worktree is left for `resume`/`clean` to handle and
+    never stranded out from under the operator."""
+    handled: list[Path] = []
+    for run_dir in list_run_dirs(project):
+        if not is_finished(run_dir):
+            continue
+        handled += reconcile_orphan_worktrees(repo, run_dir, dry_run=dry_run)
+    return handled
+
+
+def trim_run_dir(run_dir: Path, *, dry_run: bool = False) -> list[Path]:
+    """Delete heavy scaffolding (the ``worktrees/`` tree) from a concluded run
+    dir, preserving its TUI-visible core so the run still appears in the
+    dashboard with full status/journal/logs. Returns the paths removed."""
+    removed: list[Path] = []
+    for name in _HEAVY_RUN_ENTRIES:
+        p = run_dir / name
+        if p.exists() or p.is_symlink():
+            removed.append(p)
+            if not dry_run:
+                shutil.rmtree(p, ignore_errors=True)
+    return removed
+
+
+def _run_started_epoch(run_dir: Path) -> float | None:
+    """Unix time parsed from the run id's ``YYYYMMDD-HHMMSS`` prefix, or None
+    when the name does not carry one (legacy/foreign id)."""
+    try:
+        return time.mktime(time.strptime(run_dir.name[:15], "%Y%m%d-%H%M%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def runs_past_retention(
+    run_dirs: list[Path], *, keep_n: int, keep_days: int = 0, now: float | None = None
+) -> list[Path]:
+    """The subset of ``run_dirs`` (oldest-first) beyond the retention window:
+    not among the newest ``keep_n``, and — when ``keep_days`` is set — also older
+    than ``keep_days`` days. ``keep_n <= 0`` retains nothing by count; an
+    unparseable run id is treated as old enough to prune once past ``keep_n``."""
+    ordered = list(run_dirs)
+    candidates = (
+        ordered[:-keep_n]
+        if keep_n > 0 and len(ordered) > keep_n
+        else ([] if keep_n > 0 else list(ordered))
+    )
+    if keep_days and keep_days > 0:
+        cutoff = (time.time() if now is None else now) - keep_days * 86400
+        return [rd for rd in candidates if (_run_started_epoch(rd) or 0.0) < cutoff]
+    return candidates
+
+
 # ----------------------------------------------------------- escalation resolution
 
 

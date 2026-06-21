@@ -41,6 +41,11 @@ class UnityPlugin(Plugin):
     """Trust-gated in-process plugin (loads only when "unity" is in
     ``[plugins] enabled``). Its lifecycle hooks gate and manage the Editor."""
 
+    # Whether to let the post-run cleanup reclaim the IvanMurzak MCP server's
+    # /tmp scratch + log. Mirrors [cleanup] clean_tmp, captured at validate()
+    # since plugin hooks don't otherwise see the run policy. Default True.
+    _clean_tmp = True
+
     def _editor_mode(self) -> str:
         return str(self.settings.get("editor_mode", "shared"))
 
@@ -51,6 +56,7 @@ class UnityPlugin(Plugin):
         on the same folder the agent edits. shared = the agent's warm Editor on
         the checkout in place (no worktree); per_worktree = one Editor per
         isolated worktree."""
+        self._clean_tmp = bool(getattr(getattr(policy, "cleanup", None), "clean_tmp", True))
         mode = self._editor_mode()
         if mode not in EDITOR_MODES:
             raise PluginError(
@@ -95,6 +101,18 @@ class UnityPlugin(Plugin):
             return
         self._run_script("unity_teardown.py", ctx, timeout=_TEARDOWN_TIMEOUT)
 
+    def on_post_run(self, ctx) -> None:
+        """Run finished cleanly: reclaim the IvanMurzak MCP server's /tmp scratch
+        (downloaded server zips) and truncate its unbounded editor log. Best
+        effort — observe-only, runs once per run in both editor modes, after the
+        loop so it never races an in-flight setup-mcp download. CoplayDev uses a
+        shared server with no per-project /tmp download, so it is skipped."""
+        if not self._clean_tmp:
+            return
+        if str(self.settings.get("mcp", "ivanmurzak")) != "ivanmurzak":
+            return
+        self._run_script("unity_cleanup.py", ctx, timeout=_TEARDOWN_TIMEOUT)
+
     # -------------------------------------------------------------- helpers
 
     def _ready_timeout(self) -> int:
@@ -123,6 +141,7 @@ class UnityPlugin(Plugin):
                 "BMAD_AUTO_ENGINE_READY_TIMEOUT": str(self.settings.get("ready_timeout_sec", 600)),
                 "BMAD_AUTO_ENGINE_READY_GRACE": str(self.settings.get("ready_grace_sec", -1)),
                 "BMAD_AUTO_UNITY_PATH": str(self.settings.get("unity_path", "")),
+                "BMAD_AUTO_CLEAN_TMP": "1" if self._clean_tmp else "0",
             }
         )
         # Tell the per_worktree setup which agent MCP configs to point at the

@@ -84,6 +84,20 @@ class SweepPolicy:
 
 
 @dataclass(frozen=True)
+class CleanupPolicy:
+    """Disk reclamation for `.automator/runs`. Worktree reconcile + artifact
+    trim only ever touch terminal (finished/stopped) runs — paused/interrupted
+    runs stay intact so they remain resumable."""
+
+    run_retention: int = 10  # newest concluded runs kept whole; older ones trimmed/archived
+    retention_days: int = 0  # 0 = disabled; else also keep runs newer than N days
+    trim_artifacts: bool = True  # drop the worktrees/ tree from concluded runs (keeps run viewable)
+    archive_old: bool = True  # archive (vs hard-delete) runs past the window
+    auto_clean_on_finish: bool = True  # reconcile stale worktrees + retention at clean finish
+    clean_tmp: bool = True  # let engine plugins clean their /tmp scratch (e.g. Unity MCP zips)
+
+
+@dataclass(frozen=True)
 class StageAdapterPolicy:
     """Per-stage overrides; None = inherit from [adapter]."""
 
@@ -207,6 +221,7 @@ class Policy:
     adapter: AdapterPolicy = field(default_factory=AdapterPolicy)
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
     scm: ScmPolicy = field(default_factory=ScmPolicy)
+    cleanup: CleanupPolicy = field(default_factory=CleanupPolicy)
     plugins: PluginsPolicy = field(default_factory=PluginsPolicy)
     tui: TuiPolicy = field(default_factory=TuiPolicy)
 
@@ -298,6 +313,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
     adapter_d = _section(doc, "adapter")
     sweep_d = _section(doc, "sweep")
     scm_d = _section(doc, "scm")
+    cleanup_d = _section(doc, "cleanup")
     engine_d = _section(doc, "engine")  # deprecated; folded into [plugins] below
     plugins_d = _section(doc, "plugins")
     tui_d = _section(doc, "tui")
@@ -427,6 +443,20 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         )
     if scm.failed_diff_max_mb < 1:
         raise PolicyError(f"scm.failed_diff_max_mb must be >= 1: got {scm.failed_diff_max_mb}")
+    cleanup = CleanupPolicy(
+        run_retention=int(cleanup_d.get("run_retention", CleanupPolicy.run_retention)),
+        retention_days=int(cleanup_d.get("retention_days", CleanupPolicy.retention_days)),
+        trim_artifacts=bool(cleanup_d.get("trim_artifacts", CleanupPolicy.trim_artifacts)),
+        archive_old=bool(cleanup_d.get("archive_old", CleanupPolicy.archive_old)),
+        auto_clean_on_finish=bool(
+            cleanup_d.get("auto_clean_on_finish", CleanupPolicy.auto_clean_on_finish)
+        ),
+        clean_tmp=bool(cleanup_d.get("clean_tmp", CleanupPolicy.clean_tmp)),
+    )
+    if cleanup.run_retention < 0:
+        raise PolicyError(f"cleanup.run_retention must be >= 0: got {cleanup.run_retention}")
+    if cleanup.retention_days < 0:
+        raise PolicyError(f"cleanup.retention_days must be >= 0: got {cleanup.retention_days}")
     raw_enabled = plugins_d.get("enabled", ())
     if isinstance(raw_enabled, str) or not isinstance(raw_enabled, (list, tuple)):
         raise PolicyError("plugins.enabled must be a list of plugin names")
@@ -455,6 +485,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         adapter=adapter,
         sweep=sweep,
         scm=scm,
+        cleanup=cleanup,
         plugins=plugins,
         tui=tui,
     )
@@ -547,6 +578,18 @@ max_triage_attempts = 2      # triage validation retries before escalating
 max_migration_attempts = 2   # legacy-ledger migration retries before escalating
 repeat = false               # after a cycle completes, re-triage and continue on newly deferred work
 max_cycles = 5               # safety cap on total cycles per sweep run when repeat = true
+
+[cleanup]
+# Disk reclamation for .automator/runs. Only terminal (finished/stopped) runs are
+# ever touched; paused/interrupted runs stay intact so they remain resumable.
+# `bmad-auto clean` applies these, and every run/sweep start reconciles worktrees
+# leaked by a mid-flight stop.
+run_retention = 10           # newest concluded runs kept whole; older ones are trimmed/archived (0 keeps none)
+retention_days = 0           # 0 = disabled; else also keep runs newer than N days regardless of count
+trim_artifacts = true        # drop the heavy worktrees/ tree from concluded runs (run stays viewable in the TUI)
+archive_old = true           # archive (.automator/archive/<id>.tar.gz) rather than hard-delete runs past the window
+auto_clean_on_finish = true  # reconcile stale worktrees + apply retention when a run finishes cleanly
+clean_tmp = true             # let engine plugins clean their /tmp scratch on finish (e.g. Unity MCP server zips)
 
 [scm]
 # Source-control isolation + merge-back. Defaults reproduce today's behavior:

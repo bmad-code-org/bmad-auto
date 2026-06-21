@@ -42,6 +42,18 @@ def _policy_path(project: Path) -> Path:
     return project / POLICY_FILE
 
 
+def _reconcile_stale(project: Path, paths: bmadconfig.ProjectPaths, pol) -> None:
+    """Tear down worktrees leaked by a prior run that stopped mid-flight, before
+    starting a new run/sweep — the clean-finish GC never reached them. Gated on
+    [cleanup] auto_clean_on_finish; only touches terminal (finished/stopped) dead
+    runs, never anything resumable."""
+    if not pol.cleanup.auto_clean_on_finish:
+        return
+    freed = runs.reconcile_stale_worktrees(paths.repo_root, project)
+    if freed:
+        print(f"reclaimed {len(freed)} stale worktree(s) from prior runs")
+
+
 ROLES = ("dev", "review", "triage")
 
 
@@ -168,6 +180,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not verify.worktree_clean(paths.repo_root):
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
         return 1
+
+    _reconcile_stale(project, paths, pol)
 
     run_id = args.run_id or runs.new_run_id()
     run_dir = project / RUNS_DIR / run_id
@@ -337,6 +351,8 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     if not verify.worktree_clean(paths.repo_root):
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
         return 1
+
+    _reconcile_stale(project, paths, pol)
 
     return _start_sweep(
         project,
@@ -709,6 +725,104 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dir_size(path: Path) -> int:
+    """Best-effort total bytes under ``path`` (symlinks not followed)."""
+    total = 0
+    for root, _dirs, files in os.walk(path, onerror=lambda _e: None):
+        for name in files:
+            try:
+                total += (Path(root) / name).lstat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _human_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    """Reclaim disk from concluded runs: tear down worktrees leaked by a
+    mid-flight stop, trim heavy scaffolding from runs kept for history, and
+    archive/delete runs past the retention window. Only terminal (finished or
+    stopped) runs are touched; running, unknown-host, paused and interrupted
+    runs are always left intact."""
+    project = _project(args)
+    paths = bmadconfig.load_paths(project)
+    repo = paths.repo_root
+    pol = policy_mod.load(_policy_path(project))
+    keep = set(args.keep or ())
+    retain = args.retain if args.retain is not None else pol.cleanup.run_retention
+    dry = args.dry_run
+
+    reclaimable: list[Path] = []
+    protected = 0
+    for run_dir in runs.list_run_dirs(project):
+        if run_dir.name in keep:
+            protected += 1
+        elif runs.reclaimable(run_dir):
+            reclaimable.append(run_dir)
+        else:
+            protected += 1
+
+    past = {
+        p.name
+        for p in runs.runs_past_retention(
+            reclaimable, keep_n=retain, keep_days=pol.cleanup.retention_days
+        )
+    }
+
+    freed = 0
+    worktrees = 0
+    trimmed: list[str] = []
+    archived: list[str] = []
+    deleted: list[str] = []
+    for run_dir in reclaimable:
+        # measure before mutating so the reclaim estimate holds for --dry-run too
+        wt_dir = run_dir / "worktrees"
+        wt_bytes = _dir_size(wt_dir) if wt_dir.is_dir() else 0
+        run_bytes = _dir_size(run_dir)
+        for wt in runs.reconcile_orphan_worktrees(repo, run_dir, dry_run=dry):
+            worktrees += 1
+            print(f"{'would remove' if dry else 'removed'} worktree {wt}")
+        if run_dir.name in past:
+            freed += run_bytes
+            runs.trim_run_dir(run_dir, dry_run=dry)  # shrink before archiving
+            if args.hard or not pol.cleanup.archive_old:
+                if not dry:
+                    runs.delete_run(run_dir)
+                deleted.append(run_dir.name)
+            else:
+                if not dry:
+                    runs.archive_run(project, run_dir)
+                archived.append(run_dir.name)
+        elif pol.cleanup.trim_artifacts:
+            if runs.trim_run_dir(run_dir, dry_run=dry):
+                freed += wt_bytes
+                trimmed.append(run_dir.name)
+
+    if not worktrees and not trimmed and not archived and not deleted:
+        print("nothing to reclaim")
+    else:
+        head = "would reclaim" if dry else "reclaimed"
+        print(
+            f"{head} ~{_human_bytes(freed)}: {worktrees} worktree(s), "
+            f"{len(trimmed)} run(s) trimmed, {len(archived)} archived, {len(deleted)} deleted"
+        )
+        for name in archived:
+            print(f"  archived {name} -> .automator/archive/{name}.tar.gz")
+        for name in deleted:
+            print(f"  deleted {name}")
+    if protected:
+        print(f"left {protected} live/resumable run(s) untouched")
+    return 0
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     project = _project(args)
     # Apply low-frame-rate mode *before* importing textual: it reads TEXTUAL_FPS
@@ -874,6 +988,34 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="list what would be removed without killing anything",
+    )
+
+    clean_p = add(
+        "clean",
+        cmd_clean,
+        "reclaim disk from concluded runs (tear down leaked worktrees, trim/archive per [cleanup])",
+    )
+    clean_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list what would be reclaimed without removing anything",
+    )
+    clean_p.add_argument(
+        "--keep",
+        action="append",
+        metavar="RUN_ID",
+        help="run id to never touch (repeatable; e.g. a finished run whose Editor is still live)",
+    )
+    clean_p.add_argument(
+        "--retain",
+        type=int,
+        metavar="N",
+        help="keep the newest N concluded runs whole (overrides [cleanup] run_retention)",
+    )
+    clean_p.add_argument(
+        "--hard",
+        action="store_true",
+        help="permanently delete runs past the retention window instead of archiving them",
     )
 
     tui_p = add(

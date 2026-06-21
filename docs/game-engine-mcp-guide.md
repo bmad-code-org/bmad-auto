@@ -167,6 +167,23 @@ and `BMAD_AUTO_ENGINE_AGENTS` (the dev + review CLI ids, for per-worktree MCP ro
 > authoritative, version-stamped source, and any of the above can be overridden in a
 > project-local plugin's `[env]` block when yours differ.
 
+### Post-run scratch cleanup (`unity_cleanup.py`)
+
+`unity-mcp-cli` downloads the Editor MCP server into Unity's per-project temp dir
+(`/tmp/<companyName>/<productName>/unity-mcp-server-*.zip` on Linux) and never removes
+it, so a fresh ~42 MB zip lands every time the pinned server version changes; the Editor
+also writes an unbounded `Temp/mcp-server/ai-editor-logs.txt`. On a clean finish the
+plugin's `post_run` hook runs `unity_cleanup.py`, which removes this project's server
+zips and truncates the log once it exceeds the cap. It runs once per run in **both**
+editor modes, after the loop, so it never races an in-flight `setup-mcp` download.
+Gated by `[cleanup] clean_tmp` (the engine maps it onto `BMAD_AUTO_CLEAN_TMP`); only the
+IvanMurzak MCP downloads per-project, so CoplayDev is skipped.
+
+| Variable                     | Default | Effect                                              |
+| ---------------------------- | ------- | --------------------------------------------------- |
+| `BMAD_AUTO_CLEAN_TMP`        | `1`     | `0` disables the post-run /tmp + log cleanup.       |
+| `BMAD_AUTO_UNITY_LOG_CAP_MB` | `5`     | Truncate `ai-editor-logs.txt` once it exceeds this. |
+
 ## Dev-control HTTP bridge (upstream, dev-only — not wired)
 
 Unity-MCP **0.81.1** added an optional **dev-control HTTP bridge** — a

@@ -9,6 +9,14 @@ breaking changes may land in a minor release.
 
 ### Added
 
+- **`bmad-auto clean` + `[cleanup]` retention.** Reclaims disk from concluded runs: tears down
+  git worktrees a mid-flight stop orphaned (freeing each worktree's Unity `Library/` + MCP-server
+  build — the main accumulation source), trims the heavy `worktrees/` tree from runs kept for
+  history (they still list in the TUI), and archives/deletes runs past `[cleanup] run_retention`
+  (default 10). Only finished/stopped runs are touched; `--keep`/`--dry-run`/`--retain`/`--hard`.
+  Every `run`/`sweep` start auto-reconciles worktrees a prior **finished** run leaked
+  (`auto_clean_on_finish`); the Unity plugin's new `post_run` hook clears the IvanMurzak MCP
+  server's `/tmp/<company>/<product>/*.zip` downloads + truncates its editor log (`clean_tmp`).
 - **Test Architect (TEA) plugin.** New bundled, opt-in `tea` plugin that wires the BMAD
   Test Architect Enterprise module into every run and sweep as advisory-by-default quality steps.
   Enable with `[plugins] enabled = ["tea"]`; it injects six TEA workflows — test-design, ATDD,

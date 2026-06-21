@@ -225,6 +225,48 @@ default_ref = "ScmPolicy.failed_diff_unlimited"
 label = "uncap failed-diff size"
 description = "⚠ ON: capture failed-unit diffs with NO size limit (overrides the cap above) — may produce very large patches; a warning is logged when active"
 
+[[section]]
+name = "cleanup"
+description = "disk reclamation for .automator/runs (terminal runs only)"
+[[section.field]]
+key = "run_retention"
+kind = "int"
+minimum = 0
+default_ref = "CleanupPolicy.run_retention"
+label = "run retention (count)"
+description = "newest concluded runs kept whole · older ones are trimmed or archived by `bmad-auto clean` (0 = keep none by count)"
+[[section.field]]
+key = "retention_days"
+kind = "int"
+minimum = 0
+default_ref = "CleanupPolicy.retention_days"
+label = "run retention (days)"
+description = "0 = disabled · else also keep runs newer than N days regardless of the count above"
+[[section.field]]
+key = "trim_artifacts"
+kind = "switch"
+default_ref = "CleanupPolicy.trim_artifacts"
+label = "trim heavy artifacts"
+description = "drop the heavy worktrees/ tree from concluded runs · the run still lists in the dashboard with full status/journal/logs"
+[[section.field]]
+key = "archive_old"
+kind = "switch"
+default_ref = "CleanupPolicy.archive_old"
+label = "archive past the window"
+description = "archive (.automator/archive/<id>.tar.gz) rather than permanently delete runs beyond the retention window"
+[[section.field]]
+key = "auto_clean_on_finish"
+kind = "switch"
+default_ref = "CleanupPolicy.auto_clean_on_finish"
+label = "auto-clean on finish"
+description = "reconcile worktrees leaked by a mid-flight stop + apply retention each time a run finishes cleanly"
+[[section.field]]
+key = "clean_tmp"
+kind = "switch"
+default_ref = "CleanupPolicy.clean_tmp"
+label = "clean plugin /tmp scratch"
+description = "let engine plugins clean their /tmp scratch on finish (e.g. the Unity MCP server's downloaded zips)"
+
 # The game-engine layer (Unity) is no longer a core section — it is a plugin.
 # Its settings render from the plugin's own schema (data/plugins/unity/plugin.toml)
 # under [plugins.unity] when "unity" is in [plugins] enabled.

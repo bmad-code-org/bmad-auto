@@ -63,12 +63,13 @@ An engine binds the orchestrator's **per-story stages** that surround a unit's
 worktree and sessions. The relevant ones (full list in the
 [stage reference](plugin-authoring-guide.md#stage-reference)):
 
-| Stage                   | shared mode                       | per_worktree mode                                                                        |
-| ----------------------- | --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `pre_worktree_setup`    | not run                           | per unit, right after the worktree is cut — make it a usable project + launch its Editor |
-| `pre_ready_gate`        | once, before the first session    | per unit, after setup, before the agent runs — block until Editor + MCP are ready        |
-| (agent dev/review)      | drives the operator's live Editor | drives the worktree's managed Editor                                                     |
-| `pre_worktree_teardown` | not run                           | per unit, on completion **and** on pause/escalation — quit the Editor + clean up         |
+| Stage                   | shared mode                       | per_worktree mode                                                                                                                 |
+| ----------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pre_worktree_setup`    | not run                           | per unit, right after the worktree is cut — make it a usable project + launch its Editor                                          |
+| `pre_ready_gate`        | once, before the first session    | per unit, after setup, before the agent runs — block until Editor + MCP are ready                                                 |
+| (agent dev/review)      | drives the operator's live Editor | drives the worktree's managed Editor                                                                                              |
+| `pre_worktree_teardown` | not run                           | per unit, on completion **and** on pause/escalation — quit the Editor + clean up                                                  |
+| `post_run`              | once, on clean finish             | once, on clean finish — reclaim per-run scratch (the Unity plugin clears the MCP server's `/tmp` zips + truncates its editor log) |
 
 A **blocking** hook at `pre_ready_gate` or `pre_worktree_setup` whose command
 exits non-zero **defers the unit** — bmad-auto never starts a session against a

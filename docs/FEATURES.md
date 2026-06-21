@@ -124,7 +124,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 ### Configuration (`.automator/policy.toml`)
 
 - Single policy file written by `init`, snapshotted at run start (applies to new runs and resumes; editable live from the TUI).
-- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[plugins]` (trust allowlist + per-plugin `[plugins.<name>]` config — e.g. the opt-in game-engine layer via `[plugins.unity]`, off by default), `[tui]` (`low_frame_rate` for slow/SSH links).
+- Sections: `[gates]`, `[limits]`, `[verify]`, `[notify]`, `[review]`, `[adapter]` (+ per-stage), `[sweep]`, `[scm]` (worktree isolation + merge-back), `[cleanup]` (run-dir retention + disk reclamation), `[plugins]` (trust allowlist + per-plugin `[plugins.<name>]` config — e.g. the opt-in game-engine layer via `[plugins.unity]`, off by default), `[tui]` (`low_frame_rate` for slow/SSH links).
 - Tunable limits: `max_review_cycles`, `max_dev_attempts`, `session_timeout_min`, `stop_without_result_nudges`, `max_tokens_per_story`.
 
 ### TUI dashboard
@@ -139,6 +139,12 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - Each run drives agents in a dedicated `bmad-auto-<run-id>` session; `attach` to watch live.
 - Auto-teardown on finish (`cleanup_session_on_finish`, disable to inspect); `stop` always kills it; paused/interrupted runs keep the session for `resume`.
 - `bmad-auto cleanup` (or `c` in the TUI) sweeps leftover sessions/windows for finished/stopped/orphaned runs **of the current project**; live runs, and anything belonging to another project, are never touched.
+
+### Disk reclamation (`[cleanup]`)
+
+- `bmad-auto clean` reclaims **disk** (distinct from `cleanup`, which is only tmux). It tears down git worktrees a mid-flight stop left mounted — the main accumulation source: each carries a real Unity `Library/` (incl. the MCP-server build), which `git worktree remove` cannot reach once the engine was killed before teardown. It then trims the heavy `worktrees/` tree from runs kept for history (the run still lists in the dashboard — discovery reads `state.json`, not the worktree), and archives or deletes runs past the retention window.
+- Safe by construction: only **finished or stopped** runs are touched; running, unknown-host, paused and interrupted (resumable) runs are never reclaimed. `--keep <run-id>` protects a specific run (e.g. a finished one whose Editor is still live), `--dry-run` previews, `--retain N`/`--hard` tune the window and archive-vs-delete.
+- Prevention is automatic: every `run`/`sweep` start reconciles worktrees leaked by a prior **finished** run (`[cleanup] auto_clean_on_finish`), and the Unity plugin's `post_run` hook removes the IvanMurzak MCP server's downloaded `/tmp/<company>/<product>/*.zip` and truncates its unbounded editor log (`[cleanup] clean_tmp`). For recurring housekeeping of stopped runs, schedule `bmad-auto clean`.
 
 ### Setup & install
 
@@ -161,5 +167,6 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 - `bmad-auto delete <run-id>` — delete a run directory (`--force` stops it first if live).
 - `bmad-auto archive <run-id>` — compress a run into `.automator/archive` and remove it (`--force` stops it first if live).
 - `bmad-auto cleanup` — remove leftover tmux artifacts for finished/stopped runs.
+- `bmad-auto clean` — reclaim disk from concluded runs per `[cleanup]`: tear down worktrees a mid-flight stop orphaned, trim heavy `worktrees/` from runs kept for history, archive/delete past the retention window (`--dry-run`, `--keep`, `--retain N`, `--hard`).
 - `bmad-auto tui` — the interactive dashboard (`--low-frame-rate` for slow/SSH links).
 - Every command takes `--project <dir>` (default: current directory).

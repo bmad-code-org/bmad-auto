@@ -23,6 +23,7 @@ from automator.policy import (
     RETRO_MODES,
     SWEEP_AUTO_MODES,
     AdapterPolicy,
+    CleanupPolicy,
     GatesPolicy,
     LimitsPolicy,
     NotifyPolicy,
@@ -51,6 +52,7 @@ SECTION_DC = {
     "adapter.triage": StageAdapterPolicy,
     "sweep": SweepPolicy,
     "scm": ScmPolicy,
+    "cleanup": CleanupPolicy,
     "tui": TuiPolicy,
 }
 

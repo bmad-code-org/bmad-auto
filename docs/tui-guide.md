@@ -274,6 +274,11 @@ preview). Runs already tear their own session down on finish unless you set
 `[adapter] cleanup_session_on_finish = false`; `c` is for the backlog that
 predates that, or that the flag deliberately keeps around.
 
+`c` only reaps tmux artifacts, not disk. To reclaim run-dir **disk** — worktrees a
+mid-flight stop orphaned (each holding a Unity `Library/`), and old run dirs — use
+the `bmad-auto clean` CLI command (see [`[cleanup]`](FEATURES.md#disk-reclamation-cleanup));
+it is intentionally not bound to a TUI key since it deletes/archives run history.
+
 ## Resolving an escalation (`R`)
 
 `R` is the escalation-specific counterpart to `e`. It is only offered for a run
@@ -397,6 +402,12 @@ behavior.
 | `scm.commit_message_template`         | text                   | (built-in)         | story/bundle commit message; `{story_key}` / `{run_id}` substituted                                                                                  |
 | `scm.failed_diff_max_mb`              | int ≥ 1                | 5                  | per-file cap (MB) for untracked files in a kept-failed unit's `changes.patch`                                                                        |
 | `scm.failed_diff_unlimited`           | switch                 | off                | lift the failed-diff size cap (warns when active)                                                                                                    |
+| `cleanup.run_retention`               | int ≥ 0                | 10                 | newest concluded runs `bmad-auto clean` keeps whole; older ones trimmed/archived (0 = keep none by count)                                            |
+| `cleanup.retention_days`              | int ≥ 0                | 0                  | 0 = off; else also keep runs newer than N days regardless of the count above                                                                         |
+| `cleanup.trim_artifacts`              | switch                 | on                 | drop the heavy `worktrees/` tree from concluded runs; the run still lists in the dashboard                                                           |
+| `cleanup.archive_old`                 | switch                 | on                 | archive (vs hard-delete) runs past the retention window                                                                                              |
+| `cleanup.auto_clean_on_finish`        | switch                 | on                 | reconcile worktrees leaked by a mid-flight stop at each run/sweep start                                                                              |
+| `cleanup.clean_tmp`                   | switch                 | on                 | let engine plugins clean their `/tmp` scratch on finish (e.g. the Unity MCP server zips)                                                             |
 | `plugins.unity.editor_mode`           | select                 | `shared`           | `shared` (needs `scm.isolation = none`) / `per_worktree` (needs `isolation = worktree`)                                                              |
 | `plugins.unity.mcp`                   | select                 | `ivanmurzak`       | Editor MCP the plugin targets: `ivanmurzak` / `coplaydev`                                                                                            |
 | `plugins.unity.unity_path`            | text                   | (auto-detect)      | explicit Editor binary for a `per_worktree` launch; ignored in shared mode                                                                           |
