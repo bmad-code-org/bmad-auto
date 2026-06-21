@@ -5,7 +5,7 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [0.6.1] — unreleased
+## [0.6.1] — 2026-06-20
 
 ### Added
 
@@ -14,6 +14,10 @@ breaking changes may land in a minor release.
   last `-` (e.g. `a1b2`, or as few chars as stay unique). Full ids still work; an ambiguous ref
   fails listing the candidates. New `bmad-auto list` (alias `ls`) prints each run/sweep with its
   short ref, type, and status.
+- **Flexible `--story` selection.** `bmad-auto run --story` now takes more than the exact full
+  key: an epic+number (`--epic 3 --story 1`, `--story 3-1`, or `--story 3.1`) or a slug fragment
+  (`--story user-auth`). Full keys still work. Mismatches are caught before the run launches with a
+  targeted error — no match, ambiguous slug, or matched-but-not-actionable.
 
 ## [0.6.0] — 2026-06-20
 
@@ -425,6 +429,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.6.1]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.1
 [0.6.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.0
 [0.5.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.5.0
 [0.4.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.4.4

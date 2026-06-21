@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bmad-auto"
-version = "0.6.0"
+version = "0.6.1"
 description = "Deterministic ralph-loop orchestrator for the BMAD implementation phase"
 readme = "README.md"
 license = "MIT"
