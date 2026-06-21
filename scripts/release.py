@@ -45,6 +45,7 @@ import sync_version  # noqa: E402
 REPO = sync_version.ROOT
 CHANGELOG = REPO / "CHANGELOG.md"
 SYNC_VERSION = REPO / "scripts" / "sync_version.py"
+SEED_SKILLS = REPO / "scripts" / "seed_skills.py"
 GEN_SCREENSHOTS = REPO / "scripts" / "gen_screenshots.py"
 GEN_DEMO = REPO / "scripts" / "gen_demo.py"
 TUI_PATH = "src/automator/tui"
@@ -257,6 +258,20 @@ def _regen_assets(dry_run: bool) -> None:
             _run(cmd)
 
 
+def _reseed_skills(dry_run: bool) -> None:
+    """Re-copy the canonical bmad-auto skills into the gitignored dev-workspace
+    forks (.claude/skills, .agents/skills) so they pick up the just-stamped
+    module.yaml version. Without this the version bump drifts the forks and the
+    local `tests/test_module_skills_sync.py` fails until reseeded by hand. The
+    forks are gitignored, so nothing here is staged or committed."""
+    cmd = ["uv", "run", "python", str(SEED_SKILLS)]
+    if dry_run:
+        print(f"  would run: {' '.join(cmd)}")
+        return
+    print("reseeding dev-workspace skill forks ...")
+    _run(cmd)
+
+
 def _run_trunk_fmt(dry_run: bool) -> None:
     if not shutil.which("trunk"):
         print("  trunk not on PATH — skipping fmt (run `trunk check` before pushing)")
@@ -330,6 +345,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         print("\n[dry-run] planned actions:")
         print(f"  ensure CHANGELOG link ref: [{version}]: {url}/releases/tag/{tag}")
         print(f"  run: python {SYNC_VERSION.relative_to(REPO)} {version}  (+ uv lock)")
+        _reseed_skills(dry_run=True)
         if regen:
             _regen_assets(dry_run=True)
         _run_trunk_fmt(dry_run=True)
@@ -342,6 +358,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
     print(f"stamping version via {SYNC_VERSION.name} ...")
     _run(["uv", "run", "python", str(SYNC_VERSION), version])
+
+    _reseed_skills(dry_run=False)
 
     if regen:
         print("regenerating screenshots + demo ...")
