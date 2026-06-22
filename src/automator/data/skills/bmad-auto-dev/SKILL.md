@@ -15,7 +15,7 @@ This skill runs **unattended only**. A deterministic program spawned you, will v
 - No commit. No push. No remote ops. The orchestrator creates the commit.
 - Speak tersely — one line per step. Spend tokens on the work, not narration.
 - The invocation argument **is** the intent; treat it as authoritative.
-- Writing `result.json` is the LAST action of a successful run (step-05 does this).
+- `result.json` is the LAST artifact a successful run writes (step-05 does this); only the optional `workflow.on_complete` hook may run after it, before the turn ends.
 - If blocked by something no rule here resolves: write `escalation.json`, then write `result.json` with the escalation included, then END YOUR TURN.
 
 ## Identity & I/O

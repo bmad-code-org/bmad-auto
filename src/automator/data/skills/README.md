@@ -7,8 +7,9 @@ installer, or laid down by `bmad-auto init` (the orchestrator's wheel **bundles*
 them); either way `bmad-auto-setup` installs the `bmad-auto` package from its
 Git repository, so installing this module gives you a working system — skills
 plus the orchestrator that invokes them. Standard BMAD installs are never
-modified; the skills are automator-owned forks maintained against their upstream
-counterparts.
+modified; the skills are automator-owned — some are forks maintained against
+their upstream counterparts (`bmad-auto-review`), others are standalone or
+automator-native (see the table below).
 
 | Component           | Forked from          | Role                                                                                                                                                                                                                                                   |
 | ------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

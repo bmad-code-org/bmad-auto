@@ -549,6 +549,15 @@ def verify_dev(
     result_json: dict[str, Any] | None,
     review_enabled: bool = True,
 ) -> VerifyOutcome:
+    """Verify a dev session's on-disk artifacts against its result.json claims.
+
+    Checks the claimed spec exists, carries the fixed ``auto-dev`` workflow tag,
+    sits at the expected status (``in-review`` when a separate review session
+    follows, ``done`` when review is disabled), records a baseline matching the
+    orchestrator's, has produced changes since that baseline, and that the
+    story's sprint-status was advanced to the matching stage. Returns a retryable
+    VerifyOutcome on any mismatch, escalates on git failure, passes otherwise.
+    """
     rj = result_json or {}
     spec_file = rj.get("spec_file")
     if not spec_file:
@@ -586,10 +595,11 @@ def verify_dev(
         except GitError as e:
             return VerifyOutcome.escalate(str(e))
 
+    expected_sprint = "review" if review_enabled else "done"
     sprint = story_status(paths.sprint_status, task.story_key)
-    if sprint not in ("review", "done"):
+    if sprint != expected_sprint:
         return VerifyOutcome.retry(
-            f"sprint-status for {task.story_key} is {sprint!r}, expected 'review'"
+            f"sprint-status for {task.story_key} is {sprint!r}, expected {expected_sprint!r}"
         )
 
     task.spec_file = str(spec_path)

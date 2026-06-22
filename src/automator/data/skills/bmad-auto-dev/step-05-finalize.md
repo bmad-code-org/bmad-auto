@@ -4,7 +4,7 @@ deferred_work_file: '{implementation_artifacts}/deferred-work.md'
 
 # Step 5: Finalize
 
-Terminal step. No commit, no push, no editor — the orchestrator creates the commit. Writing `result.json` is your last action.
+Terminal step. No commit, no push, no editor — the orchestrator creates the commit. `result.json` is the last artifact you write; the only thing that may follow it is the `On Complete` hook below, which is your final action before ending the turn.
 
 In skip-review mode (`$BMAD_AUTO_SKIP_REVIEW=1`) the inline triple-review already ran in step-04 — do **not** re-run it here. In default mode you arrived here straight from step-03, and the orchestrator will review in a separate session.
 
@@ -34,10 +34,12 @@ In skip-review mode (`$BMAD_AUTO_SKIP_REVIEW=1`) the inline triple-review alread
    - `escalations` = contents of any escalations raised this run (else empty).
    - **Bundle mode only:** include `"dw_ids": [<the bundle's ids, verbatim>]`.
 
-6. **End the turn** with a one-line statement of what was implemented. Do not ask questions, offer next steps, or wait for anything.
+6. **Run the On Complete hook** (see below). This is the only step that may follow writing `result.json`.
+
+7. **End the turn** with a one-line statement of what was implemented. Do not ask questions, offer next steps, or wait for anything.
 
 ## On Complete
 
 Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow.on_complete`
 
-If the resolved `workflow.on_complete` is non-empty, follow it as the final terminal instruction before exiting.
+If the resolved `workflow.on_complete` is non-empty, follow it now, before ending the turn (instruction 7). If it is empty, there is nothing to run — proceed straight to ending the turn.

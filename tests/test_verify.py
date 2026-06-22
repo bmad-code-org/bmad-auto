@@ -75,6 +75,19 @@ def test_verify_dev_review_disabled_expects_done(project):
     assert not out.ok and "expected 'done'" in out.reason
 
 
+def test_verify_dev_review_disabled_rejects_review_sprint(project):
+    # Skip-review finalizes the sprint to 'done'; a run that left it at 'review'
+    # must not slip through the sprint-status gate.
+    write_sprint(project, {"1-1-a": "review"})
+    task = make_task(project)
+    sp = spec_path(project, "1-1-a")
+    write_spec(sp, "done", task.baseline_commit)
+    (project.project / "src.txt").write_text("changed\n")
+
+    out = verify.verify_dev(task, project, dev_result(sp), review_enabled=False)
+    assert not out.ok and "sprint-status" in out.reason and "expected 'done'" in out.reason
+
+
 def test_verify_dev_lying_baseline(project):
     task = make_task(project)
     sp = spec_path(project, "1-1-a")
