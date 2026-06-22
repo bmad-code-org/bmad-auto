@@ -15,7 +15,7 @@ breaking changes may land in a minor release.
   the orchestrator contract (invocation, escalation, result schema) stated up front — no greeting,
   menus, or HALTs to override. Epic-context compilation, previous-story continuity, and the inline
   three-layer adversarial review are all preserved: with `review.enabled = false` the dev session
-  runs that inline triple-review itself before finalizing to `done` (a judge that did the planning is
+  runs that inline triple-review itself before finalizing to `done` (a judge who did the planning is
   better-informed); with `review.enabled = true` the orchestrator runs a separate fresh-context
   review session instead. Mirrors the upstream draft bmad-code-org/BMAD-METHOD#2498 (renamed
   `bmad-dev-auto` → `bmad-auto-dev` to match the orchestrator's `/bmad-auto-dev` invocation). No

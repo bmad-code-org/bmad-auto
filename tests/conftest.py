@@ -208,7 +208,7 @@ def triage_effect(result_json: dict):
 
 def bundle_dev_effect(paths: ProjectPaths, name: str, dw_ids, mark_ledger: bool = True):
     """Simulate a bmad-auto-dev bundle session (--dw-bundle): edits code, writes
-    the bundle spec, and (like step-04-finalize bundle mode) marks the
+    the bundle spec, and (like step-05-finalize bundle mode) marks the
     bundle's ledger entries done."""
 
     def effect(spec: SessionSpec) -> SessionResult:
