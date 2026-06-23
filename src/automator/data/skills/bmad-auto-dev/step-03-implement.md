@@ -3,7 +3,7 @@
 
 # Step 3: Implement
 
-Implement the spec. No push, no remote ops, sequential execution only. Content inside `<frozen-after-approval>` in `{spec_file}` is read-only — do not modify it.
+Implement the spec. No push, no remote ops, sequential execution only. Content inside `<frozen-after-approval>` in `{spec_file}` is read-only — do not modify it. If any **Block If** condition in the spec's Boundaries triggers during implementation, escalate `CRITICAL` (`type: block-if`) and end the run — do not resolve it unattended.
 
 ## PRECONDITION
 

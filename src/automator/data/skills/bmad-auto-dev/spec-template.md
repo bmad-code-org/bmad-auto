@@ -25,9 +25,15 @@ context: [] # optional: `{project-root}/`-prefixed paths to project-wide standar
 
 ## Boundaries & Constraints
 
-<!-- Two tiers: Always = invariant rules. Never = out of scope + forbidden approaches. -->
+<!-- Three tiers: Always = invariant rules. Block If = decisions that cannot be made
+     unattended. Never = out of scope + forbidden approaches. -->
 
 **Always:** INVARIANT_RULES
+
+**Block If:** DECISIONS_REQUIRING_HUMAN_INPUT
+
+<!-- If any of these trigger during implementation or review, escalate CRITICAL
+     (type: block-if) and end the run — do not decide unattended. Omit the tier if none. -->
 
 **Never:** NON_GOALS_AND_FORBIDDEN_APPROACHES
 

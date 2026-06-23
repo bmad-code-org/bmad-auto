@@ -12,7 +12,7 @@ Skip this entire file (return to caller) if ANY of:
 ## Instructions
 
 1. Load the FULL `{sprint_status}` file.
-2. Find the `development_status` entry matching `{story_key}`. If not found, warn the user once (`"{story_key} not found in sprint-status; skipping sprint sync"`) and return to caller.
+2. Find the `development_status` entry matching `{story_key}`. If not found, add `sprint-sync-skipped` to the `{spec_file}` frontmatter `warnings` array (creating the `warnings` field if it does not exist), emit a one-line note (`"{story_key} not found in sprint-status; skipping sprint sync"`), and return to caller.
 3. **Idempotency check.** If `development_status[{story_key}]` is already at `{target_status}` or a later state (`review` is later than `in-progress`; `done` is later than both), return to caller — no write needed. Never regress a story's status.
 4. Set `development_status[{story_key}]` to `{target_status}`.
 5. **Epic lift (only when `{target_status}` = `in-progress`).** Derive the parent epic key as `epic-{N}` from the leading numeric segment of `{story_key}` (e.g., `3-2-digest-delivery` → `epic-3`). If that entry exists and is `backlog`, set it to `in-progress`. Leave it alone otherwise. Skip this sub-step entirely when `{target_status}` is not `in-progress`.

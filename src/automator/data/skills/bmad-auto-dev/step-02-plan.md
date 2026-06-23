@@ -23,7 +23,7 @@ Turn the intent into a "Ready for Development" spec at `{spec_file}`. No interme
 
 3. **Investigate the codebase** and any relevant context files. Isolate deep exploration in sub-agents where available; instruct them to return distilled summaries only, to avoid context snowballing.
 
-4. **Write the spec.** Read `./spec-template.md` fully, fill it from the intent and investigation, and write `{spec_file}`. If `{preserved_intent}` is non-empty, substitute it for the template's `<frozen-after-approval>` block before writing.
+4. **Write the spec.** Read `./spec-template.md` fully, fill it from the intent and investigation, and write `{spec_file}`. If `{preserved_intent}` is non-empty, substitute it for the template's `<frozen-after-approval>` block before writing. When filling **Boundaries & Constraints**, populate the **Block If** tier with any decisions surfaced during investigation that cannot be made safely without a human (these become CRITICAL block triggers in steps 3–4); omit the tier if there are none.
 
 5. **Self-review** the spec against the READY FOR DEVELOPMENT standard (actionable, logical, testable, complete) and fix anything it surfaces.
 

@@ -23,6 +23,13 @@ breaking changes may land in a minor release.
 
 ### Added
 
+- **`bmad-auto-dev` spec Boundaries gain a `Block If` tier** (from upstream
+  bmad-code-org/BMAD-METHOD#2500). Frozen, spec-local list of decisions that cannot be made
+  unattended; triggering one in implementation or review escalates `CRITICAL` (`type: block-if`).
+  Also: `sync-sprint-status` now writes a machine-readable `sprint-sync-skipped` frontmatter
+  warning when a story key is absent (was log-only), and `compile-epic-context` uses a deterministic
+  fallback sentence when planning artifacts are missing.
+
 - **`result.json` `workflow` is now an enforced contract on the dev path.** `verify_dev` /
   `verify_dev_bundle` reject a mismatch against `verify.DEV_WORKFLOW` (`"auto-dev"`); the skill emits
   `"auto-dev"` instead of the misleading legacy `"quick-dev"`. Review's `"code-review"` stays
