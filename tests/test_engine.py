@@ -40,7 +40,7 @@ from automator.policy import (
     VerifyPolicy,
 )
 from automator.runs import rearm_escalation
-from automator.verify import rev_parse_head, worktree_clean
+from automator.verify import read_frontmatter, rev_parse_head, worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 
@@ -679,6 +679,40 @@ def test_resolved_escalation_resume_skips_clean_rollback(project):
     kinds = [e["kind"] for e in resumed.journal.entries()]
     assert "rollback-skipped-clean" in kinds
     assert "rollback-manual-required" not in kinds
+
+
+def test_dev_escalation_records_spec_for_rearm(project):
+    """A dev session that HALTs with a `blocked` spec still records task.spec_file,
+    so rearm_escalation can flip the spec to `ready-for-dev` for the re-drive.
+    Without it (verify_dev only records the spec on success) the re-drive HALTs
+    again on the stale `blocked` status — the loop seen in the live run."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    sp = spec_path(project, "1-1-a")
+
+    def halt_blocked(spec):
+        write_spec(sp, "blocked", rev_parse_head(project.project))
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "escalations": [
+                    {"type": "blocked", "severity": "CRITICAL", "detail": "blocked spec supplied"}
+                ],
+            },
+        )
+
+    engine, _ = make_engine(project, [halt_blocked])
+    summary = engine.run()
+    assert summary.paused and summary.escalated == 1
+
+    task = load_state(engine.run_dir).tasks["1-1-a"]
+    assert task.phase == Phase.ESCALATED
+    assert task.spec_file and Path(task.spec_file).name == sp.name  # recorded despite HALT
+
+    rearm_escalation(engine.run_dir)  # the resolve workflow's re-arm step
+    assert read_frontmatter(sp)["status"] == "ready-for-dev"  # re-drive will not HALT
 
 
 def test_dev_stall_retries_then_succeeds(project):

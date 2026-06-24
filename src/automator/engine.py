@@ -1064,9 +1064,30 @@ class Engine:
                     self._rollback_or_pause(task)
                 continue
             if decision.action == Action.DEFER:
+                self._record_dev_spec(task, result.result_json)
                 self._defer(task, decision.reason)
                 return False
+            self._record_dev_spec(task, result.result_json)
             self._escalate(task, decision.reason)
+
+    def _record_dev_spec(self, task: StoryTask, result_json: dict | None) -> None:
+        """Capture the spec the dev session produced when the session escalates or
+        defers. ``verify_dev`` only records ``task.spec_file`` on full success, so
+        a blocked/escalated spec (the common escalation case) would otherwise leave
+        it unset — and then escalation resolution (``runs.rearm_escalation`` flips
+        the spec's frontmatter status to ``ready-for-dev``) and deferral stashing
+        have no spec path to act on, so the re-drive HALTs on the stale ``blocked``
+        status. The synthesized result names the spec even on a HALT
+        (``devcontract.synthesize_result``). No-op once set or when the claimed
+        spec is absent."""
+        if task.spec_file:
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if spec_path.is_file():
+            task.spec_file = str(spec_path)
 
     def _review_and_commit(self, task: StoryTask) -> None:
         if not self.policy.review.enabled:

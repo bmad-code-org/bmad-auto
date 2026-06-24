@@ -57,6 +57,13 @@ breaking changes may land in a minor release.
   when an escalation left no changes at all.
 - **Manual-recovery notice wording.** The prompt no longer claims the story "failed" — it now reflects
   the real cause ("escalation was resolved; re-driving needs a clean baseline" vs. "attempt was stopped").
+- **Resolved escalations now actually re-drive instead of HALTing on a stale `blocked` spec.** `verify_dev`
+  only recorded `task.spec_file` on a fully successful session, so a dev session that escalated with a
+  `blocked` spec (the common escalation case) left it unset. `rearm_escalation` then had no spec path to
+  flip to `ready-for-dev`, so on resume `bmad-dev-auto`'s step-01 routing re-HALTed on the still-`blocked`
+  frontmatter — a second loop. The orchestrator now captures the spec the session produced when it
+  escalates or defers (the synthesized result names it even on a HALT), so re-arm flips the status and
+  the re-drive proceeds, and a deferred story's spec is stashed as intended.
 
 ## [0.6.4] — 2026-06-21
 
