@@ -111,6 +111,36 @@ def dev_effect(paths: ProjectPaths, story_key: str):
     return effect
 
 
+def generic_dev_effect(paths: ProjectPaths, story_key: str, *, final_status: str = "done"):
+    """Simulate Alex's decoupled bmad-dev-auto session: it self-finalizes the
+    spec but never touches the automator's sprint board (the orchestrator is the
+    single sprint-status writer for this path). ``final_status`` lets a test
+    leave the spec short of the success status to exercise the gating."""
+
+    def effect(spec: SessionSpec) -> SessionResult:
+        baseline = rev_parse_head(paths.project)
+        source = paths.project / "src.txt"
+        source.write_text(source.read_text() + f"change for {story_key}\n")
+        sp = spec_path(paths, story_key)
+        write_spec(sp, final_status, baseline)
+        # deliberately NO set_sprint: the generic skill does not write sprint-status
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "tasks_total": 3,
+                "tasks_done": 3,
+                "verification": [],
+                "escalations": [],
+            },
+        )
+
+    return effect
+
+
 def review_effect(paths: ProjectPaths, story_key: str, clean: bool, patched: int = 0):
     """Simulate a code-review automation session."""
 

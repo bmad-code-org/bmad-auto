@@ -9,6 +9,19 @@ def test_defaults_when_file_missing(tmp_path):
     assert pol.limits.max_review_cycles == 3
     assert pol.adapter.name == "claude"
     assert pol.adapter.extra_args is None  # None = use the profile's bypass flags
+    assert pol.dev.skill == "bmad-auto-dev"  # legacy skill is the default + fallback
+
+
+def test_dev_skill_select_and_validate():
+    assert policy.loads('[dev]\nskill = "bmad-dev-auto"\n').dev.skill == "bmad-dev-auto"
+    assert policy.loads("").dev.skill == "bmad-auto-dev"
+    with pytest.raises(policy.PolicyError, match="dev.skill"):
+        policy.loads('[dev]\nskill = "nope"\n')
+
+
+def test_review_enabled_default_and_parse():
+    assert policy.loads("").review.enabled is True
+    assert policy.loads("[review]\nenabled = false\n").review.enabled is False
 
 
 def test_cleanup_session_on_finish_default_and_override(tmp_path):

@@ -22,7 +22,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .. import runs
+from .. import devcontract, runs
 from ..journal import LOGS_DIR
 from ..model import TokenUsage
 from ..policy import Policy
@@ -225,7 +225,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if event is None:
                 if not self._window_alive(handle):
                     # died without a SessionEnd hook (killed, crashed hard)
-                    return self._final(handle, "crashed", session_id, transcript_path)
+                    return self._final(handle, spec, "crashed", session_id, transcript_path)
                 continue
             session_id = event.session_id or session_id
             transcript_path = event.transcript_path or transcript_path
@@ -233,7 +233,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if event.event == "SessionStart":
                 continue
             if event.event == "Stop":
-                result_json = self._await_result(handle.task_id)
+                result_json = self._result_json(handle, spec, wait=True)
                 if result_json is not None:
                     return SessionResult(
                         status="completed",
@@ -245,20 +245,29 @@ class GenericTmuxAdapter(CodingCLIAdapter):
                     nudges_left -= 1
                     self.send_text(handle, NUDGE_TEXT)
                     continue
-                return self._final(handle, "stalled", session_id, transcript_path)
+                return self._final(handle, spec, "stalled", session_id, transcript_path)
             if event.event == "SessionEnd":
-                return self._final(handle, "crashed", session_id, transcript_path)
+                return self._final(handle, spec, "crashed", session_id, transcript_path)
+
+    def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
+        """Acquire this session's result dict. Base behavior: read the
+        skill-written ``result.json`` (briefly awaiting it on the Stop event,
+        reading once otherwise). Subclasses whose skill writes no result.json
+        (GenericDevAdapter) override this to synthesize the dict from another
+        on-disk artifact."""
+        return self._await_result(handle.task_id) if wait else self._read_result(handle.task_id)
 
     def _final(
         self,
         handle: SessionHandle,
+        spec: SessionSpec,
         fallback: str,
         session_id: str | None,
         transcript: str | None,
     ) -> SessionResult:
         """Session is gone or done responding: completed if the result file
         landed anyway, otherwise the fallback status."""
-        result_json = self._read_result(handle.task_id)
+        result_json = self._result_json(handle, spec, wait=False)
         status = "completed" if result_json is not None else fallback
         return SessionResult(
             status=status,
@@ -334,3 +343,33 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if usage is not None or time.monotonic() >= deadline:
                 return usage
             time.sleep(RESULT_POLL_S)
+
+
+class GenericDevAdapter(GenericTmuxAdapter):
+    """Dev adapter for Alex Verhovsky's generic ``bmad-dev-auto`` skill.
+
+    That skill writes NO ``result.json`` — its outcome lives in the spec it
+    leaves on disk (frontmatter ``status:`` plus an appended ``## Auto Run
+    Result``, or, when it never created a spec, a ``bmad-dev-auto-result-*.md``
+    fallback). On the Stop event we locate that artifact and synthesize the
+    legacy result dict from it via :mod:`devcontract`, so verify/escalation and
+    the rest of the pipeline consume it unchanged. Selected by
+    ``policy.dev.skill == "bmad-dev-auto"`` (see ``cli._make_adapters``).
+    """
+
+    def __init__(self, *args, impl_artifacts: Path, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.impl_artifacts = impl_artifacts
+        # The generic skill never writes result.json, so the base "write the
+        # result JSON file" nudge is meaningless — and actively misleading — for
+        # it. A Stop without a terminal spec is a genuine stall.
+        self._stop_nudges = 0
+
+    def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
+        spec_path = devcontract.find_result_artifact(
+            self.impl_artifacts, since_ns=handle.launched_ns
+        )
+        if spec_path is None:
+            return None
+        story_key = spec.env.get("BMAD_AUTO_STORY_KEY") or None
+        return devcontract.synthesize_result(spec_path, story_key=story_key).result_json

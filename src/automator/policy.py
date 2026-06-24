@@ -16,6 +16,7 @@ SWEEP_AUTO_MODES = {"never", "per-epic", "run-end"}
 ISOLATION_MODES = {"none", "worktree"}
 BRANCH_PER_MODES = {"story", "run"}
 MERGE_STRATEGIES = {"ff", "merge", "squash"}
+DEV_SKILLS = {"bmad-auto-dev", "bmad-dev-auto"}
 
 # Deprecated [engine] keys, folded into [plugins.unity] at load time. The
 # game-engine layer is now a plugin; [engine] is a one-release compatibility
@@ -62,6 +63,15 @@ class ReviewPolicy:
     # the bmad-auto-dev session runs its own inline triple-review instead and
     # finalizes the story straight to done.
     enabled: bool = True
+
+
+@dataclass(frozen=True)
+class DevPolicy:
+    # Which inner dev skill the orchestrator drives. "bmad-auto-dev" (default) is
+    # the automator's own machine-first skill that writes result.json. "bmad-dev-auto"
+    # is Alex Verhovsky's generic upstream primitive (BMAD-METHOD PR #2500): it
+    # writes no result.json — the GenericDevAdapter synthesizes one from the spec.
+    skill: str = "bmad-auto-dev"
 
 
 @dataclass(frozen=True)
@@ -257,6 +267,7 @@ class Policy:
     verify: VerifyPolicy = field(default_factory=VerifyPolicy)
     notify: NotifyPolicy = field(default_factory=NotifyPolicy)
     review: ReviewPolicy = field(default_factory=ReviewPolicy)
+    dev: DevPolicy = field(default_factory=DevPolicy)
     adapter: AdapterPolicy = field(default_factory=AdapterPolicy)
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
     scm: ScmPolicy = field(default_factory=ScmPolicy)
@@ -371,6 +382,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
     verify_d = _section(doc, "verify")
     notify_d = _section(doc, "notify")
     review_d = _section(doc, "review")
+    dev_d = _section(doc, "dev")
     adapter_d = _section(doc, "adapter")
     sweep_d = _section(doc, "sweep")
     scm_d = _section(doc, "scm")
@@ -417,7 +429,12 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         desktop=bool(notify_d.get("desktop", NotifyPolicy.desktop)),
         file=bool(notify_d.get("file", NotifyPolicy.file)),
     )
-    review = ReviewPolicy(enabled=bool(review_d.get("enabled", ReviewPolicy.enabled)))
+    review = ReviewPolicy(
+        enabled=bool(review_d.get("enabled", ReviewPolicy.enabled)),
+    )
+    dev = DevPolicy(skill=str(dev_d.get("skill", DevPolicy.skill)))
+    if dev.skill not in DEV_SKILLS:
+        raise PolicyError(f"dev.skill must be one of {sorted(DEV_SKILLS)}: got {dev.skill!r}")
     for legacy, replacement in (
         ("model_dev", "[adapter.dev] model"),
         ("model_review", "[adapter.review] model"),
@@ -546,6 +563,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         verify=verify,
         notify=notify,
         review=review,
+        dev=dev,
         adapter=adapter,
         sweep=sweep,
         scm=scm,

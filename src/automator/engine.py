@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import gates, verify
+from . import devcontract, gates, verify
 from .adapters.base import CodingCLIAdapter, SessionResult, SessionSpec
 from .bmadconfig import ProjectPaths
 from .escalation import (
@@ -38,6 +38,7 @@ from .model import (
 from .plugins import HookBus, HookContext, PluginRegistry
 from .policy import Policy
 from .runs import kill_session
+from .sprintstatus import advance as sprint_advance
 from .sprintstatus import load as load_sprint_status
 from .sprintstatus import next_actionable, parse_selector
 from .statemachine import advance
@@ -990,6 +991,10 @@ class Engine:
             advance(task, Phase.DEV_VERIFY)
             outcome = None
             if result.status == "completed":
+                # generic-path single-writer for the bookkeeping the decoupled
+                # skill never touches (sprint-status for stories, the deferred-work
+                # ledger for sweep bundles), before verify reads that state.
+                self._post_dev_state_sync(task, result.result_json)
                 outcome = self._verify_dev_artifacts(task, result.result_json)
                 if outcome.ok:
                     # deterministic gates run here too: a broken build must not
@@ -1033,6 +1038,13 @@ class Engine:
 
     def _review_and_commit(self, task: StoryTask) -> None:
         if not self.policy.review.enabled:
+            self._skip_review_and_commit(task)
+            return
+        if self._generic_dev():
+            # The generic bmad-dev-auto skill runs its own inline review and
+            # self-finalizes to done; the orchestrator runs no separate
+            # second-opinion review on this path. (A future skill signal will let
+            # it request one; until then, verify the deterministic gates + commit.)
             self._skip_review_and_commit(task)
             return
         if self._vetoed(self._emit("pre_review_phase", task), task):
@@ -1160,9 +1172,52 @@ class Engine:
     # SweepEngine reuses the dev/review pipeline for deferred-work bundles by
     # overriding these (bundles have no sprint-status entry).
 
+    def _generic_dev(self) -> bool:
+        """True when the orchestrator is driving Alex's decoupled bmad-dev-auto
+        skill rather than the automator's own bmad-auto-dev."""
+        return self.policy.dev.skill == "bmad-dev-auto"
+
+    def _dev_review_enabled(self) -> bool:
+        """Spec-status/sprint semantics for verify_dev and the sprint sync. The
+        generic skill always self-finalizes to ``done`` (no in-review handoff), so
+        its dev artifacts are verified as the review-disabled case regardless of
+        whether a B3 deep review will later run; the legacy skill follows
+        ``policy.review.enabled``."""
+        if self._generic_dev():
+            return False
+        return self.policy.review.enabled
+
+    def _post_dev_state_sync(self, task: StoryTask, result_json: dict | None) -> None:
+        """Single-writer for the on-disk bookkeeping the generic skill never touches.
+
+        For a story that is sprint-status: the legacy ``bmad-auto-dev`` skill
+        advances it itself; Alex's decoupled ``bmad-dev-auto`` knows nothing of the
+        automator's sprint board, so the orchestrator writes it — and must do so
+        before ``verify_dev`` checks the sprint stage. Mirrors ``verify_dev``:
+        advance the story to the sprint stage matching the spec status the skill
+        actually reached, so a failed or blocked session (spec not at the success
+        status) never advances the sprint. No-op for the legacy path; SweepEngine
+        overrides this to flip the deferred-work ledger instead (bundles carry no
+        sprint-status entry)."""
+        if not self._generic_dev():
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if not spec_path.is_file():
+            return
+        review_enabled = self._dev_review_enabled()  # always False for the generic path
+        success_status = "in-review" if review_enabled else "done"
+        status = str(verify.read_frontmatter(spec_path).get("status", "")).strip()
+        if status != success_status:
+            return
+        target = "review" if review_enabled else "done"
+        sprint_advance(self.workspace.paths.sprint_status, task.story_key, target)
+
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
         return verify.verify_dev(
-            task, self.workspace.paths, result_json, review_enabled=self.policy.review.enabled
+            task, self.workspace.paths, result_json, review_enabled=self._dev_review_enabled()
         )
 
     def _verify_review(self, task: StoryTask):
@@ -1277,10 +1332,41 @@ class Engine:
         return result
 
     def _dev_prompt(self, task: StoryTask, feedback: Path | None) -> str:
+        if self.policy.dev.skill == "bmad-dev-auto":
+            return self._generic_dev_prompt(task, feedback)
         prompt = f"/bmad-auto-dev {task.story_key}"
         if feedback is not None:
             prompt += f" --feedback {feedback}"
         return prompt
+
+    def _generic_dev_prompt(self, task: StoryTask, feedback: Path | None) -> str:
+        """Invocation for Alex's generic `bmad-dev-auto`, which has no
+        `--feedback` flag: feedback is inlined as freeform intent pointing at the
+        existing spec. On a repair re-invocation the spec is first re-opened
+        (status → `in-progress`) so the skill's step-01 re-enters implement/review
+        on it rather than ingesting a finalized spec as mere context."""
+        if feedback is None:
+            return f"/bmad-dev-auto {task.story_key}"
+        self._reset_spec_for_repair(task)
+        spec_ref = task.spec_file or task.story_key
+        return (
+            f"/bmad-dev-auto Resume the autonomous dev session on the in-progress "
+            f"spec at `{spec_ref}`. The previous session's work failed deterministic "
+            f"verification; repair the working tree so verification passes without "
+            f"changing the spec's frozen intent contract. Verification evidence is "
+            f"in `{feedback}`."
+        )
+
+    def _reset_spec_for_repair(self, task: StoryTask) -> None:
+        """Re-open a generic-skill spec before a repair re-invocation. bmad-dev-auto
+        self-finalizes to `done` (or `in-review`); its step-01 routes such a spec to
+        "ingest as context, do not resume," so a repair must flip the frontmatter
+        `status` back to `in-progress` to re-enter implement/review in place against
+        the frozen intent contract. No-op when no spec is recorded yet (the prompt
+        then falls back to the story key)."""
+        if not task.spec_file:
+            return
+        devcontract.reset_spec_status(Path(task.spec_file), "in-progress")
 
     def _write_feedback(self, task: StoryTask, reason: str) -> Path:
         """Persist a verification failure where the next session can read it —

@@ -334,3 +334,49 @@ def test_field_severity_forms():
     assert field_severity("priority: blocker") == "critical"
     assert field_severity("severity: n/a") is None
     assert field_severity("no field here") is None
+
+
+# the generic bmad-dev-auto review appender flat shape (step-04 deferral)
+FLAT_APPENDER = """\
+# Deferred Work
+
+## Deferred from: spec-3-2-digest (2026-06-20)
+
+- source_spec: `spec-3-2-digest.md`
+  summary: Digest scheduler ignores the user timezone offset
+  evidence: `schedule.py` hardcodes UTC; surfaced while reviewing the diff
+- source_spec: `spec-3-2-digest.md`
+  summary: No retry on transient SMTP failures
+  evidence: send() raises and the run aborts with no backoff
+"""
+
+
+def test_flat_appender_uses_summary_as_title():
+    entries = parse_legacy(FLAT_APPENDER)
+    assert len(entries) == 2
+    tz, smtp = entries
+    assert tz.title == "Digest scheduler ignores the user timezone offset"
+    assert smtp.title == "No retry on transient SMTP failures"
+    # flat entries are freshly-appended findings: open, no native id, no severity
+    assert not tz.done and not smtp.done
+    assert tz.id == "" and smtp.id == ""
+    assert tz.severity is None
+    # source_spec / evidence stay in the body for the migrating session to read
+    assert "source_spec" in tz.body and "evidence" in tz.body
+    assert has_legacy(FLAT_APPENDER)
+
+
+def test_flat_appender_missing_summary_falls_back():
+    text = "## Deferred\n\n- source_spec: `spec-x.md`\n  evidence: orphaned note\n"
+    (entry,) = parse_legacy(text)
+    assert entry.title.startswith("source_spec:")  # no summary → keep the raw line
+    assert not entry.done
+
+
+def test_flat_appender_in_done_section_is_done():
+    text = (
+        "## Deferred from: old review (2026-06-01) — DONE\n\n"
+        "- source_spec: `spec-y.md`\n  summary: Already handled upstream\n"
+    )
+    (entry,) = parse_legacy(text)
+    assert entry.done and entry.title == "Already handled upstream"

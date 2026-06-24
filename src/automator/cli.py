@@ -58,19 +58,31 @@ ROLES = ("dev", "review", "triage")
 
 
 def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIAdapter]:
-    from .adapters.generic_tmux import GenericTmuxAdapter
+    from .adapters.generic_tmux import GenericDevAdapter, GenericTmuxAdapter
     from .adapters.profile import ProfileError, get_profile
+
+    # The generic dev adapter needs the implementation-artifacts dir to find the
+    # spec it synthesizes its result from; resolve it only when that skill is
+    # actually selected (keeps the default path free of an extra config read).
+    impl_artifacts: Path | None = None
+    if policy.dev.skill == "bmad-dev-auto":
+        impl_artifacts = bmadconfig.load_paths(project).implementation_artifacts
 
     adapters: dict[str, CodingCLIAdapter] = {}
     by_cfg: dict = {}
     for role in ROLES:
         cfg = policy.adapter.resolved(role)
-        if cfg not in by_cfg:
+        # The generic dev skill writes no result.json: its dev adapter must
+        # synthesize the result from the spec, so it cannot be shared with the
+        # other roles even when their adapter config is identical.
+        generic_dev = role == "dev" and policy.dev.skill == "bmad-dev-auto"
+        key = (cfg, generic_dev)
+        if key not in by_cfg:
             try:
                 profile = get_profile(cfg.name, project)
             except ProfileError as e:
                 raise SystemExit(f"error: {e}") from e
-            by_cfg[cfg] = GenericTmuxAdapter(
+            common = dict(
                 run_dir=run_dir,
                 policy=policy,
                 profile=profile,
@@ -78,7 +90,12 @@ def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIA
                 usage_grace_s=cfg.usage_grace_s,
                 stop_without_result_nudges=cfg.stop_without_result_nudges,
             )
-        adapters[role] = by_cfg[cfg]
+            by_cfg[key] = (
+                GenericDevAdapter(**common, impl_artifacts=impl_artifacts)
+                if generic_dev
+                else GenericTmuxAdapter(**common)
+            )
+        adapters[role] = by_cfg[key]
     return adapters
 
 

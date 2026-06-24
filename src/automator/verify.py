@@ -721,8 +721,10 @@ def verify_review(task: StoryTask, paths: ProjectPaths, policy: Policy) -> Verif
 
 def verify_review_bundle(task: StoryTask, paths: ProjectPaths, policy: Policy) -> VerifyOutcome:
     """verify_review for a deferred-work bundle: no sprint-status check, but
-    every dw id the bundle owns must be marked done in the ledger on disk —
-    the LLM is told to flip them; this gate is why we can trust it happened."""
+    every dw id the bundle owns must be marked done in the ledger on disk. The
+    legacy --dw-bundle skill flips them; on the generic bmad-dev-auto path the
+    orchestrator flips them in _post_dev_state_sync. Either way this gate is why
+    we can trust it happened."""
     if not task.spec_file:
         return VerifyOutcome.retry("no spec file recorded for task")
     fm = read_frontmatter(Path(task.spec_file))

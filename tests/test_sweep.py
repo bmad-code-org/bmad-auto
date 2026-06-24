@@ -426,6 +426,49 @@ def test_sweep_happy_path(project):
     assert "fix both" in intent and "DW-2" in intent and "### DW-3" in intent
 
 
+def test_generic_skill_bundle_orchestrator_closes_ledger(project):
+    """B4: on the generic bmad-dev-auto path the bundle session never edits the
+    ledger; the orchestrator marks each owned dw id done (in _post_dev_state_sync)
+    and verify_review_bundle confirms its own write. The invocation is freeform."""
+    from automator.policy import DevPolicy
+
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    plan = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[{"name": "fix-things", "dw_ids": ["DW-1", "DW-2"], "intent": "fix both"}],
+    )
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_sweep(
+        project,
+        # mark_ledger=False: the decoupled skill does NOT touch the ledger
+        [
+            triage_effect(plan),
+            bundle_dev_effect(project, "fix-things", ["DW-1", "DW-2"], mark_ledger=False),
+        ],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert not summary.paused
+    assert engine.state.tasks["dw-fix-things"].phase == Phase.DONE
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")
+    assert entries["DW-2"].status.startswith("done")
+    assert "resolved by sweep bundle dw-fix-things" in entries["DW-1"].body
+    # freeform generic invocation pointing at the rendered intent.md, no --dw-bundle flag
+    dev_prompt = adapter.sessions[1].prompt
+    assert dev_prompt.startswith("/bmad-dev-auto Implement the deferred-work bundle")
+    assert "--dw-bundle" not in dev_prompt
+    kinds = {e["kind"] for e in engine.journal.entries()}
+    assert "sweep-bundle-closed" in kinds
+
+
 def test_triage_validation_failure_retries_with_feedback_then_escalates(project):
     write_ledger(project, {"DW-1": "open"})
     bad = triage_result(["DW-1"])  # DW-1 not triaged anywhere

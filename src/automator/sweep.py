@@ -972,14 +972,64 @@ class SweepEngine(Engine):
     # ------------------------------------------------------ override seams
 
     def _dev_prompt(self, task: StoryTask, feedback: Path | None) -> str:
+        if self._generic_dev():
+            return self._generic_bundle_prompt(task, feedback)
         prompt = f"/bmad-auto-dev --dw-bundle {task.bundle_file}"
         if feedback is not None:
             prompt += f" --feedback {feedback}"
         return prompt
 
+    def _generic_bundle_prompt(self, task: StoryTask, feedback: Path | None) -> str:
+        """Bundle invocation for Alex's generic bmad-dev-auto: the self-contained
+        intent.md (intent + verbatim ledger entries) is handed over as freeform
+        intent. The orchestrator owns the deferred-work ledger — the skill is told
+        not to edit it — and records resolution itself in `_post_dev_state_sync`.
+        On a repair the bundle spec is re-opened first (B6) so step-01 resumes."""
+        bundle_ref = task.bundle_file or task.story_key
+        if feedback is None:
+            return (
+                f"/bmad-dev-auto Implement the deferred-work bundle described in "
+                f"`{bundle_ref}` — it carries the intent and the verbatim ledger "
+                f"entries to resolve. Do NOT edit the deferred-work ledger; the "
+                f"orchestrator records resolution."
+            )
+        self._reset_spec_for_repair(task)
+        spec_ref = task.spec_file or bundle_ref
+        return (
+            f"/bmad-dev-auto Resume the autonomous dev session on the in-progress "
+            f"spec at `{spec_ref}` for the deferred-work bundle `{bundle_ref}`. The "
+            f"previous session's work failed deterministic verification; repair the "
+            f"working tree so verification passes without changing the frozen intent "
+            f"contract or editing the deferred-work ledger. Verification evidence is "
+            f"in `{feedback}`."
+        )
+
+    def _post_dev_state_sync(self, task: StoryTask, result_json: dict | None) -> None:
+        """Generic-path ledger single-writer for bundles. The legacy --dw-bundle
+        skill flips the ledger itself; the decoupled bmad-dev-auto does not, so the
+        orchestrator marks each dw id the bundle owns ``done`` once the bundle's
+        spec reached its success status — before verify_review_bundle checks the
+        ledger. Mirrors the story sprint sync; no-op on the legacy path."""
+        if not self._generic_dev():
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if not spec_path.is_file():
+            return
+        success_status = "in-review" if self._dev_review_enabled() else "done"
+        if str(verify.read_frontmatter(spec_path).get("status", "")).strip() != success_status:
+            return
+        ledger = self.workspace.paths.deferred_work
+        note = f"resolved by sweep bundle {task.story_key}"
+        marked = [i for i in task.dw_ids if deferredwork.mark_done(ledger, i, self._today(), note)]
+        if marked:
+            self.journal.append("sweep-bundle-closed", story_key=task.story_key, dw_ids=marked)
+
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
         return verify.verify_dev_bundle(
-            task, self.workspace.paths, result_json, review_enabled=self.policy.review.enabled
+            task, self.workspace.paths, result_json, review_enabled=self._dev_review_enabled()
         )
 
     def _verify_review(self, task: StoryTask):

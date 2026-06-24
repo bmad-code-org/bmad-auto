@@ -5,7 +5,13 @@ import signal
 from pathlib import Path
 
 import pytest
-from conftest import dev_effect, review_effect, spec_path, write_sprint
+from conftest import (
+    dev_effect,
+    generic_dev_effect,
+    review_effect,
+    spec_path,
+    write_sprint,
+)
 
 from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
@@ -203,6 +209,191 @@ def test_review_disabled_skips_review_session(project):
     assert "review-skipped" in kinds
     msg = _head_commit_message(project.project)
     assert "implemented via bmad-auto" in msg and "reviewed" not in msg
+
+
+def test_generic_dev_path_orchestrator_advances_sprint(project):
+    """On the generic bmad-dev-auto path the skill self-finalizes the spec but
+    never writes the automator's sprint board; the orchestrator (B2 seam) is the
+    single sprint-status writer and advances the story to match verify_dev."""
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_engine(project, [generic_dev_effect(project, "1-1-a")], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["1-1-a"].phase == Phase.DONE
+    # the orchestrator advanced sprint-status, not the skill
+    assert story_status(project.sprint_status, "1-1-a") == "done"
+    # freeform generic invocation, not /bmad-auto-dev <key>
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    assert adapter.sessions[0].prompt == "/bmad-dev-auto 1-1-a"
+
+
+def test_generic_dev_path_no_sprint_advance_when_spec_unfinalized(project):
+    """The sprint write is gated on the spec actually reaching the success
+    status. A session that completes but leaves the spec short of done must not
+    advance the sprint, and the story defers (verify_dev fails on spec status)."""
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        limits=LimitsPolicy(max_dev_attempts=1),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(
+        project,
+        [generic_dev_effect(project, "1-1-a", final_status="in-progress")],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 1 and summary.done == 0
+    assert story_status(project.sprint_status, "1-1-a") == "ready-for-dev"
+
+
+def test_legacy_dev_path_sprint_sync_is_noop(project):
+    """For the default bmad-auto-dev skill the orchestrator never writes
+    sprint-status — the skill owns it — so the B2 seam is a pure no-op even when
+    the spec sits at the success status."""
+    from automator.model import StoryTask
+    from automator.sprintstatus import story_status
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    engine, _ = make_engine(project, [dev_effect(project, "1-1-a")])
+    task = StoryTask("1-1-a", epic=1)
+    sp = spec_path(project, "1-1-a")
+    sp.write_text("---\nstatus: 'done'\n---\n")
+    engine._post_dev_state_sync(task, {"spec_file": str(sp)})
+
+    assert story_status(project.sprint_status, "1-1-a") == "ready-for-dev"
+
+
+def test_generic_repair_reopens_spec_before_reinvocation(project):
+    """B6: bmad-dev-auto self-finalizes to `done`; its step-01 would route a done
+    spec to "ingest as context, don't resume." So before a verify-failure repair
+    re-invocation the orchestrator flips the spec back to `in-progress` — the
+    repair session must SEE an open spec on entry."""
+    from automator.adapters.base import SessionResult
+    from automator.policy import DevPolicy, ReviewPolicy, VerifyPolicy
+    from automator.verify import read_frontmatter, rev_parse_head
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    sp = spec_path(project, "1-1-a")
+    marker = project.project / "marker.txt"
+    seen_status: list[str] = []
+    calls = {"n": 0}
+
+    def effect(spec):
+        calls["n"] += 1
+        if sp.is_file():  # status the repair session sees on entry
+            seen_status.append(str(read_frontmatter(sp).get("status", "")).strip())
+        baseline = rev_parse_head(project.project)
+        src = project.project / "src.txt"
+        src.write_text(src.read_text() + f"change {calls['n']}\n")
+        sp.write_text(
+            f"---\ntitle: 'x'\nstatus: 'done'\nbaseline_commit: '{baseline}'\n---\n\n## Intent\n",
+            encoding="utf-8",
+        )
+        if calls["n"] >= 2:  # second pass satisfies the verify command
+            marker.write_text("ok\n")
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+            },
+        )
+
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        verify=VerifyPolicy(commands=("test -f marker.txt",)),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_engine(project, [effect, effect], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0
+    # the repair session saw an in-progress spec, not the finalized `done`
+    assert seen_status == ["in-progress"]
+    # and it was driven by the freeform resume prompt, not /bmad-dev-auto <key>
+    assert adapter.sessions[1].prompt.startswith("/bmad-dev-auto Resume the autonomous")
+
+
+def _generic_dev_effect(project, story_key, *, rel_path="src/app.py"):
+    """Generic dev session (decoupled bmad-dev-auto path): writes `rel_path`,
+    finalizes its own spec to `done`, and leaves sprint-status to the orchestrator."""
+    from automator.adapters.base import SessionResult
+    from automator.verify import rev_parse_head
+
+    def effect(spec):
+        baseline = rev_parse_head(project.project)
+        target = project.project / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((target.read_text() if target.is_file() else "") + "x\n")
+        sp = spec_path(project, story_key)
+        sp.write_text(
+            f"---\ntitle: 'x'\ntype: 'feature'\nstatus: 'done'\n"
+            f"baseline_commit: '{baseline}'\n---\n\n## Intent\n",
+            encoding="utf-8",
+        )
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+            },
+        )
+
+    return effect
+
+
+def _generic_policy():
+    from automator.policy import DevPolicy
+
+    return Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+
+
+def test_generic_path_skips_separate_review_and_commits(project):
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    engine, adapter = make_engine(
+        project,
+        [_generic_dev_effect(project, "1-1-a")],
+        policy=_generic_policy(),
+    )
+    summary = engine.run()
+
+    assert summary.done == 1
+    # the generic skill self-finalizes + self-reviews; the orchestrator runs no
+    # separate review session and no review-gate/triage bookkeeping anymore.
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    kinds = {e["kind"] for e in engine.journal.entries()}
+    assert "review-gate" not in kinds and "review-triage" not in kinds
 
 
 def _head_commit_message(repo: Path) -> str:

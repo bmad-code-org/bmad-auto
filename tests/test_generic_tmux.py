@@ -14,8 +14,8 @@ import time
 import pytest
 
 from automator.adapters import generic_tmux
-from automator.adapters.base import SessionResult, SessionSpec
-from automator.adapters.generic_tmux import GenericTmuxAdapter
+from automator.adapters.base import SessionHandle, SessionResult, SessionSpec
+from automator.adapters.generic_tmux import GenericDevAdapter, GenericTmuxAdapter
 from automator.adapters.profile import get_profile
 from automator.model import TokenUsage
 from automator.policy import LimitsPolicy, Policy
@@ -149,6 +149,91 @@ def test_await_result_grace_expires_fast(tmp_path):
     start = time.monotonic()
     assert adapter._await_result("t1", grace_s=0.2) is None
     assert time.monotonic() - start < 5
+
+
+# ----------------------------------------------- GenericDevAdapter (B1/B7)
+#
+# Alex's generic bmad-dev-auto skill writes no result.json; this adapter
+# synthesizes the legacy result dict from the spec it leaves on disk, on the
+# Stop event, via devcontract. These exercise that override in isolation.
+
+
+def make_dev_adapter(tmp_path):
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    adapter = GenericDevAdapter(
+        run_dir=tmp_path / "run",
+        policy=Policy(limits=LimitsPolicy()),
+        profile=get_profile("claude"),
+        impl_artifacts=impl,
+    )
+    return adapter, impl
+
+
+def _dev_handle(launched_ns=0) -> SessionHandle:
+    return SessionHandle(task_id="3-1-dev-1", native_id="@1", launched_ns=launched_ns)
+
+
+def _dev_spec(tmp_path, story_key="3-1") -> SessionSpec:
+    return SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto 3-1",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": story_key},
+    )
+
+
+def test_generic_dev_synthesizes_done_spec(tmp_path):
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: done\nbaseline_revision: abc123\n---\n\n"
+        "## Auto Run Result\n\nStatus: done\nImplemented the thing.\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["workflow"] == "auto-dev"
+    assert rj["status"] == "done"
+    assert rj["baseline_commit"] == "abc123"  # mapped from baseline_revision
+    assert rj["story_key"] == "3-1"
+    assert rj["escalations"] == []
+
+
+def test_generic_dev_blocked_spec_is_critical(tmp_path):
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: blocked\n---\n\n## Auto Run Result\n\nStatus: blocked\nUnclear intent.\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["status"] == "blocked"
+    assert rj["escalations"][0]["severity"] == "CRITICAL"
+
+
+def test_generic_dev_finds_no_spec_fallback(tmp_path):
+    """The no-spec fallback has frontmatter status but no `## Auto Run Result`
+    heading, so it is located by filename rather than content."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "bmad-dev-auto-result-unclear-1234.md").write_text(
+        "---\nstatus: blocked\n---\n\n# BMad Dev Auto Result\n\n"
+        "Status: blocked\nBlocking condition: unclear intent\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["status"] == "blocked"
+    assert rj["escalations"][0]["type"] == "blocked"
+
+
+def test_generic_dev_ignores_pre_launch_artifact(tmp_path):
+    """A spec left by a prior cycle (mtime below the launch floor) is not this
+    session's output and must not be read as a stale completion."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    spec = impl / "spec-old.md"
+    spec.write_text("---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n")
+    floor = spec.stat().st_mtime_ns + 1_000_000_000  # 1s after the file's mtime
+    assert adapter._result_json(_dev_handle(floor), _dev_spec(tmp_path), wait=True) is None
+
+
+def test_generic_dev_disables_nudges(tmp_path):
+    adapter, _ = make_dev_adapter(tmp_path)
+    assert adapter._stop_nudges == 0
 
 
 def _usage_adapter(tmp_path, profile_name, **kw) -> GenericTmuxAdapter:
