@@ -19,9 +19,10 @@ bmad-auto = "automator.cli:main"
 [project.optional-dependencies]
 tui = ["textual>=8.0,<9", "tomlkit>=0.13", "pyte>=0.8.2"]
 # Process discovery on non-Linux (no /proc): the Unity plugin's teardown lazily
-# imports psutil only when running off Linux. The core stays dep-free; install
-# with `pip install bmad-auto[windows]` on a native-Windows backend.
-windows = ["psutil>=7.2.2"]
+# imports psutil whenever it runs off Linux — macOS as well as a native-Windows
+# backend. The core stays dep-free; install with `pip install bmad-auto[non-linux]`
+# on those platforms.
+non-linux = ["psutil>=7.2.2"]
 
 [dependency-groups]
 # dev gets tui via `uv sync --all-extras` (groups can't self-reference an extra).

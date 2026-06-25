@@ -26,7 +26,7 @@ from rich.style import Style
 from rich.text import Text
 
 from .. import bmadconfig, deferredwork, sprintstatus
-from ..adapters.multiplexer import get_multiplexer
+from ..adapters.multiplexer import MultiplexerError, get_multiplexer
 from ..gates import ATTENTION_FILE
 from ..journal import JOURNAL_FILE, LOGS_DIR, STATE_FILE, load_state
 from ..model import RunState
@@ -86,7 +86,10 @@ def _session_liveness(run_id: str) -> str:
         return "unknown"
     try:
         return "alive" if mux.has_session(session_name(run_id)) else "unknown"
-    except OSError:
+    except (OSError, MultiplexerError):
+        # The seam raises MultiplexerError (not OSError) on a backend failure; a
+        # dead query proves nothing about a legacy run, so degrade to 'unknown'
+        # rather than crashing the TUI poll.
         return "unknown"
 
 

@@ -210,9 +210,10 @@ def _copy_library(src: Path, dest: Path, *, reflink: bool) -> bool:
     silently deep-copies elsewhere. Strips per-Editor identity/lock/pid files the
     copy must not carry. Returns True on success (a partial copy is cleaned up)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # portability: keep the cp fast path on POSIX (the only one with --reflink CoW);
-    # on Windows / where cp is absent, deep-copy via shutil instead.
-    if sys.platform != "win32" and shutil.which("cp"):
+    # portability: keep the cp fast path on Linux only — its GNU coreutils cp is the
+    # one with --reflink CoW. macOS/BSD cp rejects --reflink (it would error and
+    # force a failed prime), so off Linux we deep-copy via shutil instead.
+    if sys.platform.startswith("linux") and shutil.which("cp"):
         kind = "reflink" if reflink else "copy"
         if not _cp_library_tree(src, dest, reflink=reflink):
             return False

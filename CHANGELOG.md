@@ -18,9 +18,9 @@ breaking changes may land in a minor release.
 - **Review is now a re-invocation of `bmad-dev-auto` on the done spec, not a separate skill.**
   `bmad-dev-auto` routes a `status: done` spec to a fresh step-04 review pass (BMAD-METHOD#2508), so
   the orchestrator's follow-up review just re-runs `/bmad-dev-auto <done spec>` in a fresh context.
-  `review.enabled` and `review.trigger` are unchanged; the loop converges when a pass finishes `done`
-  and no longer sets `followup_review_recommended`, still bounded by `limits.max_review_cycles`
-  (default 3).
+  `review.enabled` still gates whether that follow-up pass runs at all; the new `review.trigger` knob
+  (see Added) decides when it fires. The loop converges when a pass finishes `done` without the skill
+  setting `followup_review_recommended`, still bounded by `limits.max_review_cycles` (default 3).
 
 - **The skill commits each iteration; the orchestrator squashes to one commit per story.**
   `bmad-dev-auto` now commits its own work at the end of a successful run (BMAD-METHOD#2506). At

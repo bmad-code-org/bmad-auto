@@ -221,14 +221,50 @@ def test_generic_dev_finds_no_spec_fallback(tmp_path):
     assert rj["escalations"][0]["type"] == "blocked"
 
 
-def test_generic_dev_ignores_pre_launch_artifact(tmp_path):
+def test_generic_dev_ignores_pre_launch_artifact(tmp_path, monkeypatch):
     """A spec left by a prior cycle (mtime below the launch floor) is not this
     session's output and must not be read as a stale completion."""
     adapter, impl = make_dev_adapter(tmp_path)
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)  # don't sit out the await grace
     spec = impl / "spec-old.md"
     spec.write_text("---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n")
     floor = spec.stat().st_mtime_ns + 1_000_000_000  # 1s after the file's mtime
     assert adapter._result_json(_dev_handle(floor), _dev_spec(tmp_path), wait=True) is None
+
+
+def test_generic_dev_result_json_polls_until_artifact_flushed(tmp_path, monkeypatch):
+    """wait=True must briefly await a spec that isn't flushed the instant the Stop
+    event fires, rather than reading once and mis-reporting a live run as stalled."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    spec_file = impl / "spec-3-1-foo.md"
+    calls = {"n": 0}
+
+    def delayed_find(artifacts, *, since_ns):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None  # not yet flushed to disk
+        spec_file.write_text("---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n")
+        return spec_file
+
+    monkeypatch.setattr(generic.devcontract, "find_result_artifact", delayed_find)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)  # spin without real sleeps
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj is not None and rj["status"] == "done"
+    assert calls["n"] >= 3  # it polled rather than giving up on the first miss
+
+
+def test_generic_dev_result_json_no_wait_reads_once(tmp_path, monkeypatch):
+    """wait=False keeps the read-once behavior: no polling, immediate None."""
+    adapter, _ = make_dev_adapter(tmp_path)
+    calls = {"n": 0}
+
+    def find(artifacts, *, since_ns):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(generic.devcontract, "find_result_artifact", find)
+    assert adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=False) is None
+    assert calls["n"] == 1
 
 
 def test_generic_dev_disables_nudges(tmp_path):

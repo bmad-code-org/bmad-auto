@@ -1,3 +1,4 @@
+import pytest
 from conftest import git, spec_path, write_spec, write_sprint
 
 from automator import verify
@@ -394,6 +395,26 @@ def test_finalize_commit_squashes_chain_to_one(project):
     # all the content (skill commits + bookkeeping) is in that single commit
     assert (project.project / "src.txt").read_text() == "dev work\nreview fix\n"
     assert (project.project / "sprint.txt").read_text() == "done\n"
+
+
+def test_finalize_commit_restores_head_when_commit_fails(project):
+    """If `git commit` fails after the soft reset (e.g. a rejecting pre-commit hook),
+    HEAD must be restored to the skill commit chain — not left rewound to baseline
+    with the chain dropped from the branch pointer."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "src.txt").write_text("dev work\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: implement")
+    head_before = verify.rev_parse_head(project.project)
+    # a pre-commit hook that always fails makes finalize's commit step fail
+    hook = project.project / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+
+    with pytest.raises(verify.GitError, match="git commit failed"):
+        verify.finalize_commit(project.project, baseline, "story: via bmad-auto")
+
+    assert verify.rev_parse_head(project.project) == head_before  # chain preserved
 
 
 def test_finalize_commit_no_vcs_or_missing_baseline_returns_none(project):

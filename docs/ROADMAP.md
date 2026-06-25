@@ -9,7 +9,7 @@ Status legend: **planned** (agreed, not started) · **exploring** (shape still o
 
 ## Native Windows multiplexer backend
 
-**Status:** planned · **Foundation:** multiplexer seam + portability hardening landed (v0.6.5)
+**Status:** planned · **Foundation:** multiplexer seam + portability hardening landed (v0.7.0)
 
 The orchestrator no longer fuses tmux into the engine. All session/window/pane operations
 go through a single `TerminalMultiplexer` ABC (`src/automator/adapters/multiplexer.py`),

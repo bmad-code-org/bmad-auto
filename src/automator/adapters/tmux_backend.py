@@ -43,11 +43,18 @@ class TmuxMultiplexer(TerminalMultiplexer):
     # ----------------------------------------------------------- sessions
 
     def has_session(self, name: str) -> bool:
-        probe = subprocess.run(
-            ["tmux", "has-session", "-t", f"={name}"],
-            capture_output=True,
-            timeout=TMUX_TIMEOUT_S,
-        )
+        # has-session returns nonzero for an absent session (a normal answer, not an
+        # error), so this can't go through _tmux. But a timeout or a missing binary
+        # is a real backend failure: raise the seam type so callers catch it via
+        # MultiplexerError instead of a raw subprocess error escaping.
+        try:
+            probe = subprocess.run(
+                ["tmux", "has-session", "-t", f"={name}"],
+                capture_output=True,
+                timeout=TMUX_TIMEOUT_S,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise TmuxError(f"tmux has-session failed: {exc}") from exc
         return probe.returncode == 0
 
     def new_session(

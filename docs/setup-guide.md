@@ -260,7 +260,7 @@ rm -rf .agents/skills/bmad-auto-{dev,review,resolve,sweep,setup}
 
 (Run only the line for the skill tree your CLIs use — drop the other. The `dev` and `review`
 names are retired — current `init` never lays them down — but listing them is a harmless no-op
-that also cleans up a pre-0.6.5 install.)
+that also cleans up a pre-0.7.0 install.)
 
 ### 4. Deregister the hooks
 

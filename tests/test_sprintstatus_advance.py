@@ -54,6 +54,26 @@ def test_advance_never_regresses(tmp_path):
     assert sprintstatus.story_status(p, "4-1-thing") == "review"
 
 
+def test_advance_returns_current_when_line_not_rewritable(tmp_path):
+    """A quoted story key parses via YAML (story_status finds it) but the line-edit
+    writer can't rewrite it. advance() must report the unchanged status, not falsely
+    claim it reached target, and must leave the file untouched."""
+    text = (
+        "last_updated: 01-06-2026 10:00\n"
+        "development_status:\n"
+        "  epic-5: in-progress\n"
+        "  '5-1-quoted': ready-for-dev\n"
+    )
+    p = tmp_path / "sprint-status.yaml"
+    p.write_text(text, encoding="utf-8")
+    before = p.read_text()
+
+    out = sprintstatus.advance(p, "5-1-quoted", "in-progress", now="02-06-2026 09:00")
+
+    assert out == "ready-for-dev"  # current status, not the requested target
+    assert p.read_text() == before  # nothing rewritten — not even last_updated
+
+
 def test_advance_idempotent_done(tmp_path):
     p = _write(tmp_path)
     out = sprintstatus.advance(p, "3-1-login", "done")  # already done

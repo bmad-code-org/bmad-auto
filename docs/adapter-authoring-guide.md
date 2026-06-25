@@ -68,7 +68,7 @@ Operations that can race a window dying (`pipe_pane`) or a session already being
 gone (`kill_session`) must tolerate it rather than raise; everything else raises a
 `MultiplexerError` subclass on failure, which call sites catch at the seam (e.g.
 `tui/launch.start_detached` turns it into a `LaunchError`) without importing the
-backend. `aliveness` uses `list-windows` membership, not `display-message`, because
+backend. `window_alive` uses `list-windows` membership, not `display-message`, because
 `display-message -t <dead-window>` exits 0 on tmux.
 
 `tmux_backend.py` is the reference implementation; reading it alongside the ABC is

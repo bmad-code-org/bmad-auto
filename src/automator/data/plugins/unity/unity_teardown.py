@@ -50,16 +50,24 @@ from pathlib import Path
 _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)  # portability: SIGKILL absent on Windows
 
 
+def _taskkill() -> str:
+    """Absolute path to the Windows ``taskkill`` binary. Resolving it from
+    ``%SystemRoot%\\System32`` rather than invoking ``taskkill`` by name keeps the
+    Windows process-search order from picking up a same-named executable planted on
+    PATH or in the working directory."""
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+
+
 def _psutil():
-    """Lazily import psutil (the optional ``windows`` extra), used only for
-    non-Linux process discovery. The dep-free core never imports it; raise a clear,
-    actionable error if it's missing on a platform that needs it."""
+    """Lazily import psutil (the optional ``non-linux`` extra), used only for
+    non-Linux process discovery (macOS and Windows). The dep-free core never imports
+    it; raise a clear, actionable error if it's missing on a platform that needs it."""
     try:
         import psutil  # noqa: PLC0415  (intentional lazy import — keeps the core dep-free)
     except ImportError as exc:  # pragma: no cover - exercised only off Linux
         raise RuntimeError(
             f"unity_teardown: process discovery on {sys.platform!r} needs psutil; "
-            "install the optional extra (pip install 'bmad-auto[windows]') or run "
+            "install the optional extra (pip install 'bmad-auto[non-linux]') or run "
             "under Linux/WSL"
         ) from exc
     return psutil
@@ -71,7 +79,7 @@ def _terminate_pid(pid: int) -> None:
     is unchanged. Windows: ``taskkill`` is the analogue (not exercised yet)."""
     if sys.platform == "win32":
         # portability: no os.kill(SIGTERM) on Windows — taskkill is the analogue.
-        subprocess.run(["taskkill", "/PID", str(pid)], check=False, capture_output=True)
+        subprocess.run([_taskkill(), "/PID", str(pid)], check=False, capture_output=True)
         return
     os.kill(pid, signal.SIGTERM)
 
@@ -81,7 +89,7 @@ def _hard_kill_pid(pid: int) -> None:
     absent). Windows: ``taskkill /F`` (not exercised yet)."""
     if sys.platform == "win32":
         # portability: SIGKILL has no Windows analogue — taskkill /F force-kills.
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=False, capture_output=True)
+        subprocess.run([_taskkill(), "/F", "/PID", str(pid)], check=False, capture_output=True)
         return
     os.kill(pid, _SIGKILL)
 
@@ -128,7 +136,7 @@ def _lingering_pids(worktree: Path) -> list[int]:
     operator's Editor/server on any other project, so we never kill the wrong one.
 
     Linux uses the zero-dependency ``/proc`` fast path; other platforms (no /proc)
-    fall back to the same scan over psutil (the optional ``windows`` extra)."""
+    fall back to the same scan over psutil (the optional ``non-linux`` extra)."""
     if sys.platform.startswith("linux"):
         return _lingering_pids_proc(worktree)
     return _lingering_pids_psutil(worktree)

@@ -799,6 +799,7 @@ def finalize_commit(repo: Path, baseline: str | None, message: str) -> str | Non
     `baseline` (no skill commits and no bookkeeping delta)."""
     if not baseline or baseline == "NO_VCS":
         return None
+    original_head = rev_parse_head(repo)
     rc, out = _git(repo, "add", "-A")
     if rc != 0:
         raise GitError(f"git add failed: {out}")
@@ -811,6 +812,15 @@ def finalize_commit(repo: Path, baseline: str | None, message: str) -> str | Non
         return None
     rc, out = _git(repo, "commit", "-m", message)
     if rc != 0:
+        # The soft reset already rewound HEAD to baseline; a failed commit would
+        # otherwise leave the branch pointer there, dropping the skill commit chain
+        # from HEAD. Restore HEAD (the working tree is untouched) before raising.
+        restore_rc, restore_out = _git(repo, "reset", "--soft", original_head)
+        if restore_rc != 0:
+            raise GitError(
+                f"git commit failed: {out}; additionally failed to restore HEAD "
+                f"to {original_head[:12]}: {restore_out}"
+            )
         raise GitError(f"git commit failed: {out}")
     return rev_parse_head(repo)
 

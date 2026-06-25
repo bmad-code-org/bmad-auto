@@ -199,7 +199,14 @@ def advance(path: Path, story_key: str, target: str, *, now: str | None = None) 
 
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
-    changed = _set_mapping_value(lines, story_key, target)
+    # story_status() resolves keys via a full YAML parse, but _set_mapping_value
+    # rewrites via a line regex that can't touch every shape it finds (quoted or
+    # block-scalar keys). If the story line itself wasn't rewritten, report the
+    # unchanged status rather than falsely claiming we advanced to target.
+    story_changed = _set_mapping_value(lines, story_key, target)
+    if not story_changed:
+        return current
+    changed = story_changed
 
     if target == "in-progress":
         m = STORY_RE.match(story_key)

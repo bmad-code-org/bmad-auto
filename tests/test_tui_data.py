@@ -167,6 +167,20 @@ def test_legacy_run_with_live_tmux_session_is_running(tmp_path, monkeypatch):
     assert calls[0][3] == f"=bmad-auto-{run_dir.name}"
 
 
+def test_legacy_run_liveness_unknown_when_backend_query_fails(tmp_path, monkeypatch):
+    """A timed-out / failing has-session surfaces as a MultiplexerError at the seam,
+    not a raw subprocess error: a dead query proves nothing about a legacy run, so it
+    degrades to 'unknown' instead of escaping discover_runs() and crashing the TUI."""
+    make_run(tmp_path, "20260611-100000-aaaa")
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _: "/usr/bin/tmux")
+
+    def boom(argv, **kwargs):
+        raise tmux_backend.subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(tmux_backend.subprocess, "run", boom)
+    assert data.discover_runs(tmp_path)[0].status == data.UNKNOWN
+
+
 def test_discover_runs_corrupt_state_is_unknown_not_crash(tmp_path):
     run_dir = make_run(tmp_path, "20260611-100000-aaaa")
     (run_dir / "state.json").write_text("{ not json")

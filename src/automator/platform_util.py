@@ -30,9 +30,17 @@ def terminate_pid(pid: int) -> None:
     native-Windows backend)."""
     if sys.platform == "win32":
         # portability: no os.kill(SIGTERM) on Windows — taskkill is the analogue.
-        subprocess.run(["taskkill", "/PID", str(pid)], check=False, capture_output=True)
+        subprocess.run([_taskkill(), "/PID", str(pid)], check=False, capture_output=True)
         return
     os.kill(pid, signal.SIGTERM)
+
+
+def _taskkill() -> str:
+    """Absolute path to the Windows ``taskkill`` binary. Resolving it from
+    ``%SystemRoot%\\System32`` rather than invoking ``taskkill`` by name keeps the
+    Windows process-search order from picking up a same-named executable planted on
+    PATH or in the working directory."""
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
 
 
 def detach_kwargs() -> dict[str, object]:

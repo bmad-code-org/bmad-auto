@@ -11,13 +11,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+non-linux = [
+    { name = "psutil" },
+]
 tui = [
     { name = "pyte" },
     { name = "textual" },
     { name = "tomlkit" },
-]
-windows = [
-    { name = "psutil" },
 ]
 
 [package.dev-dependencies]
@@ -30,13 +30,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "psutil", marker = "extra == 'windows'", specifier = ">=7.2.2" },
+    { name = "psutil", marker = "extra == 'non-linux'", specifier = ">=7.2.2" },
     { name = "pyte", marker = "extra == 'tui'", specifier = ">=0.8.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=8.0,<9" },
     { name = "tomlkit", marker = "extra == 'tui'", specifier = ">=0.13" },
 ]
-provides-extras = ["tui", "windows"]
+provides-extras = ["tui", "non-linux"]
 
 [package.metadata.requires-dev]
 dev = [

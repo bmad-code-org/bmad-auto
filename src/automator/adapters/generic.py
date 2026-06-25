@@ -289,13 +289,20 @@ class GenericDevAdapter(GenericAdapter):
         self._stop_nudges = 0
 
     def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
-        spec_path = devcontract.find_result_artifact(
-            self.impl_artifacts, since_ns=handle.launched_ns
-        )
-        if spec_path is None:
-            return None
-        story_key = spec.env.get("BMAD_AUTO_STORY_KEY") or None
-        return devcontract.synthesize_result(spec_path, story_key=story_key).result_json
+        # Mirror the base _await_result poll: the skill's terminal spec may not be
+        # flushed to disk the instant the Stop event fires, so briefly await it when
+        # wait=True instead of reading once and mis-reporting a stall.
+        deadline = time.monotonic() + RESULT_GRACE_S
+        while True:
+            spec_path = devcontract.find_result_artifact(
+                self.impl_artifacts, since_ns=handle.launched_ns
+            )
+            if spec_path is not None:
+                story_key = spec.env.get("BMAD_AUTO_STORY_KEY") or None
+                return devcontract.synthesize_result(spec_path, story_key=story_key).result_json
+            if not wait or time.monotonic() >= deadline:
+                return None
+            time.sleep(RESULT_POLL_S)
 
 
 # Back-compat alias: the adapter was ``GenericTmuxAdapter`` before tmux moved
