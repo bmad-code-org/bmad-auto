@@ -105,7 +105,7 @@ def _alive(pid: int) -> bool:
         # so use psutil for a read-only liveness check.
         return _psutil().pid_exists(pid)
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)  # portability: read-only existence probe (POSIX); win32 uses psutil above
     except ProcessLookupError:
         return False
     except PermissionError:

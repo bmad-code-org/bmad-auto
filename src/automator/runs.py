@@ -13,7 +13,7 @@ from . import verify
 from .adapters.multiplexer import get_multiplexer
 from .journal import STATE_FILE, Journal, load_state, save_state
 from .model import PAUSE_ESCALATION, Phase
-from .platform_util import terminate_pid
+from .platform_util import pid_alive, terminate_pid
 
 RUNS_DIR = Path(".automator") / "runs"
 ARCHIVE_DIR = Path(".automator") / "archive"
@@ -44,8 +44,8 @@ def latest_run_dir(project: Path) -> Path | None:
 
 
 def write_pid(run_dir: Path) -> None:
-    """Record the engine process pid. Never deleted: a stale pid that fails
-    os.kill(pid, 0) is the signal that a run was interrupted."""
+    """Record the engine process pid. Never deleted: a stale pid that
+    ``pid_alive`` reports as gone is the signal that a run was interrupted."""
     (run_dir / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
 
 
@@ -120,15 +120,7 @@ def engine_alive(run_dir: Path) -> bool:
     pid = read_pid(run_dir)
     if pid is None:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_alive(pid)
 
 
 # ----------------------------------------------------------- stop / delete / archive
@@ -236,9 +228,7 @@ def stop_run(run_dir: Path) -> bool:
     if pid is not None:
         deadline = time.monotonic() + _STOP_WAIT_S
         while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except OSError:
+            if not pid_alive(pid):
                 break  # exited
             time.sleep(_STOP_POLL_S)
         # the engine clears its agent window itself, but kill the session as a

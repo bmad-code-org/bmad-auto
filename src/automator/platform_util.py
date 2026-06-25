@@ -35,6 +35,41 @@ def terminate_pid(pid: int) -> None:
     os.kill(pid, signal.SIGTERM)
 
 
+def pid_alive(pid: int) -> bool:
+    """Read-only liveness check for ``pid``.
+
+    POSIX: ``os.kill(pid, 0)`` sends no signal — ``ProcessLookupError`` means the
+    process is gone, ``PermissionError`` means it exists but isn't ours to signal.
+    Windows: ``os.kill(pid, 0)`` is **destructive** (it maps to ``TerminateProcess``),
+    so probe with ``psutil.pid_exists`` instead. This is the single sanctioned
+    ``os.kill(pid, 0)`` call site in the core — route existence checks here rather
+    than calling ``os.kill`` directly."""
+    if sys.platform == "win32":
+        return _psutil().pid_exists(pid)
+    try:
+        os.kill(pid, 0)  # portability: read-only existence probe (POSIX); win32 uses psutil above
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal
+    return True
+
+
+def _psutil():
+    """Lazily import psutil (the optional ``non-linux`` extra), used only for the
+    non-destructive Windows liveness probe. The dep-free core never imports it on
+    Linux/macOS; raise a clear, actionable error if it's missing where it's needed."""
+    try:
+        import psutil  # noqa: PLC0415  (intentional lazy import — keeps the core dep-free)
+    except ImportError as exc:  # pragma: no cover - exercised only on Windows
+        raise RuntimeError(
+            f"platform_util: pid liveness on {sys.platform!r} needs psutil; "
+            "install the optional extra (pip install 'bmad-auto[non-linux]') or run "
+            "under Linux/WSL"
+        ) from exc
+    return psutil
+
+
 def _taskkill() -> str:
     """Absolute path to the Windows ``taskkill`` binary. Resolving it from
     ``%SystemRoot%\\System32`` rather than invoking ``taskkill`` by name keeps the

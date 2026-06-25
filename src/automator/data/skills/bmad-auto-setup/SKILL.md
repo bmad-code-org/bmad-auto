@@ -71,7 +71,7 @@ After writing config, create any output directories that were configured. For fi
 
 ## Install the Orchestrator Tool
 
-This module ships the **bmad-auto orchestrator** — the Python program that actually drives the loop — as the `bmad-auto` Python package, installed from its public Git repository. The skills do nothing on their own: the orchestrator is what spawns the fresh Claude Code sessions that invoke `bmad-dev-auto` (the upstream dev primitive) for the dev pass — then re-invokes it on the `done` spec for the follow-up review pass — and `bmad-auto-sweep`, watches their hook signals, and verifies their artifacts. Installing the tool is therefore part of setup, not an optional extra.
+This module ships the **bmad-auto orchestrator** — the Python program that actually drives the loop — as the `bmad-auto` Python package, installed from its public Git repository. The skills do nothing on their own: the orchestrator is what spawns fresh coding CLI sessions through the selected adapter(s) to invoke `bmad-dev-auto` (the upstream dev primitive) for the dev pass — then re-invokes it on the `done` spec for the follow-up review pass — and `bmad-auto-sweep`, watches their hook signals, and verifies their artifacts. Installing the tool is therefore part of setup, not an optional extra.
 
 > **Why is the tool installed from Git?** The BMAD installer copies only the skill directories into a project — it does **not** carry sibling files, so the tool can't ride along in the skill folder; it's installed from Git instead. The canonical source is <https://github.com/bmad-code-org/bmad-auto>. (The reverse holds, though: the tool's wheel **bundles** the skills, so `bmad-auto init` lays them down into a project's skill trees on its own — see step 3.)
 

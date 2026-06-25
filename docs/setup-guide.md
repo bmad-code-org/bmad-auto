@@ -33,8 +33,8 @@ of the README.
 
 ## Installed via the BMAD-method installer? (recommended)
 
-The BMAD-method installer copies the five `bmad-auto-*` skill directories into your
-project. It does **not** carry the orchestrator tool — the installer copies only skill
+The BMAD-method installer copies the three `bmad-auto-*` skill directories
+(`bmad-auto-setup`, `bmad-auto-sweep`, `bmad-auto-resolve`) into your project. It does **not** carry the orchestrator tool — the installer copies only skill
 directories, not their sibling files, so the tool can't ride along in the skill folder.
 It is installed separately from Git by the setup skill. The canonical source is
 <https://github.com/bmad-code-org/bmad-auto>. (Going the other way, the tool's wheel

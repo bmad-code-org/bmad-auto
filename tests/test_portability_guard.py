@@ -43,6 +43,15 @@ DETACH_ALLOW = {
     "data/plugins/unity/unity_setup.py",
 }
 
+# `os.kill(pid, 0)` is a read-only existence probe on POSIX but *destructive* on
+# Windows (it maps to TerminateProcess). Confine it to the platform-guarded
+# liveness helpers, each on a line carrying a `# portability:` ack; everything
+# else routes through `platform_util.pid_alive`.
+KILL_PROBE_ALLOW = {
+    "platform_util.py",
+    "data/plugins/unity/unity_teardown.py",
+}
+
 # The two sanctioned `shell=True` spots: operator-authored command strings whose
 # cmd/PowerShell port is an explicit out-of-scope follow-up.
 SHELL_ALLOW = {
@@ -131,6 +140,21 @@ def _scan():
             ):
                 findings.append(("sigkill", rel, node.lineno, line_at(node.lineno)))
 
+            # os.kill(<pid>, 0) — the existence-probe form (signal 0), not a real
+            # signal send like os.kill(pid, SIGTERM)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "kill"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "os"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == 0
+                and node.args[1].value is not False
+            ):
+                findings.append(("killprobe", rel, node.lineno, line_at(node.lineno)))
+
             # start_new_session=True as a call kwarg
             if (
                 isinstance(node, ast.keyword)
@@ -202,6 +226,20 @@ def test_no_unguarded_sigkill():
     assert not offenders, "unguarded signal.SIGKILL attribute access:\n" + "\n".join(
         f"  {rel}:{ln}: {txt.strip()}" for _, rel, ln, txt in offenders
     )
+
+
+def test_pid_existence_probe_only_in_liveness_helpers():
+    """``os.kill(pid, 0)`` is read-only on POSIX but destructive on Windows
+    (TerminateProcess) — confine it to the platform-guarded liveness helpers, each
+    line carrying a `# portability:` ack. Other call sites route through
+    ``platform_util.pid_alive``."""
+    bad = []
+    for _, rel, ln, txt in _of("killprobe"):
+        if rel not in KILL_PROBE_ALLOW:
+            bad.append(f"  {rel}:{ln}: {txt.strip()}  (route through platform_util.pid_alive)")
+        elif ACK not in txt:
+            bad.append(f"  {rel}:{ln}: {txt.strip()}  (missing '{ACK}' ack)")
+    assert not bad, "os.kill(pid, 0) outside liveness helpers:\n" + "\n".join(bad)
 
 
 def test_start_new_session_only_in_detach_helpers():
