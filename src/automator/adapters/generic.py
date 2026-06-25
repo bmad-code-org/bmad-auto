@@ -18,20 +18,19 @@ from __future__ import annotations
 
 import json
 import shlex
-import subprocess
 import time
 from pathlib import Path
 
-from .. import runs
+from .. import devcontract, runs
 from ..journal import LOGS_DIR
 from ..model import TokenUsage
 from ..policy import Policy
 from ..signals import SignalWatcher
 from ..tokens import read_usage as tally_usage
 from .base import CodingCLIAdapter, SessionHandle, SessionResult, SessionSpec
+from .multiplexer import TerminalMultiplexer, get_multiplexer
 from .profile import CLIProfile
 
-TMUX_TIMEOUT_S = 30
 # Pane geometry for agent windows; mirrored in tui.data for log emulation.
 PANE_COLUMNS = 220
 PANE_LINES = 50
@@ -45,11 +44,7 @@ NUDGE_TEXT = (
 )
 
 
-class TmuxError(Exception):
-    pass
-
-
-class GenericTmuxAdapter(CodingCLIAdapter):
+class GenericAdapter(CodingCLIAdapter):
     injection = "tmux-initial-prompt"
     observation = "hook-signal"
     state = "local-jsonl"
@@ -63,10 +58,12 @@ class GenericTmuxAdapter(CodingCLIAdapter):
         extra_args: tuple[str, ...] | None = None,
         usage_grace_s: float | None = None,
         stop_without_result_nudges: int | None = None,
+        mux: TerminalMultiplexer | None = None,
     ):
         self.run_dir = run_dir
         self.policy = policy
         self.profile = profile
+        self.mux = mux or get_multiplexer()
         # None = use the profile's default bypass flags; a tuple replaces them
         self.extra_args = extra_args
         # Effective timing knobs: an explicit [adapter]/[adapter.<stage>] override
@@ -90,47 +87,16 @@ class GenericTmuxAdapter(CodingCLIAdapter):
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------ tmux
-
-    def _tmux(self, *args: str) -> str:
-        proc = subprocess.run(
-            ["tmux", *args], capture_output=True, text=True, timeout=TMUX_TIMEOUT_S
-        )
-        if proc.returncode != 0:
-            raise TmuxError(f"tmux {' '.join(args[:2])} failed: {proc.stderr.strip()}")
-        return proc.stdout.strip()
+    # --------------------------------------------------------- multiplexer
 
     def _ensure_session(self, cwd: Path) -> None:
-        probe = subprocess.run(
-            ["tmux", "has-session", "-t", f"={self.session_name}"],
-            capture_output=True,
-            timeout=TMUX_TIMEOUT_S,
-        )
-        if probe.returncode != 0:
-            # Window 0 is a plain shell so the session survives task windows closing.
-            self._tmux(
-                "new-session",
-                "-d",
-                "-s",
-                self.session_name,
-                "-c",
-                str(cwd),
-                "-x",
-                str(PANE_COLUMNS),
-                "-y",
-                str(PANE_LINES),
-            )
+        if not self.mux.has_session(self.session_name):
+            self.mux.new_session(self.session_name, cwd, PANE_COLUMNS, PANE_LINES)
             # Tag the session with its project so a cleanup in another project
             # never prunes this run (run_dir = <project>/.automator/runs/<id>).
-            # set-option has no '=' exact-match form; the full session name is
-            # unique so plain-name targeting resolves it unambiguously.
             project = self.run_dir.parents[2]
-            self._tmux(
-                "set-option",
-                "-t",
-                self.session_name,
-                runs.PROJECT_OPTION,
-                runs.project_tag(project),
+            self.mux.set_session_option(
+                self.session_name, runs.PROJECT_OPTION, runs.project_tag(project)
             )
 
     def interactive_argv(self, spec: SessionSpec) -> list[str]:
@@ -164,42 +130,22 @@ class GenericTmuxAdapter(CodingCLIAdapter):
         (task_dir / "result.json").unlink(missing_ok=True)
 
         self._ensure_session(spec.cwd)
-        env_args: list[str] = []
-        for key, value in {**self.profile.env, **spec.env}.items():
-            env_args += ["-e", f"{key}={value}"]
         # Stamped before launch: hook events carry wall-clock ns, and
         # wait_for_completion ignores anything older than this floor so a reused
         # task_id's earlier Stop event cannot replay.
         launched_ns = time.time_ns()
-        window_id = self._tmux(
-            "new-window",
-            "-t",
-            f"={self.session_name}:",
-            "-n",
+        window_id = self.mux.new_window(
+            self.session_name,
             spec.task_id[-40:],
-            "-c",
-            str(spec.cwd),
-            "-P",
-            "-F",
-            "#{window_id}",
-            *env_args,
+            spec.cwd,
+            {**self.profile.env, **spec.env},
             self.build_command(spec),
         )
         log_file = self.logs_dir / f"{spec.task_id}.log"
-        # A CLI that crashes on launch (bad args, instant auth failure) can take
-        # its window down before pipe-pane attaches, which races as "can't find
-        # window". That is not a setup failure -- the dead window is reported as
-        # a crash in wait_for_completion -- so tolerate it instead of raising.
-        try:
-            self._tmux(
-                "pipe-pane",
-                "-t",
-                window_id,
-                "-o",
-                f"cat >> {shlex.quote(str(log_file))}",
-            )
-        except TmuxError:
-            pass
+        # pipe_pane tolerates the window having already died (a CLI that crashes on
+        # launch can take it down before the tee attaches); the dead window is then
+        # reported as a crash in wait_for_completion.
+        self.mux.pipe_pane(window_id, log_file)
         return SessionHandle(task_id=spec.task_id, native_id=window_id, launched_ns=launched_ns)
 
     def wait_for_completion(self, handle: SessionHandle, spec: SessionSpec) -> SessionResult:
@@ -225,7 +171,19 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if event is None:
                 if not self._window_alive(handle):
                     # died without a SessionEnd hook (killed, crashed hard)
-                    return self._final(handle, "crashed", session_id, transcript_path)
+                    return self._final(handle, spec, "crashed", session_id, transcript_path)
+                continue
+            if (
+                event.event == "Stop"
+                and self.profile.subagent_stop_without_transcript
+                and not event.transcript_path
+            ):
+                # Copilot fires agentStop for each subagent turn with an empty
+                # transcriptPath and a tool-use session id; that is not the main
+                # session's turn-end. Ignore it (before accumulating the junk
+                # session id) so a subagent's premature Stop is not read as a
+                # result-less completion -> false stall, and the main session's
+                # real transcript is preserved for usage tallying.
                 continue
             session_id = event.session_id or session_id
             transcript_path = event.transcript_path or transcript_path
@@ -233,7 +191,7 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if event.event == "SessionStart":
                 continue
             if event.event == "Stop":
-                result_json = self._await_result(handle.task_id)
+                result_json = self._result_json(handle, spec, wait=True)
                 if result_json is not None:
                     return SessionResult(
                         status="completed",
@@ -245,20 +203,29 @@ class GenericTmuxAdapter(CodingCLIAdapter):
                     nudges_left -= 1
                     self.send_text(handle, NUDGE_TEXT)
                     continue
-                return self._final(handle, "stalled", session_id, transcript_path)
+                return self._final(handle, spec, "stalled", session_id, transcript_path)
             if event.event == "SessionEnd":
-                return self._final(handle, "crashed", session_id, transcript_path)
+                return self._final(handle, spec, "crashed", session_id, transcript_path)
+
+    def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
+        """Acquire this session's result dict. Base behavior: read the
+        skill-written ``result.json`` (briefly awaiting it on the Stop event,
+        reading once otherwise). Subclasses whose skill writes no result.json
+        (GenericDevAdapter) override this to synthesize the dict from another
+        on-disk artifact."""
+        return self._await_result(handle.task_id) if wait else self._read_result(handle.task_id)
 
     def _final(
         self,
         handle: SessionHandle,
+        spec: SessionSpec,
         fallback: str,
         session_id: str | None,
         transcript: str | None,
     ) -> SessionResult:
         """Session is gone or done responding: completed if the result file
         landed anyway, otherwise the fallback status."""
-        result_json = self._read_result(handle.task_id)
+        result_json = self._result_json(handle, spec, wait=False)
         status = "completed" if result_json is not None else fallback
         return SessionResult(
             status=status,
@@ -289,36 +256,13 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             time.sleep(RESULT_POLL_S)
 
     def _window_alive(self, handle: SessionHandle) -> bool:
-        # display-message -t <dead-window> exits 0 with empty output, so list
-        # the session's window ids and check membership instead.
-        probe = subprocess.run(
-            [
-                "tmux",
-                "list-windows",
-                "-t",
-                f"={self.session_name}",
-                "-F",
-                "#{window_id}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=TMUX_TIMEOUT_S,
-        )
-        if probe.returncode != 0:
-            return False
-        return handle.native_id in probe.stdout.split()
+        return handle.native_id in self.mux.list_window_ids(self.session_name)
 
     def send_text(self, handle: SessionHandle, text: str) -> None:
-        self._tmux("send-keys", "-t", handle.native_id, "-l", text)
-        time.sleep(0.3)  # let the TUI ingest the paste before submitting
-        self._tmux("send-keys", "-t", handle.native_id, "Enter")
+        self.mux.send_text(handle.native_id, text)
 
     def kill(self, handle: SessionHandle) -> None:
-        subprocess.run(
-            ["tmux", "kill-window", "-t", handle.native_id],
-            capture_output=True,
-            timeout=TMUX_TIMEOUT_S,
-        )
+        self.mux.kill_window(handle.native_id)
 
     def read_usage(self, result: SessionResult) -> TokenUsage | None:
         if not result.transcript_path:
@@ -334,3 +278,45 @@ class GenericTmuxAdapter(CodingCLIAdapter):
             if usage is not None or time.monotonic() >= deadline:
                 return usage
             time.sleep(RESULT_POLL_S)
+
+
+class GenericDevAdapter(GenericAdapter):
+    """Dev adapter for Alex Verhovsky's generic ``bmad-dev-auto`` skill.
+
+    That skill writes NO ``result.json`` — its outcome lives in the spec it
+    leaves on disk (frontmatter ``status:`` plus an appended ``## Auto Run
+    Result``, or, when it never created a spec, a ``bmad-dev-auto-result-*.md``
+    fallback). On the Stop event we locate that artifact and synthesize the
+    legacy result dict from it via :mod:`devcontract`, so verify/escalation and
+    the rest of the pipeline consume it unchanged. Selected by
+    ``policy.dev.skill == "bmad-dev-auto"`` (see ``cli._make_adapters``).
+    """
+
+    def __init__(self, *args, impl_artifacts: Path, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.impl_artifacts = impl_artifacts
+        # The generic skill never writes result.json, so the base "write the
+        # result JSON file" nudge is meaningless — and actively misleading — for
+        # it. A Stop without a terminal spec is a genuine stall.
+        self._stop_nudges = 0
+
+    def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
+        # Mirror the base _await_result poll: the skill's terminal spec may not be
+        # flushed to disk the instant the Stop event fires, so briefly await it when
+        # wait=True instead of reading once and mis-reporting a stall.
+        deadline = time.monotonic() + RESULT_GRACE_S
+        while True:
+            spec_path = devcontract.find_result_artifact(
+                self.impl_artifacts, since_ns=handle.launched_ns
+            )
+            if spec_path is not None:
+                story_key = spec.env.get("BMAD_AUTO_STORY_KEY") or None
+                return devcontract.synthesize_result(spec_path, story_key=story_key).result_json
+            if not wait or time.monotonic() >= deadline:
+                return None
+            time.sleep(RESULT_POLL_S)
+
+
+# Back-compat alias: the adapter was ``GenericTmuxAdapter`` before tmux moved
+# behind the multiplexer seam. Keeps existing imports stable.
+GenericTmuxAdapter = GenericAdapter

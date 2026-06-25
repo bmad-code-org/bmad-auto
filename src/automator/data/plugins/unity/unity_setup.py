@@ -108,6 +108,16 @@ def _truthy(value: str | None, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _detach_kwargs() -> dict[str, object]:
+    """``Popen`` kwargs that detach the Editor so it outlives this hook. POSIX uses
+    ``start_new_session``; Windows uses a new process group (not exercised yet)."""
+    if sys.platform == "win32":
+        # portability: start_new_session is POSIX-only; CREATE_NEW_PROCESS_GROUP
+        # is the Windows analogue.
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}  # portability: POSIX detach kwarg; Windows branch above
+
+
 def _worktree() -> Path | None:
     wt = os.environ.get("BMAD_AUTO_WORKTREE")
     return Path(wt) if wt else None
@@ -161,15 +171,11 @@ def _seed_source() -> Path | None:
         return None
 
 
-def _copy_library(src: Path, dest: Path, *, reflink: bool) -> bool:
-    """Reflink (CoW) or deep-copy a warm Library into the worktree so Unity does an
-    incremental — not cold — import. ``reflink=auto`` is ~free on btrfs/xfs and
-    silently deep-copies elsewhere. Strips per-Editor identity/lock/pid files the
-    copy must not carry. Returns True on success (a partial copy is cleaned up)."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
+def _cp_library_tree(src: Path, dest: Path, *, reflink: bool) -> bool:
+    """POSIX fast path: ``cp -a`` (with CoW reflink when asked). ``cp -a src/. dest``
+    copies the tree's contents (incl. dotfiles) into dest, creating dest if absent;
+    -a preserves perms/timestamps so caches stay valid. Returns True on success."""
     reflink_arg = "--reflink=auto" if reflink else "--reflink=never"
-    # `cp -a src/. dest` copies the tree's contents (incl. dotfiles) into dest,
-    # creating dest if absent; -a preserves perms/timestamps so caches stay valid.
     proc = subprocess.run(
         ["cp", "-a", reflink_arg, f"{src}/.", str(dest)],
         capture_output=True,
@@ -181,6 +187,40 @@ def _copy_library(src: Path, dest: Path, *, reflink: bool) -> bool:
         print(f"unity_setup: Library prime ({kind}) failed; cleaning up", file=sys.stderr)
         shutil.rmtree(dest, ignore_errors=True)
         return False
+    return True
+
+
+def _copytree_library(src: Path, dest: Path) -> bool:
+    """Portable fallback when ``cp`` is unavailable (Windows / no coreutils): a deep
+    ``shutil.copytree``. No CoW — always a full copy — but functionally identical.
+    Returns True on success (a partial copy is cleaned up)."""
+    try:
+        shutil.copytree(src, dest, copy_function=shutil.copy2, dirs_exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write(f"{exc}\n")
+        print("unity_setup: Library prime (copytree) failed; cleaning up", file=sys.stderr)
+        shutil.rmtree(dest, ignore_errors=True)
+        return False
+    return True
+
+
+def _copy_library(src: Path, dest: Path, *, reflink: bool) -> bool:
+    """Reflink (CoW) or deep-copy a warm Library into the worktree so Unity does an
+    incremental — not cold — import. ``reflink=auto`` is ~free on btrfs/xfs and
+    silently deep-copies elsewhere. Strips per-Editor identity/lock/pid files the
+    copy must not carry. Returns True on success (a partial copy is cleaned up)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # portability: keep the cp fast path on Linux only — its GNU coreutils cp is the
+    # one with --reflink CoW. macOS/BSD cp rejects --reflink (it would error and
+    # force a failed prime), so off Linux we deep-copy via shutil instead.
+    if sys.platform.startswith("linux") and shutil.which("cp"):
+        kind = "reflink" if reflink else "copy"
+        if not _cp_library_tree(src, dest, reflink=reflink):
+            return False
+    else:
+        kind = "copytree"
+        if not _copytree_library(src, dest):
+            return False
     for victim in (
         [dest / name for name in _LIBRARY_VOLATILE]
         + list(dest.glob("*-lock"))
@@ -193,10 +233,7 @@ def _copy_library(src: Path, dest: Path, *, reflink: bool) -> bool:
                 victim.unlink()
             except OSError:
                 pass
-    print(
-        f"unity_setup: Library primed from {src} ({'reflink' if reflink else 'copy'})",
-        file=sys.stderr,
-    )
+    print(f"unity_setup: Library primed from {src} ({kind})", file=sys.stderr)
     return True
 
 
@@ -208,8 +245,19 @@ def _link_library_cache(worktree: Path) -> None:
     link = worktree / "Library"
     cache = _library_cache(worktree)
     cache.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(cache, target_is_directory=True)
-    print(f"unity_setup: Library -> {cache} (symlink; cold first import)", file=sys.stderr)
+    try:
+        link.symlink_to(cache, target_is_directory=True)
+        print(f"unity_setup: Library -> {cache} (symlink; cold first import)", file=sys.stderr)
+    except OSError as exc:
+        # portability: symlinks need privilege/Developer Mode on Windows. Fall back
+        # to a real per-worktree Library dir — it just won't share the cross-run
+        # cache (each run starts cold), which is correct, only slower.
+        link.mkdir(parents=True, exist_ok=True)
+        print(
+            f"unity_setup: could not symlink Library -> {cache} ({exc}); using a real "
+            "per-worktree Library dir instead (cold first import, no cross-run cache)",
+            file=sys.stderr,
+        )
 
 
 def _prime_library(worktree: Path) -> None:
@@ -454,7 +502,7 @@ def _setup_ivanmurzak(worktree: Path) -> int:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # detach so it outlives this hook
+            **_detach_kwargs(),  # detach so the Editor outlives this hook
         )
     except OSError as exc:
         print(f"unity_setup: could not launch Editor: {exc}", file=sys.stderr)

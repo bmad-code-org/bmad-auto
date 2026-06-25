@@ -221,3 +221,37 @@ Each script's module docstring documents every env knob it reads — the
 authoritative source if a default ever changes. The [Game Engine MCP guide](game-engine-mcp-guide.md)
 distills those into a single reference table and explains the IvanMurzak vs
 CoplayDev differences.
+
+## Platform behavior (Linux fast paths, Windows fallbacks)
+
+The Unity plugin's helper scripts are stdlib-only and run identically on Linux,
+macOS, and WSL (which **is** Linux — it takes every fast path unchanged). Each
+POSIX-only primitive is guarded behind a `sys.platform` branch so a future
+native-Windows multiplexer backend can slot in; those Windows branches are
+best-effort and **not yet exercised** (no Windows backend ships today). The
+guards, by script:
+
+- **`unity_teardown.py` — process discovery.** Linux uses a zero-dependency
+  `/proc` scan to find the worktree-bound Editor/MCP-server; non-Linux falls back
+  to the same scan over **`psutil`**, imported lazily from the optional `non-linux`
+  extra (`pip install 'bmad-auto[non-linux]'`) with a clear error if missing. The
+  hard-kill uses `signal.SIGKILL` where present, degrading to `SIGTERM`/`taskkill`
+  on Windows. Liveness uses `os.kill(pid, 0)` on POSIX but `psutil.pid_exists` on
+  Windows (where `os.kill(pid, 0)` would _terminate_ the process).
+- **`unity_setup.py` — Library priming + launch.** The warm-Library copy keeps the
+  `cp -a --reflink` CoW fast path on POSIX (near-free on btrfs/xfs) and falls back
+  to `shutil.copytree` where `cp` is absent. The empty-cache symlink fallback wraps
+  `symlink_to` in `try/except OSError`, dropping to a real per-worktree dir (cold,
+  no cross-run cache) where symlinks need privilege (Windows). Editor detach uses
+  `start_new_session` on POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows.
+- **`unity_cleanup.py` — temp-cache scrub.** Unity's `temporaryCachePath` base is
+  exactly `/tmp` on Linux (kept byte-for-byte); other platforms derive it from
+  `tempfile.gettempdir()`. **Caveat:** native Windows Unity actually uses
+  `%USERPROFILE%\AppData\Local\Temp\<company>\<product>`, which `gettempdir()` does
+  not always resolve to — getting that cache root exactly right is a documented
+  follow-up for when a Windows backend lands.
+
+When authoring your own engine plugin, mirror this discipline: stdlib-only scripts,
+optional extras imported lazily, and every POSIX-ism behind a `sys.platform` branch
+with a `# portability:` comment. See the [plugin authoring guide](plugin-authoring-guide.md#platform-portability)
+for the general rule.

@@ -598,6 +598,31 @@ goes completely inert — proof of the trust gate.
 
 ---
 
+## Platform portability
+
+bmad-auto's core is portable Python and the tmux dependency is quarantined behind
+the multiplexer seam (see the [adapter authoring guide](adapter-authoring-guide.md)).
+Plugin **helper scripts** run as standalone `python3 <script>` subprocesses in the
+unit's worktree, so they should follow the same discipline:
+
+- **Stay dependency-free.** Import only the stdlib so the script runs anywhere the
+  core does. If you genuinely need a third-party package on one platform, make it an
+  **optional extra** in `pyproject.toml` and **import it lazily** with a clear error
+  if missing — never at module top level. The bundled Unity plugin does exactly this
+  for `psutil`: a `windows` extra it imports only on non-Linux process discovery, so
+  the dep-free Linux/WSL path never pulls it in.
+- **Guard POSIX-only primitives.** Anything absent or differently-shaped on Windows —
+  `signal.SIGKILL`, `os.kill`, `start_new_session`, `cp`/`--reflink`, symlinks,
+  `/proc`, `/tmp` — needs a fallback behind a `sys.platform` branch, with a
+  `# portability: <reason>` comment so the intent (and the CI portability guard)
+  stays honest. Keep the Linux fast path byte-identical; the Windows branch can be
+  best-effort and is not exercised until a native-Windows backend ships. WSL **is**
+  Linux, so it takes the fast path unchanged.
+
+See the Unity plugin's `unity_setup.py` / `unity_teardown.py` / `unity_cleanup.py`
+(and the [Game Engine plugin guide](game-engine-plugin-guide.md)) for worked
+examples of each guard.
+
 ## Reference
 
 - Model + base class: `src/automator/plugins/model.py`

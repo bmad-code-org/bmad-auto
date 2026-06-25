@@ -122,6 +122,11 @@ class StoryTask:
     phase: Phase = Phase.PENDING
     attempt: int = 0
     review_cycle: int = 0
+    # set from the bmad-dev-auto session's `followup_review_recommended`
+    # frontmatter (PR #2505): when True and review.trigger = "recommended", the
+    # orchestrator runs a follow-up review pass (bmad-dev-auto re-invoked on the
+    # done spec); otherwise it skips it.
+    followup_review_recommended: bool = False
     baseline_commit: str | None = None
     # untracked, non-ignored paths present at baseline capture (repo-relative
     # posix). On rollback only paths NOT in this set are removed, so files the
@@ -131,6 +136,11 @@ class StoryTask:
     spec_file: str | None = None
     commit_sha: str | None = None
     defer_reason: str | None = None
+    # set by runs.rearm_escalation: this task was re-armed out of ESCALATED for a
+    # clean rebuild against the corrected spec (not a failed attempt). Lets the
+    # resume-time manual-recovery notice describe the real cause; cleared once the
+    # rebuild proceeds. Survives the resume serialization round-trip.
+    rearmed: bool = False
     # sweep bundles only: the deferred-work ids this task closes and the
     # rendered intent file handed to dev sessions
     dw_ids: list[str] = field(default_factory=list)
@@ -159,11 +169,13 @@ class StoryTask:
             "phase": str(self.phase),
             "attempt": self.attempt,
             "review_cycle": self.review_cycle,
+            "followup_review_recommended": self.followup_review_recommended,
             "baseline_commit": self.baseline_commit,
             "baseline_untracked": self.baseline_untracked,
             "spec_file": self._serialized_spec_file(),
             "commit_sha": self.commit_sha,
             "defer_reason": self.defer_reason,
+            "rearmed": self.rearmed,
             "dw_ids": self.dw_ids,
             "bundle_file": self.bundle_file,
             "worktree_path": self.worktree_path,
@@ -192,6 +204,7 @@ class StoryTask:
             phase=Phase(d["phase"]),
             attempt=int(d.get("attempt", 0)),
             review_cycle=int(d.get("review_cycle", 0)),
+            followup_review_recommended=bool(d.get("followup_review_recommended", False)),
             baseline_commit=d.get("baseline_commit"),
             baseline_untracked=(
                 [str(p) for p in d["baseline_untracked"]]
@@ -201,6 +214,7 @@ class StoryTask:
             spec_file=d.get("spec_file"),
             commit_sha=d.get("commit_sha"),
             defer_reason=d.get("defer_reason"),
+            rearmed=bool(d.get("rearmed", False)),
             dw_ids=[str(i) for i in d.get("dw_ids", [])],
             bundle_file=d.get("bundle_file"),
             worktree_path=str(d.get("worktree_path", "")),

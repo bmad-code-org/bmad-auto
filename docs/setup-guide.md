@@ -1,24 +1,40 @@
 # Setup guide
 
-This module is two things: the five `bmad-auto-*` skills and the `bmad-auto`
+This module is two things: the bundled `bmad-auto-*` skills and the `bmad-auto`
 orchestrator tool (the Python program that actually drives the loop). The skills do
 nothing on their own — the orchestrator is what spawns the fresh coding-CLI sessions
-that invoke `bmad-auto-dev`, `bmad-auto-review`, `bmad-auto-sweep`, and
-`bmad-auto-resolve`, watches their hook signals, and verifies their artifacts. Installing the tool is part of setup, not
+that invoke the upstream `bmad-dev-auto` skill (which implements and, re-invoked on
+the done spec, runs the follow-up review) plus `bmad-auto-sweep` and
+`bmad-auto-resolve`, watches their hook signals, and verifies
+their artifacts. Installing the tool is part of setup, not
 an optional extra.
 
 There are two ways the skills land in a project. The orchestrator's wheel **bundles**
-the five skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
+the three skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
 itself. Alternatively the **BMAD-method installer** copies them. Either way the
 `/bmad-auto-setup` skill registers the `_bmad/` config, ensures the tool is installed,
 picks which coding CLIs to drive, and bootstraps the project. For the one-page summary,
 see the [Installing the skill module](../README.md#installing-the-skill-module) section
 of the README.
 
+## Platform prerequisites
+
+- **Python 3.11+** and a supported coding CLI (`claude` by default).
+- **tmux** — the orchestrator drives agent sessions through a terminal multiplexer, and
+  tmux is the only backend shipped today. It is required for launching, attaching, and
+  driving runs (pure TUI observation works without it). The multiplexer sits behind a
+  pluggable seam (`TerminalMultiplexer`), so a native-Windows backend can be added later
+  without changing the engine — see the
+  [adapter authoring guide](adapter-authoring-guide.md#the-transport-contract-for-a-backend-author).
+- **OS** — Linux or macOS. **Windows is supported via WSL**, which _is_ Linux: tmux and
+  every POSIX path work unchanged there, so no special setup is needed. **Native Windows
+  is not yet shipped** — it awaits a non-tmux multiplexer backend (tracked in
+  [the roadmap](ROADMAP.md#native-windows-multiplexer-backend)).
+
 ## Installed via the BMAD-method installer? (recommended)
 
-The BMAD-method installer copies the five `bmad-auto-*` skill directories into your
-project. It does **not** carry the orchestrator tool — the installer copies only skill
+The BMAD-method installer copies the three `bmad-auto-*` skill directories
+(`bmad-auto-setup`, `bmad-auto-sweep`, `bmad-auto-resolve`) into your project. It does **not** carry the orchestrator tool — the installer copies only skill
 directories, not their sibling files, so the tool can't ride along in the skill folder.
 It is installed separately from Git by the setup skill. The canonical source is
 <https://github.com/bmad-code-org/bmad-auto>. (Going the other way, the tool's wheel
@@ -62,11 +78,14 @@ uv run bmad-auto init --project /path/to/project --cli claude   # installs skill
 claude "/bmad-auto-setup accept all defaults"                   # register _bmad/ config + help
 ```
 
-Add `--cli codex --cli gemini` to also populate `.agents/skills/`. The skills must be
-installed together: `bmad-auto-review` writes deferred-work entries per
-`bmad-auto-dev/deferred-work-format.md` (a sibling skill directory) — `init` always
-installs them all (`bmad-auto-dev`, `bmad-auto-review`, `bmad-auto-resolve`,
-`bmad-auto-sweep`, `bmad-auto-setup`).
+Add `--cli codex --cli gemini` to also populate `.agents/skills/`. `init` always
+installs all the bundled skills together (`bmad-auto-resolve`, `bmad-auto-sweep`,
+`bmad-auto-setup`); `bmad-auto-sweep` owns the canonical `deferred-work-format.md`
+the orchestrator normalizes the ledger to. The dev primitive `bmad-dev-auto` is
+**not** bundled: it is the upstream skill the orchestrator drives (for both
+implementation and the follow-up review), installed by the BMad Method (bmm)
+module. `bmad-auto validate` checks it — plus the two adversarial review hunters it
+invokes inline — are present before a run starts.
 
 ## Choosing which CLIs to drive
 
@@ -230,8 +249,8 @@ rm -rf .automator/
 
 ### 3. Remove the bundled skills
 
-`init` installed exactly five `bmad-auto-*` skill directories — delete only those. **Leave the
-standard BMAD skills alone**; install never touched them.
+`init` installed the three bundled `bmad-auto-*` skill directories — delete only those. **Leave
+the standard BMAD skills alone**; install never touched them.
 
 ```bash
 # claude reads from .claude/skills/ ; codex/gemini read from .agents/skills/
@@ -239,7 +258,9 @@ rm -rf .claude/skills/bmad-auto-{dev,review,resolve,sweep,setup}
 rm -rf .agents/skills/bmad-auto-{dev,review,resolve,sweep,setup}
 ```
 
-(Run only the line for the skill tree your CLIs use — drop the other.)
+(Run only the line for the skill tree your CLIs use — drop the other. The `dev` and `review`
+names are retired — current `init` never lays them down — but listing them is a harmless no-op
+that also cleans up a pre-0.7.0 install.)
 
 ### 4. Deregister the hooks
 

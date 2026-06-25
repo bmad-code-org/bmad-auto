@@ -47,10 +47,15 @@ def test_builtin_profiles_load():
     # agentStop per turn (multi-turn reviews need more nudges)
     assert profiles["copilot"].usage_grace_s == 8.0
     assert profiles["copilot"].stop_without_result_nudges == 5
-    # other built-ins keep the defaults: read usage once, inherit the global nudge limit
+    # copilot also fires agentStop for subagent turns (empty transcriptPath) — those
+    # are ignored so the main session's turn-end drives completion
+    assert profiles["copilot"].subagent_stop_without_transcript is True
+    # other built-ins keep the defaults: read usage once, inherit the global nudge
+    # limit, and treat every Stop as the main turn-end (no subagent filtering)
     for name in ("claude", "codex", "gemini"):
         assert profiles[name].usage_grace_s == 0.0
         assert profiles[name].stop_without_result_nudges is None
+        assert profiles[name].subagent_stop_without_transcript is False
 
 
 def test_usage_grace_and_nudges_default_when_unset(tmp_path):
@@ -61,6 +66,7 @@ def test_usage_grace_and_nudges_default_when_unset(tmp_path):
     prof = load_profiles(tmp_path)["mycli"]
     assert prof.usage_grace_s == 0.0
     assert prof.stop_without_result_nudges is None
+    assert prof.subagent_stop_without_transcript is False
 
 
 def test_seed_files_default_empty_when_unset(tmp_path):
@@ -87,10 +93,10 @@ def test_unknown_profile_raises():
 
 def test_render_prompt_passthrough_and_template():
     claude = get_profile("claude")
-    assert claude.render_prompt("/bmad-auto-dev 1-1-a") == "/bmad-auto-dev 1-1-a"
+    assert claude.render_prompt("/bmad-dev-auto 1-1-a") == "/bmad-dev-auto 1-1-a"
     codex = get_profile("codex")
-    assert codex.render_prompt("/bmad-auto-dev 1-1-a") == (
-        "Use the $bmad-auto-dev skill now, and use subagents as needed: 1-1-a"
+    assert codex.render_prompt("/bmad-dev-auto 1-1-a") == (
+        "Use the $bmad-dev-auto skill now, and use subagents as needed: 1-1-a"
     )
     # non-slash prompts pass through {prompt}; {skill}/{args} degrade gracefully
     assert claude.render_prompt("just do it") == "just do it"

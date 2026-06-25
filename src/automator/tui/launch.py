@@ -6,20 +6,20 @@ TUI exit, and the dashboard observes them through run-dir artifacts exactly
 like runs started from a plain shell. Fast read-only commands (validate,
 --dry-run) are captured instead, for display in a modal.
 
-No textual imports here — everything is subprocess-level and unit-testable.
+No textual imports here — everything drives the multiplexer seam (or a plain
+subprocess for the captured read-only commands) and is unit-testable.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from .. import runs
+from ..adapters.multiplexer import MultiplexerError, get_multiplexer
 from ..journal import Journal
 
 CTL_SESSION = "bmad-auto-ctl"
@@ -33,15 +33,11 @@ class LaunchError(Exception):
 
 
 def tmux_available() -> bool:
-    return shutil.which("tmux") is not None
-
-
-def _tmux(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["tmux", *args], capture_output=True, text=True)
+    return get_multiplexer().available()
 
 
 def session_exists(session: str) -> bool:
-    return _tmux("has-session", "-t", f"={session}").returncode == 0
+    return get_multiplexer().has_session(session)
 
 
 def ctl_window(run_id: str) -> str | None:
@@ -50,10 +46,7 @@ def ctl_window(run_id: str) -> str | None:
     run was not launched from the TUI or the session is gone."""
     if not tmux_available():
         return None
-    proc = _tmux("list-windows", "-t", f"={CTL_SESSION}", "-F", "#{window_name}")
-    if proc.returncode != 0:
-        return None
-    for name in proc.stdout.splitlines():
+    for (name,) in get_multiplexer().list_windows(CTL_SESSION, ["window_name"]):
         if name.endswith(f"-{run_id}"):
             return name
     return None
@@ -62,18 +55,19 @@ def ctl_window(run_id: str) -> str | None:
 def select_ctl_window(window: str) -> None:
     """Make `window` the control session's current window, so a plain attach
     to the session lands on it (attach-session itself takes no window)."""
-    _tmux("select-window", "-t", f"={CTL_SESSION}:{window}")
+    get_multiplexer().select_window(f"={CTL_SESSION}:{window}")
 
 
 def select_ctl_window_id(window_id: str) -> None:
     """Like select_ctl_window but by stable tmux window id (@N). Immune to the
     by-name first-match ambiguity in ctl_window and to tmux auto-rename."""
-    _tmux("select-window", "-t", window_id)
+    get_multiplexer().select_window(window_id)
 
 
 # Per-window tmux user option recording what an interactive attach should do
-# with the client once the window's command exits (see RETURN_TRAILER in
-# start_detached). Set by set_return_pane at attach time. Value is either a pane
+# with the client once the window's command exits (consumed by the multiplexer's
+# parked-window return trailer; see start_detached and the tmux backend). Set by
+# set_return_pane at attach time. Value is either a pane
 # id (%N) to switch the client to — used when the TUI runs inside tmux and
 # switched its own client over — or RETURN_DETACH, used when the TUI runs
 # outside tmux and a throwaway client was attached that must detach so the
@@ -86,8 +80,7 @@ def current_pane_id() -> str | None:
     """Stable tmux id (%N) of the pane this process runs in, or None when not
     inside tmux / tmux is unavailable. For the TUI process this is its own pane
     — the place an attach should return the client to."""
-    proc = _tmux("display-message", "-p", "#{pane_id}")
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    return get_multiplexer().current_pane_id()
 
 
 def set_return_pane(window_target: str, pane_id: str) -> None:
@@ -95,14 +88,13 @@ def set_return_pane(window_target: str, pane_id: str) -> None:
     trailing shell switches the client back there when the window's command
     exits. `window_target` is any tmux window spec (e.g. `=bmad-auto-ctl:run-…`
     or a stable `@N` id)."""
-    _tmux("set-option", "-w", "-t", window_target, RETURN_OPTION, pane_id)
+    get_multiplexer().set_window_option(window_target, RETURN_OPTION, pane_id)
 
 
 def current_session() -> str | None:
     """Name of the tmux session this process is running inside, or None when
     not in tmux / tmux is unavailable."""
-    proc = _tmux("display-message", "-p", "#{session_name}")
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    return get_multiplexer().current_session()
 
 
 def in_ctl_session() -> bool:
@@ -114,33 +106,34 @@ def in_ctl_session() -> bool:
 def detach_client() -> None:
     """Detach the tmux client viewing the current session, handing the terminal
     back to the user. Processes in the session keep running."""
-    _tmux("detach-client")
+    get_multiplexer().detach_client()
 
 
 def return_attached_client() -> bool:
     """Hand an attached client back to its origin *now*, mid-process — the
-    RETURN_TRAILER move (see start_detached) executed while the window's command
-    keeps running in the background, instead of after it exits.
+    parked-window return move (see start_detached) executed while the window's
+    command keeps running in the background, instead of after it exits.
 
     Reads the RETURN_OPTION recorded on the current window by set_return_pane:
       - a pane id (%N): switch that client back there (`-l` fallback if it's gone);
       - RETURN_DETACH: detach the client so a blocking `tmux attach` returns;
       - unset/empty: nobody attached with a return target — do nothing.
-    The option is then cleared so the post-exit RETURN_TRAILER doesn't fire a
+    The option is then cleared so the post-exit return trailer doesn't fire a
     second time. Returns True iff a client was actually returned."""
-    if not tmux_available():
+    mux = get_multiplexer()
+    if not mux.available():
         return False
-    win = _current_window_id()
+    win = mux.current_window_id()
     if win is None:
         return False
-    ret = _tmux("show-options", "-wqv", RETURN_OPTION).stdout.strip()
+    ret = mux.show_window_option(win, RETURN_OPTION)
     if not ret:
         return False
     if ret == RETURN_DETACH:
-        _tmux("detach-client")
-    elif _tmux("switch-client", "-t", ret).returncode != 0:
-        _tmux("switch-client", "-l")
-    _tmux("set-option", "-wu", "-t", win, RETURN_OPTION)
+        mux.detach_client()
+    else:
+        mux.switch_client(ret, last_fallback=True)
+    mux.unset_window_option(win, RETURN_OPTION)
     return True
 
 
@@ -179,14 +172,7 @@ def kill_ctl_window(run_id: str) -> None:
     if any. A no-op when the run was not launched from the TUI or tmux is gone."""
     window = ctl_window(run_id)
     if window is not None:
-        _tmux("kill-window", "-t", f"={CTL_SESSION}:{window}")
-
-
-def _current_window_id() -> str | None:
-    """Stable tmux id (@N) of the window this process runs in, or None when not
-    inside tmux / tmux is unavailable."""
-    proc = _tmux("display-message", "-p", "#{window_id}")
-    return proc.stdout.strip() if proc.returncode == 0 else None
+        get_multiplexer().kill_window(f"={CTL_SESSION}:{window}")
 
 
 def _ctl_window_candidates(project: Path) -> list[tuple[str, str]]:
@@ -204,25 +190,14 @@ def _ctl_window_candidates(project: Path) -> list[tuple[str, str]]:
     a window tagged for another project is left alone; an untagged (pre-upgrade)
     window is only a candidate when its run dir exists under this project.
     """
-    if not tmux_available() or not session_exists(CTL_SESSION):
+    mux = get_multiplexer()
+    if not mux.available() or not session_exists(CTL_SESSION):
         return []
-    current = _current_window_id()
-    proc = _tmux(
-        "list-windows",
-        "-t",
-        f"={CTL_SESSION}",
-        "-F",
-        f"#{{window_id}}\t#{{window_name}}\t#{{{runs.PROJECT_OPTION}}}",
-    )
-    if proc.returncode != 0:
-        return []
+    current = mux.current_window_id()
+    rows = mux.list_windows(CTL_SESSION, ["window_id", "window_name", runs.PROJECT_OPTION])
     mine = runs.project_tag(project)
     candidates: list[tuple[str, str]] = []
-    for line in proc.stdout.splitlines():
-        parts = line.split("\t")
-        win_id = parts[0] if parts else ""
-        name = parts[1] if len(parts) > 1 else ""
-        tag = parts[2] if len(parts) > 2 else ""
+    for win_id, name, tag in rows:
         if not win_id or win_id == current:
             continue
         m = _CTL_WINDOW_RE.match(name)
@@ -248,19 +223,22 @@ def prunable_ctl_windows(project: Path) -> list[str]:
 def prune_ctl_windows(project: Path) -> list[str]:
     """Close parked control-session windows whose run is no longer live; returns
     the names of the windows that were closed (see _ctl_window_candidates)."""
+    mux = get_multiplexer()
     killed: list[str] = []
     for win_id, name in _ctl_window_candidates(project):
-        _tmux("kill-window", "-t", win_id)
+        mux.kill_window(win_id)
         killed.append(name)
     return killed
 
 
 def _ensure_ctl_session(project: Path) -> None:
-    if session_exists(CTL_SESSION):
+    mux = get_multiplexer()
+    if mux.has_session(CTL_SESSION):
         return
-    proc = _tmux("new-session", "-d", "-s", CTL_SESSION, "-c", str(project))
-    if proc.returncode != 0:
-        raise LaunchError(f"tmux new-session failed: {proc.stderr.strip()}")
+    try:
+        mux.new_session(CTL_SESSION, project)
+    except MultiplexerError as e:
+        raise LaunchError(f"tmux new-session failed: {e}") from e
 
 
 def cli_argv(*tail: str) -> list[str]:
@@ -269,67 +247,38 @@ def cli_argv(*tail: str) -> list[str]:
     return [sys.executable, "-m", "automator.cli", *tail]
 
 
-# After the parked `read`, return the user where they came from instead of
-# stranding them in the control session, then let the window close on its own
-# (sh exits). The action recorded by set_return_pane decides how:
-#   - a pane id (%N): the TUI is inside tmux and switched its own client here;
-#     switch that client back to the TUI's pane (`-l` is a best-effort fallback
-#     when the recorded pane is gone).
-#   - "detach": the TUI is outside tmux and a throwaway client attached; detach
-#     it so the blocking `tmux attach` returns and the suspended TUI resumes.
-#   - unset: nobody attached interactively (a plain detached run) — do nothing
-#     and park exactly as before.
-RETURN_TRAILER = (
-    f"ret=$(tmux show-options -wqv {RETURN_OPTION} 2>/dev/null); "
-    f'if [ "$ret" = "{RETURN_DETACH}" ]; then tmux detach-client 2>/dev/null; '
-    'elif [ -n "$ret" ]; then '
-    'tmux switch-client -t "$ret" 2>/dev/null || tmux switch-client -l 2>/dev/null; '
-    "fi"
-)
-
-
 def start_detached(project: Path, argv_tail: list[str], run_id: str, kind: str) -> str | None:
     """Run a bmad-auto command in a new window of the control session.
 
-    The window runs under explicit `sh -c` (the user's login shell may be
-    fish); the trailing `read` keeps the exit status inspectable instead of
-    tmux closing the window the moment the process exits. After the read it runs
-    RETURN_TRAILER, which switches an attached client back to its origin pane.
+    The window parks after the command exits (keeping the exit status
+    inspectable) and then returns an attached client to its origin pane — both
+    handled by the multiplexer's parked-window primitive, keyed by the
+    RETURN_OPTION recorded on the window by set_return_pane.
 
     Returns the new window's stable tmux id (@N) so callers can target it
     unambiguously (window names collide when several kinds share a run_id).
     """
-    if not tmux_available():
+    mux = get_multiplexer()
+    if not mux.available():
         raise LaunchError("tmux not found on PATH")
     _ensure_ctl_session(project)
-    inner = shlex.join(cli_argv(*argv_tail))
-    shell = (
-        f'{inner}; ec=$?; echo "[bmad-auto exited $ec — press enter]"; '
-        f"read -r; {RETURN_TRAILER}"
-    )
-    proc = _tmux(
-        "new-window",
-        "-d",
-        "-P",
-        "-F",
-        "#{window_id}",
-        "-t",
-        f"={CTL_SESSION}:",
-        "-n",
-        f"{kind}-{run_id}",
-        "-c",
-        str(project),
-        "sh",
-        "-c",
-        shell,
-    )
-    if proc.returncode != 0:
-        raise LaunchError(f"tmux new-window failed: {proc.stderr.strip()}")
-    win_id = proc.stdout.strip() or None
+    try:
+        win_id = (
+            mux.new_parked_window(
+                CTL_SESSION,
+                f"{kind}-{run_id}",
+                project,
+                cli_argv(*argv_tail),
+                RETURN_OPTION,
+            )
+            or None
+        )
+    except MultiplexerError as e:
+        raise LaunchError(f"tmux new-window failed: {e}") from e
     if win_id:
         # Tag the window with its project so a cleanup in another project never
         # closes it (the ctl session is shared across projects).
-        _tmux("set-option", "-w", "-t", win_id, runs.PROJECT_OPTION, runs.project_tag(project))
+        mux.set_window_option(win_id, runs.PROJECT_OPTION, runs.project_tag(project))
     return win_id
 
 

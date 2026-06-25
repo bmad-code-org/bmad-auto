@@ -8,6 +8,7 @@ import tarfile
 import pytest
 
 from automator import runs
+from automator.adapters import tmux_backend
 from automator.journal import load_state, save_state
 from automator.model import RunState
 
@@ -215,14 +216,15 @@ def test_stop_run_respects_engine_written_stopped(tmp_path, monkeypatch):
 
 
 def test_tmux_sessions_no_tmux(monkeypatch):
-    monkeypatch.setattr(runs.shutil, "which", lambda _name: None)
+    # tmux_sessions now delegates to the multiplexer backend; patch its seam.
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _name: None)
     assert runs.tmux_sessions() == []
 
 
 def test_tmux_sessions_no_server(monkeypatch):
-    monkeypatch.setattr(runs.shutil, "which", lambda _name: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _name: "/usr/bin/tmux")
     monkeypatch.setattr(
-        runs.subprocess,
+        tmux_backend.subprocess,
         "run",
         lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr="no server"),
     )

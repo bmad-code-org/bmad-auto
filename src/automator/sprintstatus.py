@@ -1,8 +1,10 @@
-"""Read-only model of sprint-status.yaml — the single source of workflow truth.
+"""Model of sprint-status.yaml — the single source of workflow truth.
 
-The orchestrator NEVER writes this file. Only the BMAD skills mutate it
-(via sync-sprint-status); the orchestrator re-reads it to pick the next
-story and to verify what a session claims to have done.
+The dev primitive `bmad-dev-auto` deliberately does not touch sprint-status
+("the orchestrator's business"), so the orchestrator is the single writer via
+:func:`advance` — idempotent, never-regress, epic-lift. The orchestrator
+otherwise only re-reads this file to pick the next story and verify what a
+session claims, so the no-races invariant holds.
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ SHORT_REF_RE = re.compile(r"^(\d+)[-.](\d+)$")  # short story ref: 3-1 or 3.1
 BARE_NUM_RE = re.compile(r"^(\d+)$")  # a lone story number, needs --epic
 
 STORY_STATUSES = {"backlog", "ready-for-dev", "in-progress", "review", "done"}
+# Lifecycle order, earliest -> latest. `advance` never moves a story backward
+# through this sequence (matches sync-sprint-status's "never regress").
+STATUS_ORDER = ("backlog", "ready-for-dev", "in-progress", "review", "done")
 LEGACY_STORY_STATUSES = {"drafted": "ready-for-dev"}
 ACTIONABLE_STATUSES = {"backlog", "ready-for-dev"}
 
@@ -141,6 +146,82 @@ def story_status(path: Path, key: str) -> str | None:
         if story.key == key:
             return story.status
     return None
+
+
+def _set_mapping_value(lines: list[str], key: str, new_value: str) -> bool:
+    """In-place replace the value of the first `key:` line, preserving
+    indentation and any trailing ` # comment`. Returns True on a real change. A
+    minimal line edit (not a YAML round-trip) so the file's comments and
+    structure — STATUS DEFINITIONS, WORKFLOW NOTES — survive verbatim. The value
+    region may contain spaces (e.g. `last_updated: 01-06-2026 10:00`); a trailing
+    inline comment is recognized only when preceded by whitespace (YAML rule)."""
+    # value = everything after the gap up to an optional ` #...` inline comment
+    pat = re.compile(
+        rf"^(?P<indent>\s*){re.escape(key)}:(?P<gap>[ \t]+)"
+        r"(?P<val>\S(?:.*?\S)?)(?P<rest>[ \t]+#.*)?$"
+    )
+    for i, line in enumerate(lines):
+        m = pat.match(line.rstrip("\n"))
+        if not m:
+            continue
+        if m.group("val") == new_value:
+            return False  # already at target — idempotent no-op
+        nl = "\n" if line.endswith("\n") else ""
+        lines[i] = (
+            f"{m.group('indent')}{key}:{m.group('gap')}{new_value}{m.group('rest') or ''}" + nl
+        )
+        return True
+    return False
+
+
+def advance(path: Path, story_key: str, target: str, *, now: str | None = None) -> str | None:
+    """Advance a story's sprint-status to `target` for the generic-skill path.
+
+    Mirrors sync-sprint-status.md: skip when the file is missing or the story is
+    absent (returns None); never regress (returns the current status unchanged
+    when it is already at or past `target` in STATUS_ORDER); lift a `backlog`
+    parent epic to `in-progress` only when advancing a story to `in-progress`;
+    refresh `last_updated` when `now` is given. Comments/structure are preserved
+    via line edits. Returns the story's status after the call (== `target` on a
+    write), or None when nothing was eligible.
+    """
+    if not path.is_file():
+        return None
+    current = story_status(path, story_key)
+    if current is None:
+        return None
+    if (
+        current in STATUS_ORDER
+        and target in STATUS_ORDER
+        and STATUS_ORDER.index(current) >= STATUS_ORDER.index(target)
+    ):
+        return current  # already at or past target — never regress
+
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    # story_status() resolves keys via a full YAML parse, but _set_mapping_value
+    # rewrites via a line regex that can't touch every shape it finds (quoted or
+    # block-scalar keys). If the story line itself wasn't rewritten, report the
+    # unchanged status rather than falsely claiming we advanced to target.
+    story_changed = _set_mapping_value(lines, story_key, target)
+    if not story_changed:
+        return current
+    changed = story_changed
+
+    if target == "in-progress":
+        m = STORY_RE.match(story_key)
+        if m:
+            epic_key = f"epic-{int(m.group(1))}"
+            ss = load(path)
+            if ss.epics.get(int(m.group(1))) == "backlog":
+                changed = _set_mapping_value(lines, epic_key, "in-progress") or changed
+
+    if now is not None:
+        changed = _set_mapping_value(lines, "last_updated", now) or changed
+
+    if changed:
+        path.write_text("".join(lines), encoding="utf-8")
+    return target
 
 
 @dataclass(frozen=True)

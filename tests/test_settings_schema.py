@@ -21,6 +21,7 @@ from automator.policy import (
     MERGE_STRATEGIES,
     POLICY_TEMPLATE,
     RETRO_MODES,
+    REVIEW_TRIGGER_MODES,
     SWEEP_AUTO_MODES,
     AdapterPolicy,
     CleanupPolicy,
@@ -60,6 +61,7 @@ SECTION_DC = {
 OPTIONS_ENUM = {
     ("gates", "mode"): GATE_MODES,
     ("gates", "retrospective"): RETRO_MODES,
+    ("review", "trigger"): REVIEW_TRIGGER_MODES,
     ("sweep", "auto"): SWEEP_AUTO_MODES,
     ("scm", "isolation"): ISOLATION_MODES,
     ("scm", "branch_per"): BRANCH_PER_MODES,

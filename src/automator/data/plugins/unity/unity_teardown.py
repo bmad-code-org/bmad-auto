@@ -45,6 +45,54 @@ import sys
 import time
 from pathlib import Path
 
+# SIGKILL is absent on Windows; fall back to SIGTERM so the attribute access never
+# raises. Linux/macOS/WSL keep today's hard-kill behavior exactly.
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)  # portability: SIGKILL absent on Windows
+
+
+def _taskkill() -> str:
+    """Absolute path to the Windows ``taskkill`` binary. Resolving it from
+    ``%SystemRoot%\\System32`` rather than invoking ``taskkill`` by name keeps the
+    Windows process-search order from picking up a same-named executable planted on
+    PATH or in the working directory."""
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+
+
+def _psutil():
+    """Lazily import psutil (the optional ``non-linux`` extra), used only for
+    non-Linux process discovery (macOS and Windows). The dep-free core never imports
+    it; raise a clear, actionable error if it's missing on a platform that needs it."""
+    try:
+        import psutil  # noqa: PLC0415  (intentional lazy import — keeps the core dep-free)
+    except ImportError as exc:  # pragma: no cover - exercised only off Linux
+        raise RuntimeError(
+            f"unity_teardown: process discovery on {sys.platform!r} needs psutil; "
+            "install the optional extra (pip install 'bmad-auto[non-linux]') or run "
+            "under Linux/WSL"
+        ) from exc
+    return psutil
+
+
+def _terminate_pid(pid: int) -> None:
+    """Politely terminate ``pid``. POSIX: ``os.kill(pid, SIGTERM)`` — same OSError
+    family (ProcessLookupError/PermissionError) as before, so the caller's handling
+    is unchanged. Windows: ``taskkill`` is the analogue (not exercised yet)."""
+    if sys.platform == "win32":
+        # portability: no os.kill(SIGTERM) on Windows — taskkill is the analogue.
+        subprocess.run([_taskkill(), "/PID", str(pid)], check=False, capture_output=True)
+        return
+    os.kill(pid, signal.SIGTERM)
+
+
+def _hard_kill_pid(pid: int) -> None:
+    """Force-kill ``pid``. POSIX: ``os.kill(pid, SIGKILL)`` (SIGTERM where SIGKILL is
+    absent). Windows: ``taskkill /F`` (not exercised yet)."""
+    if sys.platform == "win32":
+        # portability: SIGKILL has no Windows analogue — taskkill /F force-kills.
+        subprocess.run([_taskkill(), "/F", "/PID", str(pid)], check=False, capture_output=True)
+        return
+    os.kill(pid, _SIGKILL)
+
 
 def _worktree() -> Path | None:
     wt = os.environ.get("BMAD_AUTO_WORKTREE")
@@ -52,8 +100,12 @@ def _worktree() -> Path | None:
 
 
 def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # portability: os.kill(pid, 0) is destructive on Windows (TerminateProcess),
+        # so use psutil for a read-only liveness check.
+        return _psutil().pid_exists(pid)
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)  # portability: read-only existence probe (POSIX); win32 uses psutil above
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -74,19 +126,27 @@ def _exe_basename(entry: Path) -> str:
 
 
 def _lingering_pids(worktree: Path) -> list[int]:
-    """Linux: PIDs of the Unity *Editor* or its *MCP server* bound to this worktree.
+    """PIDs of the Unity *Editor* or its *MCP server* bound to this worktree.
 
     Tight on purpose: the process must (a) reference this exact worktree path in
     argv — Unity gets ``-projectPath <path>`` and the server's binary lives under
     ``<worktree>/Library/mcp-server/`` — and (b) have an executable basename of
     exactly ``unity`` (the Editor) or ``gamedev-mcp-server`` (the MCP server). That
     excludes the launcher shell, ``unity-mcp-cli``/node, python, greps, and the
-    operator's Editor/server on any other project, so we never kill the wrong one."""
-    if not sys.platform.startswith("linux"):
-        return []
+    operator's Editor/server on any other project, so we never kill the wrong one.
+
+    Linux uses the zero-dependency ``/proc`` fast path; other platforms (no /proc)
+    fall back to the same scan over psutil (the optional ``non-linux`` extra)."""
+    if sys.platform.startswith("linux"):
+        return _lingering_pids_proc(worktree)
+    return _lingering_pids_psutil(worktree)
+
+
+def _lingering_pids_proc(worktree: Path) -> list[int]:
+    """Linux fast path: scan ``/proc`` for the worktree-bound Editor/server."""
     needle = str(worktree)
     pids: list[int] = []
-    for entry in Path("/proc").iterdir():
+    for entry in Path("/proc").iterdir():  # portability: Linux-only /proc scan, guarded above
         if not entry.name.isdigit():
             continue
         try:
@@ -100,6 +160,35 @@ def _lingering_pids(worktree: Path) -> list[int]:
         argv0 = os.path.basename(argv.split(" ", 1)[0]).lower() if argv.strip() else ""
         if _exe_basename(entry) in _TARGET_BASENAMES or argv0 in _TARGET_BASENAMES:
             pids.append(int(entry.name))
+    return pids
+
+
+def _lingering_pids_psutil(worktree: Path) -> list[int]:
+    """Non-Linux equivalent of the ``/proc`` scan via psutil (no /proc available).
+    Same tight match — argv references this worktree AND the process basename is a
+    target — with the basename's extension stripped so Windows' ``Unity.exe`` /
+    ``gamedev-mcp-server.exe`` match ``_TARGET_BASENAMES``. Not exercised on Linux."""
+    psutil = _psutil()
+    needle = str(worktree)
+    pids: list[int] = []
+    for proc in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+        try:
+            cmdline = proc.info.get("cmdline") or []
+            if needle not in " ".join(cmdline):
+                continue
+            exe = proc.info.get("exe") or ""
+            name = proc.info.get("name") or ""
+            argv0 = os.path.basename(cmdline[0]).lower() if cmdline else ""
+            exe_base = os.path.splitext(os.path.basename(exe))[0].lower() if exe else ""
+            name_base = os.path.splitext(name)[0].lower()
+            if (
+                exe_base in _TARGET_BASENAMES
+                or argv0 in _TARGET_BASENAMES
+                or name_base in _TARGET_BASENAMES
+            ):
+                pids.append(int(proc.info["pid"]))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue  # process vanished or unreadable mid-scan
     return pids
 
 
@@ -118,10 +207,10 @@ def _force_kill_lingering(worktree: Path) -> int:
     )
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGTERM)
+            _terminate_pid(pid)
         except OSError:
             pass
-    # give them a few seconds to exit politely, then SIGKILL survivors
+    # give them a few seconds to exit politely, then hard-kill survivors
     for _ in range(20):
         if not any(_alive(p) for p in pids):
             break
@@ -129,7 +218,7 @@ def _force_kill_lingering(worktree: Path) -> int:
     for pid in pids:
         if _alive(pid):
             try:
-                os.kill(pid, signal.SIGKILL)
+                _hard_kill_pid(pid)
             except OSError:
                 pass
     return len(pids)

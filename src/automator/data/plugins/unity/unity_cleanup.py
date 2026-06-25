@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 # companyName/productName are flat scalars in the otherwise-YAML asset.
@@ -56,13 +57,28 @@ def read_project_identity(project: Path) -> tuple[str, str]:
     )
 
 
+def _temp_cache_root() -> Path:
+    """Base of Unity's ``Application.temporaryCachePath`` (where unity-mcp-cli drops
+    the server zip), under which we look for ``<company>/<product>``.
+
+    On Linux this is exactly ``/tmp`` — keep it byte-for-byte (it *is* Unity's
+    documented temporaryCachePath base, not our scratch choice). On other platforms
+    (no /tmp) derive from ``tempfile.gettempdir()`` as a best-effort analogue.
+    NOTE: native Windows Unity uses a *different* cache root —
+    ``%USERPROFILE%\\AppData\\Local\\Temp\\<company>\\<product>`` — which
+    ``gettempdir()`` does not always resolve to; getting that exactly right is a
+    documented follow-up (no Windows backend ships this pass, so it isn't exercised)."""
+    if sys.platform.startswith("linux"):
+        return Path("/tmp")  # nosec B108 portability: Unity temporaryCachePath base (Linux)
+    return Path(tempfile.gettempdir())  # portability: non-Linux temp root (see note above)
+
+
 def _clean_tmp_zips(company: str, product: str) -> int:
-    """Remove the downloaded unity-mcp-server zips under /tmp/<company>/<product>.
-    Returns the number removed. Scoped to this project's temp dir so a sibling
-    project's downloads are never touched."""
-    # Unity's Application.temporaryCachePath on Linux is /tmp/<company>/<product>;
-    # this is unity-mcp-cli's fixed download location, not our scratch choice.
-    tmp = Path("/tmp") / company / product  # nosec B108
+    """Remove the downloaded unity-mcp-server zips under the temp cache dir
+    ``<temp>/<company>/<product>``. Returns the number removed. Scoped to this
+    project's temp dir so a sibling project's downloads are never touched."""
+    # This is unity-mcp-cli's fixed download location, not our scratch choice.
+    tmp = _temp_cache_root() / company / product
     if not tmp.is_dir():
         return 0
     removed = 0

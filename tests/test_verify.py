@@ -1,3 +1,4 @@
+import pytest
 from conftest import git, spec_path, write_spec, write_sprint
 
 from automator import verify
@@ -12,7 +13,46 @@ def make_task(paths, story_key="1-1-a"):
 
 
 def dev_result(sp):
-    return {"workflow": "quick-dev", "spec_file": str(sp)}
+    return {"workflow": "auto-dev", "spec_file": str(sp)}
+
+
+def test_attempt_dirty_clean_tree(project):
+    """At baseline with no changes — nothing for a rollback to undo."""
+    baseline = verify.rev_parse_head(project.project)
+    assert verify.attempt_dirty(project.project, baseline, []) is False
+
+
+def test_attempt_dirty_tracked_change(project):
+    """A modified tracked file is a tracked diff vs baseline."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "src.txt").write_text("changed\n")
+    assert verify.attempt_dirty(project.project, baseline, []) is True
+
+
+def test_attempt_dirty_run_created_untracked(project):
+    """An untracked file absent from the baseline snapshot was created by this
+    attempt → dirty."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "new.txt").write_text("fresh\n")
+    assert verify.attempt_dirty(project.project, baseline, []) is True
+
+
+def test_attempt_dirty_preexisting_untracked_ignored(project):
+    """An untracked file already in the baseline snapshot is the user's, not this
+    attempt's — clean."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "keep.txt").write_text("mine\n")
+    assert verify.attempt_dirty(project.project, baseline, ["keep.txt"]) is False
+
+
+def test_attempt_dirty_none_snapshot_ignores_untracked(project):
+    """No snapshot (pre-upgrade run): untracked files never count, only tracked
+    diff does."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "new.txt").write_text("fresh\n")
+    assert verify.attempt_dirty(project.project, baseline, None) is False
+    (project.project / "src.txt").write_text("changed\n")
+    assert verify.attempt_dirty(project.project, baseline, None) is True
 
 
 def test_verify_dev_happy(project):
@@ -47,6 +87,19 @@ def test_verify_dev_wrong_status(project):
     assert not out.ok and "expected 'in-review'" in out.reason
 
 
+def test_verify_dev_wrong_workflow(project):
+    # A result.json that exists and points at a real spec but reports the wrong
+    # workflow means the wrong skill produced it — reject as retryable.
+    write_sprint(project, {"1-1-a": "review"})
+    task = make_task(project)
+    sp = spec_path(project, "1-1-a")
+    write_spec(sp, "in-review", task.baseline_commit)
+    (project.project / "src.txt").write_text("changed\n")
+    rj = {"workflow": "quick-dev", "spec_file": str(sp)}
+    out = verify.verify_dev(task, project, rj)
+    assert not out.ok and out.retryable and "auto-dev" in out.reason
+
+
 def test_verify_dev_review_disabled_expects_done(project):
     write_sprint(project, {"1-1-a": "done"})
     task = make_task(project)
@@ -60,6 +113,19 @@ def test_verify_dev_review_disabled_expects_done(project):
     write_spec(sp, "in-review", task.baseline_commit)
     out = verify.verify_dev(task, project, dev_result(sp), review_enabled=False)
     assert not out.ok and "expected 'done'" in out.reason
+
+
+def test_verify_dev_review_disabled_rejects_review_sprint(project):
+    # Skip-review finalizes the sprint to 'done'; a run that left it at 'review'
+    # must not slip through the sprint-status gate.
+    write_sprint(project, {"1-1-a": "review"})
+    task = make_task(project)
+    sp = spec_path(project, "1-1-a")
+    write_spec(sp, "done", task.baseline_commit)
+    (project.project / "src.txt").write_text("changed\n")
+
+    out = verify.verify_dev(task, project, dev_result(sp), review_enabled=False)
+    assert not out.ok and "sprint-status" in out.reason and "expected 'done'" in out.reason
 
 
 def test_verify_dev_lying_baseline(project):
@@ -164,7 +230,7 @@ def test_verify_dev_bundle_happy_skips_sprint(project):
     sp = project.implementation_artifacts / "spec-dw-test-bundle.md"
     write_spec(sp, "in-review", task.baseline_commit)
     (project.project / "src.txt").write_text("changed\n")
-    rj = {"workflow": "quick-dev", "spec_file": str(sp), "dw_ids": ["DW-2", "DW-1"]}
+    rj = {"workflow": "auto-dev", "spec_file": str(sp), "dw_ids": ["DW-2", "DW-1"]}
     out = verify.verify_dev_bundle(task, project, rj)
     assert out.ok
     assert task.spec_file == str(sp)
@@ -175,7 +241,7 @@ def test_verify_dev_bundle_dw_ids_mismatch(project):
     sp = project.implementation_artifacts / "spec-dw-test-bundle.md"
     write_spec(sp, "in-review", task.baseline_commit)
     (project.project / "src.txt").write_text("changed\n")
-    rj = {"workflow": "quick-dev", "spec_file": str(sp), "dw_ids": ["DW-1"]}
+    rj = {"workflow": "auto-dev", "spec_file": str(sp), "dw_ids": ["DW-1"]}
     out = verify.verify_dev_bundle(task, project, rj)
     assert not out.ok and "dw_ids" in out.reason
 
@@ -302,6 +368,78 @@ def test_commit_story(project):
     sha = verify.commit_story(project.project, f"story {task.story_key}: via bmad-auto")
     assert sha != task.baseline_commit
     assert verify.worktree_clean(project.project)
+
+
+def test_finalize_commit_squashes_chain_to_one(project):
+    """The skill commits each iteration; finalize_commit collapses the whole
+    chain since baseline (plus the orchestrator's uncommitted bookkeeping) into
+    ONE commit carrying the orchestrator's message."""
+    baseline = verify.rev_parse_head(project.project)
+    # two "skill" commits since baseline (a dev pass + a review pass)
+    (project.project / "src.txt").write_text("dev work\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: implement")
+    (project.project / "src.txt").write_text("dev work\nreview fix\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: review fix")
+    # an uncommitted orchestrator bookkeeping write (e.g. sprint-status)
+    (project.project / "sprint.txt").write_text("done\n")
+
+    sha = verify.finalize_commit(project.project, baseline, "story 1-1-a: via bmad-auto")
+
+    assert sha is not None and sha != baseline
+    assert verify.worktree_clean(project.project)
+    # exactly one commit on top of baseline, with the orchestrator's message
+    log = git(project.project, "log", "--format=%s", f"{baseline}..HEAD")
+    assert log.splitlines() == ["story 1-1-a: via bmad-auto"]
+    # all the content (skill commits + bookkeeping) is in that single commit
+    assert (project.project / "src.txt").read_text() == "dev work\nreview fix\n"
+    assert (project.project / "sprint.txt").read_text() == "done\n"
+
+
+def test_finalize_commit_restores_head_when_commit_fails(project):
+    """If `git commit` fails after the soft reset (e.g. a rejecting pre-commit hook),
+    HEAD must be restored to the skill commit chain — not left rewound to baseline
+    with the chain dropped from the branch pointer."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "src.txt").write_text("dev work\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: implement")
+    head_before = verify.rev_parse_head(project.project)
+    # a pre-commit hook that always fails makes finalize's commit step fail
+    hook = project.project / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+
+    with pytest.raises(verify.GitError, match="git commit failed"):
+        verify.finalize_commit(project.project, baseline, "story: via bmad-auto")
+
+    assert verify.rev_parse_head(project.project) == head_before  # chain preserved
+
+
+def test_finalize_commit_no_vcs_or_missing_baseline_returns_none(project):
+    assert verify.finalize_commit(project.project, None, "msg") is None
+    assert verify.finalize_commit(project.project, "NO_VCS", "msg") is None
+
+
+def test_finalize_commit_nothing_to_finalize_returns_none(project):
+    """Tree already equals baseline (no skill commits, no bookkeeping delta)."""
+    baseline = verify.rev_parse_head(project.project)
+    assert verify.finalize_commit(project.project, baseline, "msg") is None
+    assert verify.rev_parse_head(project.project) == baseline
+
+
+def test_finalize_commit_only_uncommitted_bookkeeping(project):
+    """No skill commits, just the orchestrator's uncommitted writes → one commit."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "src.txt").write_text("uncommitted change\n")
+
+    sha = verify.finalize_commit(project.project, baseline, "story: via bmad-auto")
+
+    assert sha is not None and sha != baseline
+    assert verify.worktree_clean(project.project)
+    log = git(project.project, "log", "--format=%s", f"{baseline}..HEAD")
+    assert log.splitlines() == ["story: via bmad-auto"]
 
 
 def test_commit_paths_commits_only_listed(project):

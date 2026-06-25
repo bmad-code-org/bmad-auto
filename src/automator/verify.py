@@ -7,6 +7,7 @@ policy's test/lint gates with the orchestrator's own subprocess calls.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,15 @@ from .sprintstatus import story_status
 
 GIT_TIMEOUT_S = 120
 COMMAND_TIMEOUT_S = 30 * 60
+
+# result.json `workflow` value for the dev pass. A machine contract: the
+# orchestrator forges this value in `devcontract` when synthesizing the dev
+# result from the spec the bmad-dev-auto session leaves on disk; a mismatch
+# means the wrong artifacts, so we reject rather than trust them. (Sweep's
+# triage/migrate workflows have their
+# own constants in sweep.py; the review skill is verified by on-disk artifacts
+# only and is not handed its result.json.)
+DEV_WORKFLOW = "auto-dev"
 
 # Repo-relative posix path of the orchestrator config, for git pathspecs.
 POLICY_FILE_REL = POLICY_FILE.as_posix()
@@ -119,6 +129,21 @@ def has_changes_since(repo: Path, baseline: str) -> bool:
         return True
     rc, out = _git(repo, "ls-files", "--others", "--exclude-standard")
     return rc == 0 and out != ""
+
+
+def attempt_dirty(repo: Path, baseline: str, baseline_untracked: list[str] | None) -> bool:
+    """True if a `safe_rollback` to `baseline` would change anything: tracked
+    changes since baseline, or untracked files created since the baseline
+    snapshot. `baseline_untracked=None` (a pre-snapshot run) means untracked
+    files are never this attempt's to remove, so only tracked diff counts. This
+    mirrors `safe_rollback`'s notion of what *this attempt* touched, so callers
+    can skip a no-op reset/pause when the tree is already at baseline."""
+    rc, _ = _git(repo, "diff", "--quiet", baseline, "--")
+    if rc != 0:
+        return True
+    if baseline_untracked is None:
+        return False
+    return bool(untracked_files(repo) - set(baseline_untracked))
 
 
 def untracked_files(repo: Path) -> set[str]:
@@ -457,12 +482,12 @@ def capture_diff(repo: Path, baseline: str, *, max_file_bytes: int | None = None
                     "cap (raise scm.failed_diff_max_mb or set scm.failed_diff_unlimited = true)\n"
                 )
                 continue
-        # --no-index synthesizes an add-from-/dev/null diff for the untracked
-        # file; it exits 1 precisely because the files differ — expected here.
-        # Any other non-zero code is a real failure (bad path, internal error),
-        # not "files differ", so don't silently fold it into the patch.
+        # --no-index synthesizes an add-from-empty diff for the untracked file;
+        # it exits 1 precisely because the files differ — expected here. Any other
+        # non-zero code is a real failure (bad path, internal error), not "files
+        # differ", so don't silently fold it into the patch.
         u = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--no-index", "--", "/dev/null", rel],
+            ["git", "-C", str(repo), "diff", "--no-index", "--", os.devnull, rel],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_S,
@@ -542,6 +567,15 @@ def verify_dev(
     result_json: dict[str, Any] | None,
     review_enabled: bool = True,
 ) -> VerifyOutcome:
+    """Verify a dev session's on-disk artifacts against its result.json claims.
+
+    Checks the claimed spec exists, carries the fixed ``auto-dev`` workflow tag,
+    sits at the expected status (``in-review`` when a separate review session
+    follows, ``done`` when review is disabled), records a baseline matching the
+    orchestrator's, has produced changes since that baseline, and that the
+    story's sprint-status was advanced to the matching stage. Returns a retryable
+    VerifyOutcome on any mismatch, escalates on git failure, passes otherwise.
+    """
     rj = result_json or {}
     spec_file = rj.get("spec_file")
     if not spec_file:
@@ -549,6 +583,12 @@ def verify_dev(
     spec_path = resolve_spec_path(str(spec_file), paths)
     if not spec_path.is_file():
         return VerifyOutcome.retry(f"claimed spec file does not exist: {spec_path}")
+
+    workflow = rj.get("workflow")
+    if workflow != DEV_WORKFLOW:
+        return VerifyOutcome.retry(
+            f"dev result.json workflow is {workflow!r}, expected {DEV_WORKFLOW!r}"
+        )
 
     # With review disabled, the dev session runs its own internal review and
     # finalizes straight to done; otherwise it hands off at in-review.
@@ -573,10 +613,11 @@ def verify_dev(
         except GitError as e:
             return VerifyOutcome.escalate(str(e))
 
+    expected_sprint = "review" if review_enabled else "done"
     sprint = story_status(paths.sprint_status, task.story_key)
-    if sprint not in ("review", "done"):
+    if sprint != expected_sprint:
         return VerifyOutcome.retry(
-            f"sprint-status for {task.story_key} is {sprint!r}, expected 'review'"
+            f"sprint-status for {task.story_key} is {sprint!r}, expected {expected_sprint!r}"
         )
 
     task.spec_file = str(spec_path)
@@ -598,6 +639,12 @@ def verify_dev_bundle(
     spec_path = resolve_spec_path(str(spec_file), paths)
     if not spec_path.is_file():
         return VerifyOutcome.retry(f"claimed spec file does not exist: {spec_path}")
+
+    workflow = rj.get("workflow")
+    if workflow != DEV_WORKFLOW:
+        return VerifyOutcome.retry(
+            f"dev result.json workflow is {workflow!r}, expected {DEV_WORKFLOW!r}"
+        )
 
     # With review disabled, the dev session finalizes the bundle straight to done.
     expected = "in-review" if review_enabled else "done"
@@ -647,7 +694,7 @@ def run_verify_commands(policy: Policy, cwd: Path) -> list[CommandResult]:
             # policy (e.g. "pytest -q && ruff check"); shell=True is intentional here.
             proc = subprocess.run(  # nosec B602
                 command,
-                shell=True,
+                shell=True,  # portability: operator-authored verify command — sanctioned shell-out (see plan out-of-scope)
                 cwd=cwd,
                 capture_output=True,
                 text=True,
@@ -692,8 +739,10 @@ def verify_review(task: StoryTask, paths: ProjectPaths, policy: Policy) -> Verif
 
 def verify_review_bundle(task: StoryTask, paths: ProjectPaths, policy: Policy) -> VerifyOutcome:
     """verify_review for a deferred-work bundle: no sprint-status check, but
-    every dw id the bundle owns must be marked done in the ledger on disk —
-    the LLM is told to flip them; this gate is why we can trust it happened."""
+    every dw id the bundle owns must be marked done in the ledger on disk. The
+    legacy --dw-bundle skill flips them; on the generic bmad-dev-auto path the
+    orchestrator flips them in _post_dev_state_sync. Either way this gate is why
+    we can trust it happened."""
     if not task.spec_file:
         return VerifyOutcome.retry("no spec file recorded for task")
     fm = read_frontmatter(Path(task.spec_file))
@@ -724,6 +773,54 @@ def commit_story(repo: Path, message: str) -> str:
         raise GitError(f"git add failed: {out}")
     rc, out = _git(repo, "commit", "-m", message)
     if rc != 0:
+        raise GitError(f"git commit failed: {out}")
+    return rev_parse_head(repo)
+
+
+def finalize_commit(repo: Path, baseline: str | None, message: str) -> str | None:
+    """Collapse everything since `baseline` into ONE commit with `message`.
+
+    bmad-dev-auto now commits its own work at the end of each iteration (one
+    commit for the dev pass, one for each follow-up review pass), while the
+    orchestrator still writes its own bookkeeping (sprint-status.yaml for
+    stories, the deferred-work ledger for sweep bundles) into the working tree
+    uncommitted. This squashes that whole chain — the skill's per-iteration
+    commits PLUS the orchestrator's uncommitted writes — back onto `baseline`
+    as a single commit carrying the orchestrator's message, so the one-commit-
+    per-story invariant and the message template / pre_commit hook stay
+    authoritative regardless of how many times the skill committed.
+
+    Mechanics: stage the working tree (`add -A`), move HEAD back to `baseline`
+    keeping the index (`reset --soft`), then commit the accumulated index. The
+    working tree is never touched, so a failure leaves the chain intact.
+
+    Returns the new HEAD sha, or None when there is nothing to finalize: no
+    version control (`baseline` falsy or NO_VCS) or the tree already equals
+    `baseline` (no skill commits and no bookkeeping delta)."""
+    if not baseline or baseline == "NO_VCS":
+        return None
+    original_head = rev_parse_head(repo)
+    rc, out = _git(repo, "add", "-A")
+    if rc != 0:
+        raise GitError(f"git add failed: {out}")
+    rc, out = _git(repo, "reset", "--soft", baseline)
+    if rc != 0:
+        raise GitError(f"git reset --soft {baseline} failed: {out}")
+    # index now holds the cumulative diff vs baseline; nothing staged → no-op
+    rc, _ = _git(repo, "diff", "--cached", "--quiet")
+    if rc == 0:
+        return None
+    rc, out = _git(repo, "commit", "-m", message)
+    if rc != 0:
+        # The soft reset already rewound HEAD to baseline; a failed commit would
+        # otherwise leave the branch pointer there, dropping the skill commit chain
+        # from HEAD. Restore HEAD (the working tree is untouched) before raising.
+        restore_rc, restore_out = _git(repo, "reset", "--soft", original_head)
+        if restore_rc != 0:
+            raise GitError(
+                f"git commit failed: {out}; additionally failed to restore HEAD "
+                f"to {original_head[:12]}: {restore_out}"
+            )
         raise GitError(f"git commit failed: {out}")
     return rev_parse_head(repo)
 

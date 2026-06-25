@@ -27,7 +27,7 @@ from .bmadconfig import ProjectPaths
 # untracked files in the main checkout. Crucially they must NOT live under .git/:
 # a cwd inside .git/ is treated as git-internal by the coding CLIs (Claude Code),
 # which then refuse to load the project's bmad-auto-* skills — breaking every
-# worktree session (`Unknown command: /bmad-auto-dev`).
+# worktree session (`Unknown command: /bmad-dev-auto`).
 WORKTREE_DIRNAME = "worktrees"
 
 

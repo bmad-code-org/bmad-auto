@@ -36,15 +36,59 @@ GEMINI_HOOK_TIMEOUT_MS = 60_000
 COPILOT_HOOK_TIMEOUT_SEC = 60
 
 # The bmad-auto-* skills bundled in the wheel (automator/data/skills/) that
-# `bmad-auto init` lays down. They must be installed together — bmad-auto-review
-# references bmad-auto-dev/deferred-work-format.md as a sibling.
+# `bmad-auto init` lays down. The inner dev primitive `bmad-dev-auto` is upstream
+# (not bundled here): the orchestrator drives it as an already-installed skill.
 MODULE_SKILLS = (
-    "bmad-auto-dev",
-    "bmad-auto-review",
     "bmad-auto-resolve",
     "bmad-auto-sweep",
     "bmad-auto-setup",
 )
+
+# Upstream skills the orchestrator invokes but does NOT bundle in the wheel — the
+# BMad Method (bmm) module installs them. Each must exist in every active CLI skill
+# tree and carry its marker files (a half-installed or pre-automation skill is
+# caught by the `bmad-auto validate` preflight). `{skill: (marker-rel-path, ...)}`.
+#   - bmad-dev-auto: the inner dev primitive — always required.
+#   - the two review hunters bmad-dev-auto's step-04 invokes inline on EVERY dev
+#     run (and on each follow-up review re-invocation) — also always required, no
+#     longer gated on a separate review session.
+DEV_BASE_SKILLS = {
+    "bmad-dev-auto": ("step-04-review.md",),
+    "bmad-review-adversarial-general": (),
+    "bmad-review-edge-case-hunter": (),
+}
+# Every non-bundled skill that might need copying into an isolated worktree.
+BASE_SKILLS = dict(DEV_BASE_SKILLS)
+
+
+def missing_base_skills(project: Path, trees: Sequence[str]) -> list[str]:
+    """Problems for the upstream skills the orchestrator drives but doesn't bundle.
+
+    The dev primitive (bmad-dev-auto) and the two adversarial review hunters it
+    invokes inline are installed by the BMad Method module, not by `bmad-auto
+    init`. Each must exist in every active CLI skill tree and carry its marker
+    files. Returns one human-readable problem string per missing/incomplete skill;
+    empty list means OK. Run as a preflight so a missing skill fails loudly with
+    remediation instead of stalling as an `Unknown command` until the run times out.
+    """
+    required = dict(DEV_BASE_SKILLS)
+    problems: list[str] = []
+    for tree in dict.fromkeys(trees):
+        for skill, markers in required.items():
+            skill_dir = project / tree / skill
+            if not (skill_dir / "SKILL.md").is_file():
+                problems.append(
+                    f"{tree}/{skill} not found — install the BMad Method (bmm) module "
+                    f"(the orchestrator drives this upstream skill directly)"
+                )
+                continue
+            absent = [m for m in markers if not (skill_dir / m).is_file()]
+            if absent:
+                problems.append(
+                    f"{tree}/{skill} is incomplete (missing {', '.join(absent)}) — "
+                    f"reinstall it from the bmm module"
+                )
+    return problems
 
 
 def _hook_command(project: Path, profile: CLIProfile, canonical_event: str) -> str:
@@ -200,12 +244,14 @@ def provision_worktree(
 
     A worktree checks out tracked files only, but the skill trees (.claude/skills,
     .agents/skills), the hook config, and the project's gitignored MCP/CLI configs
-    are absent from the checkout. Without them the session can't find /bmad-auto-dev,
+    are absent from the checkout. Without them the bundled bmad-auto-* skills are missing,
     the Stop-signal hook never fires, and isolated sessions can't reach their MCP
     server. Lay the bundled skills + signal hook into the worktree for the active
-    CLI profiles, and copy the `seed_files` configs in from the main repo. Quiet (no
-    stdout) — unlike `install_into` this runs inside the engine loop under a TUI.
-    No-op when there's nothing to do.
+    CLI profiles, and copy the `seed_files` configs in from the main repo. The
+    upstream skills the orchestrator drives (BASE_SKILLS: bmad-dev-auto + the review
+    hunters) are not bundled in the wheel, so they are copied from the MAIN REPO's
+    installed tree instead. Quiet (no stdout) — unlike `install_into` this runs
+    inside the engine loop under a TUI. No-op when there's nothing to do.
 
     seed_globs are project-relative glob patterns (e.g. ".claude/skills/*") expanded
     against the main repo; every match is copied into the worktree under the same
@@ -274,6 +320,19 @@ def provision_worktree(
             if dst.exists():
                 continue
             _copy_traversable(skills_root.joinpath(skill), dst)
+        # The orchestrator-driven upstream skills (BASE_SKILLS) are not in the
+        # wheel; copy them from the MAIN REPO's installed tree (same tree path) so
+        # an isolated worktree can still resolve /bmad-dev-auto and the review
+        # hunters. Skip silently when the main repo lacks them — the run-start
+        # preflight reports it.
+        for skill in BASE_SKILLS:
+            dst = tree_dir / skill
+            if dst.exists():
+                continue
+            src = (repo_root / tree / skill).resolve()
+            if not src.is_relative_to(repo_root) or not src.is_dir():
+                continue
+            _copy_traversable(src, dst)
 
     # per-CLI signal-hook registration, baked to the main repo's relay (absolute)
     for profile in profiles:

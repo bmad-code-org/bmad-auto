@@ -38,6 +38,13 @@ kind = "switch"
 default_ref = "ReviewPolicy.enabled"
 label = "separate review session"
 description = "ON: triple review runs in a dedicated 2nd session · OFF: quick-dev runs its own tri-review inline, story straight to done"
+[[section.field]]
+key = "trigger"
+kind = "select"
+options_ref = "REVIEW_TRIGGER_MODES"
+default_ref = "ReviewPolicy.trigger"
+label = "review trigger"
+description = "recommended: run the 2nd-opinion review only when bmad-dev-auto flags it · always: run it every story (both bounded by limits.max_review_cycles)"
 
 [[section]]
 name = "limits"

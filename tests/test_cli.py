@@ -37,7 +37,7 @@ def test_init_without_policy_defaults_to_claude(tmp_path):
     assert (tmp_path / ".claude" / "settings.json").is_file()
     assert not (tmp_path / ".codex").exists()
     # init installs the bundled skills by default
-    assert (tmp_path / ".claude" / "skills" / "bmad-auto-dev" / "SKILL.md").is_file()
+    assert (tmp_path / ".claude" / "skills" / "bmad-auto-sweep" / "SKILL.md").is_file()
 
 
 def test_init_no_skills_flag(tmp_path):
@@ -47,7 +47,7 @@ def test_init_no_skills_flag(tmp_path):
 
 
 def test_init_force_skills_flag(tmp_path):
-    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-dev" / "SKILL.md"
+    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-sweep" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
     skill_md.write_text("CUSTOM", encoding="utf-8")
     assert cli.main(["init", "--project", str(tmp_path), "--force-skills"]) == 0
@@ -360,6 +360,22 @@ def test_sweep_dry_run_no_ledger(project, capsys):
     assert "no deferred-work ledger" in capsys.readouterr().out
 
 
+def test_make_adapters_review_synthesizes_from_spec(project):
+    """Both dev AND review are bmad-dev-auto runs that write no result.json, so
+    both roles must get the spec-synthesizing GenericDevAdapter; triage (a real
+    result.json skill) stays a plain GenericAdapter."""
+    from automator.adapters.generic import GenericAdapter, GenericDevAdapter
+
+    install_bmad_config(project)
+    adapters = cli._make_adapters(
+        project.project, project.project / ".automator" / "runs" / "r", policy_mod.load(None)
+    )
+    assert isinstance(adapters["dev"], GenericDevAdapter)
+    assert isinstance(adapters["review"], GenericDevAdapter)
+    assert isinstance(adapters["triage"], GenericAdapter)
+    assert not isinstance(adapters["triage"], GenericDevAdapter)
+
+
 class _StubEngine:
     def __init__(self, **kwargs):
         pass
@@ -377,9 +393,10 @@ class _StubEngine:
 def test_run_honors_preassigned_run_id_and_writes_pid(project, monkeypatch):
     import os
 
-    from conftest import git
+    from conftest import git, install_base_skills
 
     install_bmad_config(project)
+    install_base_skills(project)
     write_sprint(project, {"1-1-a": "ready-for-dev"})
     git(project.project, "add", "-A")
     git(project.project, "commit", "-q", "-m", "setup")
@@ -391,6 +408,25 @@ def test_run_honors_preassigned_run_id_and_writes_pid(project, monkeypatch):
     run_dir = project.project / ".automator" / "runs" / run_id
     assert json.loads((run_dir / "state.json").read_text())["run_id"] == run_id
     assert (run_dir / "engine.pid").read_text() == str(os.getpid())
+
+
+def test_run_aborts_when_base_skills_missing(project, monkeypatch, capsys):
+    """The orchestrator depends on the non-bundled upstream skills (bmad-dev-auto
+    + the review hunters); a run must fail loudly at preflight (not stall mid-run)
+    when they are absent."""
+    from conftest import git
+
+    install_bmad_config(project)
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "setup")
+    # deliberately do NOT install_base_skills
+    monkeypatch.setattr(cli, "Engine", _StubEngine)
+    monkeypatch.setattr(cli, "_make_adapters", lambda *a, **k: {r: None for r in cli.ROLES})
+
+    assert cli.main(["run", "--project", str(project.project)]) == 1
+    err = capsys.readouterr().err
+    assert "bmad-dev-auto" in err
 
 
 def _stub_run_tui(monkeypatch):
@@ -724,9 +760,12 @@ def test_cleanup_prunes_sessions_and_windows(tmp_path, monkeypatch, capsys):
 
 
 def test_resume_kills_stale_session_before_running(project, monkeypatch):
+    from conftest import install_base_skills
+
     from automator import runs
 
     install_bmad_config(project)
+    install_base_skills(project)
     write_sprint(project, {"1-1-a": "ready-for-dev"})
     run_dir = _make_run_with_state(
         project.project,

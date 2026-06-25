@@ -43,8 +43,12 @@ def commit_sprint(project, statuses: dict[str, str]) -> None:
     git(project.project, "commit", "-q", "-m", "sprint")
 
 
-def wt_dev_effect(project, story_key):
-    """Dev session running inside the unit worktree (spec.cwd)."""
+def wt_dev_effect(project, story_key, *, final_status="done", followup_review=True):
+    """Dev session running inside the unit worktree (spec.cwd). Mirrors the
+    bmad-dev-auto skill: self-finalizes the spec to done, never writes the sprint
+    board (the orchestrator advances it via the B2 seam, inside the worktree).
+    ``followup_review`` mirrors the skill's `followup_review_recommended` signal;
+    defaults True so the review runs under the default trigger = "recommended"."""
 
     def effect(spec):
         cwd = spec.cwd
@@ -53,14 +57,12 @@ def wt_dev_effect(project, story_key):
         src = cwd / "src.txt"
         src.write_text(src.read_text() + f"change for {story_key}\n")
         sp = wt.implementation_artifacts / f"spec-{story_key}.md"
-        skip_review = spec.env.get("BMAD_AUTO_SKIP_REVIEW") == "1"
-        final = "done" if skip_review else "in-review"
-        write_spec(sp, final, baseline)
-        set_sprint(wt, story_key, final if skip_review else "review")
+        write_spec(sp, final_status, baseline)
+        # NO set_sprint: the orchestrator is the single sprint-status writer
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "quick-dev",
+                "workflow": "auto-dev",
                 "story_key": story_key,
                 "spec_file": str(sp),
                 "baseline_commit": baseline,
@@ -68,6 +70,7 @@ def wt_dev_effect(project, story_key):
                 "tasks_done": 1,
                 "verification": [],
                 "escalations": [],
+                "followup_review_recommended": followup_review,
             },
         )
 
@@ -75,21 +78,25 @@ def wt_dev_effect(project, story_key):
 
 
 def wt_review_effect(project, story_key, clean: bool, patched: int = 0):
+    """Follow-up review pass in a worktree — a bmad-dev-auto re-invocation on the
+    done spec. ``clean=True`` converges; ``clean=False`` keeps recommending."""
+
     def effect(spec):
         cwd = spec.cwd
         wt = project.rebased(cwd)
-        if clean:
-            sp = wt.implementation_artifacts / f"spec-{story_key}.md"
-            write_spec(sp, "done", _spec_baseline(sp))
-            set_sprint(wt, story_key, "done")
+        sp = wt.implementation_artifacts / f"spec-{story_key}.md"
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
+        set_sprint(wt, story_key, "done")
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": patched,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )

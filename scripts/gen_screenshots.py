@@ -150,7 +150,7 @@ status: done 2026-06-10
 # A short, colourful pane log for the active dev session so the Log tab has
 # something real to emulate (pyte collapses repaint frames; ANSI is preserved).
 SESSION_LOG = (
-    b"\x1b[2m$ claude /bmad-auto-dev 2-3-search-ranking\x1b[0m\r\n"
+    b"\x1b[2m$ claude /bmad-dev-auto 2-3-search-ranking\x1b[0m\r\n"
     b"\x1b[36m\xe2\x97\x8f\x1b[0m planning spec \xe2\x80\xa6 \x1b[2m(1.8k tokens)\x1b[0m\r\n"
     b"\x1b[32m\xe2\x9c\x94\x1b[0m spec-2-3-search-ranking.md written \xe2\x80\x94 status in-review\r\n"
     b"\x1b[36m\xe2\x97\x8f\x1b[0m implementing relevance scoring\r\n"

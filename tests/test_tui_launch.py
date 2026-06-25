@@ -1,6 +1,10 @@
 """tui.launch builds exact tmux/CLI argv — verified against monkeypatched
 subprocess so no real tmux server is touched, plus one real-subprocess
-sanity check of the captured path."""
+sanity check of the captured path.
+
+The tmux invocations now live in the multiplexer backend (launch drives the
+seam), so the tmux subprocess/which seams are patched on ``tmux_backend``; the
+captured read-only path still shells out from ``launch`` itself."""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from automator.adapters import tmux_backend
 from automator.tui import launch
 
 
@@ -34,8 +39,8 @@ class FakeRun:
 @pytest.fixture
 def fake_run(monkeypatch) -> FakeRun:
     fake = FakeRun()
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     return fake
 
 
@@ -150,14 +155,14 @@ def test_resume_detached_argv(fake_run, tmp_path: Path):
 
 def test_existing_ctl_session_reused(monkeypatch, tmp_path: Path):
     fake = FakeRun(has_session_rc=0)
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     launch.resume_detached(tmp_path, "RID")
     assert [c[1] for c in fake.calls] == ["has-session", "new-window", "set-option"]
 
 
 def test_launch_without_tmux_raises(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: None)
     assert not launch.tmux_available()
     with pytest.raises(launch.LaunchError, match="tmux not found"):
         launch.start_run_detached(tmp_path, "RID")
@@ -168,15 +173,15 @@ def test_new_window_failure_raises(monkeypatch, tmp_path: Path):
         rc = 1 if argv[1] in ("has-session", "new-window") else 0
         return subprocess.CompletedProcess(argv, rc, stdout="", stderr="boom")
 
-    monkeypatch.setattr(launch.subprocess, "run", failing_run)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
-    with pytest.raises(launch.LaunchError, match="new-window failed: boom"):
+    monkeypatch.setattr(tmux_backend.subprocess, "run", failing_run)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
+    with pytest.raises(launch.LaunchError, match="new-window.*failed: boom"):
         launch.start_run_detached(tmp_path, "RID")
 
 
 def test_session_exists(monkeypatch):
     fake = FakeRun(has_session_rc=0)
-    monkeypatch.setattr(launch.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
     assert launch.session_exists("bmad-auto-x")
     assert fake.calls[0] == ["tmux", "has-session", "-t", "=bmad-auto-x"]
 
@@ -186,8 +191,8 @@ def test_ctl_window_matches_run_id_suffix(monkeypatch):
         out = "run-AAAA\nsweep-RID\nresume-BBBB\n" if argv[1] == "list-windows" else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     assert launch.ctl_window("RID") == "sweep-RID"
     assert launch.ctl_window("CCCC") is None
 
@@ -196,10 +201,10 @@ def test_ctl_window_no_session_or_tmux(monkeypatch):
     def fake(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no session")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     assert launch.ctl_window("RID") is None
-    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: None)
     assert launch.ctl_window("RID") is None  # no subprocess call attempted
 
 
@@ -219,7 +224,7 @@ def test_current_pane_id_reads_pane(monkeypatch):
     def fake(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 0, stdout="%9\n", stderr="")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
     assert launch.current_pane_id() == "%9"
 
 
@@ -227,7 +232,7 @@ def test_current_pane_id_none_outside_tmux(monkeypatch):
     def fake(argv, **kwargs):
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no server")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
     assert launch.current_pane_id() is None
 
 
@@ -267,8 +272,8 @@ def test_prune_ctl_windows(monkeypatch, tmp_path: Path):
             killed.append(list(argv))
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
 
     assert launch.prunable_ctl_windows(tmp_path) == ["sweep-20260101-000000-dead"]
     assert killed == []  # dry-run view kills nothing
@@ -280,8 +285,8 @@ def test_prune_ctl_windows_no_session(monkeypatch, tmp_path: Path):
     def fake(argv, **kwargs):  # has-session reports the ctl session is gone
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     assert launch.prune_ctl_windows(tmp_path) == []
 
 
@@ -324,8 +329,8 @@ def _return_fake(monkeypatch, *, win="@5", option="%9", switch_rc=0):
             out, rc = "", 0
         return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
 
-    monkeypatch.setattr(launch.subprocess, "run", fake)
-    monkeypatch.setattr(launch.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake)
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: f"/usr/bin/{name}")
     return calls
 
 
@@ -360,8 +365,8 @@ def test_return_attached_client_noop_when_unset(monkeypatch):
 
 def test_return_attached_client_noop_without_tmux(monkeypatch):
     ran: list = []
-    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
-    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(tmux_backend.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tmux_backend.subprocess, "run", lambda *a, **k: ran.append(a))
     assert launch.return_attached_client() is False
     assert ran == []  # never shells out when tmux is missing
 

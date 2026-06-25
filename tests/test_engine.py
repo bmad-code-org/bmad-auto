@@ -1,21 +1,31 @@
 """Engine scenario tests against the mock adapter — no tmux, no LLM."""
 
 import os
+import re
 import signal
 from pathlib import Path
 
 import pytest
-from conftest import dev_effect, review_effect, spec_path, write_sprint
+from conftest import (
+    dev_effect,
+    generic_dev_effect,
+    review_effect,
+    spec_path,
+    write_spec,
+    write_sprint,
+)
 
 from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
-from automator.engine import Engine, RunStopped
+from automator.engine import Engine, RunPaused, RunStopped
 from automator.journal import Journal, load_state
 from automator.model import (
     PAUSE_EPIC_BOUNDARY,
+    PAUSE_ESCALATION,
     PAUSE_SPEC_APPROVAL,
     Phase,
     RunState,
+    StoryTask,
     TokenUsage,
 )
 from automator.policy import (
@@ -29,7 +39,8 @@ from automator.policy import (
     SweepPolicy,
     VerifyPolicy,
 )
-from automator.verify import rev_parse_head, worktree_clean
+from automator.runs import rearm_escalation
+from automator.verify import read_frontmatter, rev_parse_head, worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
 
@@ -153,7 +164,7 @@ def test_happy_path(project):
     assert summary.total_tokens == 30  # 2 sessions x 15
     assert [s.role for s in adapter.sessions] == ["dev", "review"]
     assert adapter.sessions[0].env["BMAD_AUTO_MODE"] == "1"
-    assert adapter.sessions[1].prompt.startswith("/bmad-auto-review ")
+    assert adapter.sessions[1].prompt.startswith("/bmad-dev-auto ")
 
 
 def test_inplace_ready_gate_veto_defers_before_any_session(project):
@@ -203,6 +214,186 @@ def test_review_disabled_skips_review_session(project):
     assert "review-skipped" in kinds
     msg = _head_commit_message(project.project)
     assert "implemented via bmad-auto" in msg and "reviewed" not in msg
+
+
+def test_review_not_recommended_skips_review_session(project):
+    """Default review.trigger = "recommended": when the dev session does NOT set
+    followup_review_recommended, the orchestrator skips the separate review
+    session, validates the deterministic gates, and commits."""
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    # review.enabled stays True (default); only the trigger gate skips it. No
+    # review_effect scripted — the dev session must not provoke a review.
+    engine, adapter = make_engine(project, [dev_effect(project, "1-1-a", followup_review=False)])
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert task.phase == Phase.DONE and task.commit_sha
+    assert task.followup_review_recommended is False
+    assert task.review_cycle == 0
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    kinds = {e["kind"] for e in Journal(engine.run_dir).entries()}
+    assert "review-not-recommended" in kinds and "review-skipped" in kinds
+
+
+def test_review_recommended_runs_review_session(project):
+    """followup_review_recommended True under the default trigger runs the
+    follow-up review pass (bmad-dev-auto re-invoked on the done spec)."""
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    engine, adapter = make_engine(
+        project,
+        [
+            dev_effect(project, "1-1-a", followup_review=True),
+            review_effect(project, "1-1-a", clean=True),
+        ],
+    )
+    summary = engine.run()
+
+    assert summary.done == 1 and not summary.paused
+    # dev recommended review → the follow-up pass ran; it converged (the latest
+    # pass no longer recommends a further follow-up, so the flag is now False)
+    assert engine.state.tasks["1-1-a"].followup_review_recommended is False
+    assert [s.role for s in adapter.sessions] == ["dev", "review"]
+    kinds = {e["kind"] for e in Journal(engine.run_dir).entries()}
+    assert "review-not-recommended" not in kinds
+
+
+def test_review_trigger_always_runs_without_recommendation(project):
+    """review.trigger = "always" runs the review even when the dev session did
+    not recommend a follow-up (pre-#2505 behavior)."""
+    from automator.policy import ReviewPolicy
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=True),
+        review=ReviewPolicy(enabled=True, trigger="always"),
+    )
+    engine, adapter = make_engine(
+        project,
+        [
+            dev_effect(project, "1-1-a", followup_review=False),
+            review_effect(project, "1-1-a", clean=True),
+        ],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert summary.done == 1 and not summary.paused
+    assert [s.role for s in adapter.sessions] == ["dev", "review"]
+    kinds = {e["kind"] for e in Journal(engine.run_dir).entries()}
+    assert "review-not-recommended" not in kinds
+
+
+def test_generic_dev_path_orchestrator_advances_sprint(project):
+    """On the generic bmad-dev-auto path the skill self-finalizes the spec but
+    never writes the automator's sprint board; the orchestrator (B2 seam) is the
+    single sprint-status writer and advances the story to match verify_dev."""
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_engine(project, [generic_dev_effect(project, "1-1-a")], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["1-1-a"].phase == Phase.DONE
+    # the orchestrator advanced sprint-status, not the skill
+    assert story_status(project.sprint_status, "1-1-a") == "done"
+    # the generic dev invocation form
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    assert adapter.sessions[0].prompt == "/bmad-dev-auto 1-1-a"
+
+
+def test_generic_dev_path_no_sprint_advance_when_spec_unfinalized(project):
+    """The sprint write is gated on the spec actually reaching the success
+    status. A session that completes but leaves the spec short of done must not
+    advance the sprint, and the story defers (verify_dev fails on spec status)."""
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        limits=LimitsPolicy(max_dev_attempts=1),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(
+        project,
+        [generic_dev_effect(project, "1-1-a", final_status="in-progress")],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 1 and summary.done == 0
+    assert story_status(project.sprint_status, "1-1-a") == "ready-for-dev"
+
+
+def test_generic_repair_reopens_spec_before_reinvocation(project):
+    """B6: bmad-dev-auto self-finalizes to `done`; its step-01 would route a done
+    spec to "ingest as context, don't resume." So before a verify-failure repair
+    re-invocation the orchestrator flips the spec back to `in-progress` — the
+    repair session must SEE an open spec on entry."""
+    from automator.adapters.base import SessionResult
+    from automator.policy import DevPolicy, ReviewPolicy, VerifyPolicy
+    from automator.verify import read_frontmatter, rev_parse_head
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    sp = spec_path(project, "1-1-a")
+    marker = project.project / "marker.txt"
+    seen_status: list[str] = []
+    calls = {"n": 0}
+
+    def effect(spec):
+        calls["n"] += 1
+        if sp.is_file():  # status the repair session sees on entry
+            seen_status.append(str(read_frontmatter(sp).get("status", "")).strip())
+        baseline = rev_parse_head(project.project)
+        src = project.project / "src.txt"
+        src.write_text(src.read_text() + f"change {calls['n']}\n")
+        sp.write_text(
+            f"---\ntitle: 'x'\nstatus: 'done'\nbaseline_commit: '{baseline}'\n---\n\n## Intent\n",
+            encoding="utf-8",
+        )
+        if calls["n"] >= 2:  # second pass satisfies the verify command
+            marker.write_text("ok\n")
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+            },
+        )
+
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        verify=VerifyPolicy(commands=("test -f marker.txt",)),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_engine(project, [effect, effect], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0
+    # the repair session saw an in-progress spec, not the finalized `done`
+    assert seen_status == ["in-progress"]
+    # and it was driven by the freeform resume prompt, not /bmad-dev-auto <key>
+    assert adapter.sessions[1].prompt.startswith("/bmad-dev-auto Resume the autonomous")
 
 
 def _head_commit_message(repo: Path) -> str:
@@ -317,12 +508,12 @@ def test_plateau_defer_when_review_never_clean(project):
     # repo rolled back for the next story
     assert (project.project / "src.txt").read_text() == "original\n"
     assert rev_parse_head(project.project) == task.baseline_commit
-    # the in-review spec is stashed into the run dir, not left in artifacts
+    # the dev-finalized spec is stashed into the run dir, not left in artifacts
     from conftest import spec_path
 
     assert not spec_path(project, "1-1-a").exists()
     stashed = engine.run_dir / "deferred" / "1-1-a" / "spec-1-1-a.md"
-    assert stashed.is_file() and "in-review" in stashed.read_text()
+    assert stashed.is_file() and "status: 'done'" in stashed.read_text()
 
 
 def test_defer_preserves_deferred_work_additions(project):
@@ -353,7 +544,6 @@ def test_defer_preserves_deferred_work_additions(project):
 def test_rollback_off_pauses_with_manual_notice(project):
     """Production default (rollback_on_failure=False): a would-be defer reset
     never touches the tree — it pauses with bold manual-recovery instructions."""
-    from automator.model import PAUSE_ESCALATION
 
     write_sprint(project, {"1-1-a": "ready-for-dev"})
     policy = Policy(
@@ -376,6 +566,7 @@ def test_rollback_off_pauses_with_manual_notice(project):
     assert state.paused_stage == PAUSE_ESCALATION
     reason = state.paused_reason.lower()
     assert "manual rollback" in reason and "back up" in reason
+    assert "failed" not in reason  # a stopped attempt is not described as "failed"
     # the orchestrator left the tree exactly as-is — no reset, nothing deleted
     assert not worktree_clean(project.project)
     assert precious.read_text() == "precious\n"
@@ -406,6 +597,124 @@ def test_rollback_on_preserves_preexisting_untracked(project):
     task = engine.state.tasks["1-1-a"]
     assert rev_parse_head(project.project) == task.baseline_commit  # tracked reverted
     assert precious.read_text() == "keep me\n"  # pre-existing untracked survives
+
+
+def test_rollback_or_pause_skips_clean_tree(project):
+    """When the attempt left nothing in the tree (HEAD == baseline, no run-created
+    untracked files), there is nothing to roll back: even with auto-rollback OFF
+    the orchestrator neither pauses nor touches the tree — it just journals and
+    returns, so resume can proceed."""
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=False),
+    )
+    engine, _ = make_engine(project, [], policy=policy)
+    task = StoryTask(story_key="1-1-a", epic=1)
+    task.baseline_commit = rev_parse_head(project.project)  # clean tree at baseline
+    task.baseline_untracked = []
+
+    engine._rollback_or_pause(task)  # must NOT raise RunPaused
+
+    kinds = [e["kind"] for e in engine.journal.entries()]
+    assert "rollback-skipped-clean" in kinds
+    assert "rollback-manual-required" not in kinds
+
+
+def test_manual_recovery_wording_resolved_vs_stopped(project):
+    """The manual-recovery notice never claims the story 'failed', and reflects
+    the real cause: a resolved escalation re-driving vs. a stopped attempt."""
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=False),
+    )
+    engine, _ = make_engine(project, [], policy=policy)
+    task = StoryTask(story_key="1-1-a", epic=1)
+    baseline = rev_parse_head(project.project)
+
+    with pytest.raises(RunPaused) as resolved:
+        engine._pause_for_manual_recovery(task, baseline, cause="resolved")
+    with pytest.raises(RunPaused) as stopped:
+        engine._pause_for_manual_recovery(task, baseline, cause="stopped")
+
+    for exc in (resolved, stopped):
+        assert "failed" not in exc.value.reason
+        assert "manual rollback" in exc.value.reason.lower()
+    assert "escalation was resolved" in resolved.value.reason
+    assert "attempt was stopped" in stopped.value.reason
+
+
+def test_resolved_escalation_resume_skips_clean_rollback(project):
+    """End-to-end regression for the resume loop: a CRITICAL escalation that left
+    a clean tree, once resolved (re-armed) and resumed, must NOT demand a manual
+    rollback — it skips the no-op rollback and re-drives the corrected story."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    escalating = SessionResult(
+        status="completed",
+        result_json={
+            "workflow": "auto-dev",
+            "escalations": [{"type": "missing-config", "severity": "CRITICAL", "detail": "boom"}],
+        },
+    )
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        scm=ScmPolicy(rollback_on_failure=False),  # production default
+    )
+    engine, _ = make_engine(project, [escalating], policy=policy)
+    summary = engine.run()
+    assert summary.paused and summary.escalated == 1
+    assert load_state(engine.run_dir).tasks["1-1-a"].phase == Phase.ESCALATED
+
+    rearm_escalation(engine.run_dir)  # the resolve workflow's re-arm step
+
+    resumed, _ = resume_engine(
+        project,
+        engine,
+        [dev_effect(project, "1-1-a"), review_effect(project, "1-1-a", clean=True)],
+        policy=policy,
+    )
+    summary2 = resumed.run()
+
+    assert summary2.done == 1 and not summary2.paused  # re-drove, no manual-rollback loop
+    kinds = [e["kind"] for e in resumed.journal.entries()]
+    assert "rollback-skipped-clean" in kinds
+    assert "rollback-manual-required" not in kinds
+
+
+def test_dev_escalation_records_spec_for_rearm(project):
+    """A dev session that HALTs with a `blocked` spec still records task.spec_file,
+    so rearm_escalation can flip the spec to `ready-for-dev` for the re-drive.
+    Without it (verify_dev only records the spec on success) the re-drive HALTs
+    again on the stale `blocked` status — the loop seen in the live run."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    sp = spec_path(project, "1-1-a")
+
+    def halt_blocked(spec):
+        write_spec(sp, "blocked", rev_parse_head(project.project))
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "escalations": [
+                    {"type": "blocked", "severity": "CRITICAL", "detail": "blocked spec supplied"}
+                ],
+            },
+        )
+
+    engine, _ = make_engine(project, [halt_blocked])
+    summary = engine.run()
+    assert summary.paused and summary.escalated == 1
+
+    task = load_state(engine.run_dir).tasks["1-1-a"]
+    assert task.phase == Phase.ESCALATED
+    assert task.spec_file and Path(task.spec_file).name == sp.name  # recorded despite HALT
+
+    rearm_escalation(engine.run_dir)  # the resolve workflow's re-arm step
+    assert read_frontmatter(sp)["status"] == "ready-for-dev"  # re-drive will not HALT
 
 
 def test_dev_stall_retries_then_succeeds(project):
@@ -445,7 +754,7 @@ def test_critical_escalation_pauses_and_resume_continues(project):
     escalating = SessionResult(
         status="completed",
         result_json={
-            "workflow": "quick-dev",
+            "workflow": "auto-dev",
             "escalations": [{"type": "missing-config", "severity": "CRITICAL", "detail": "boom"}],
         },
     )
@@ -525,13 +834,17 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
     def fix(spec):
         marker.write_text("ok\n")
         sp = spec_path(project, "1-1-a")
+        baseline = rev_parse_head(project.project)
+        # the repair session re-finalizes the re-opened spec to done, as the real
+        # bmad-dev-auto resume does (the orchestrator flipped it to in-progress)
+        write_spec(sp, "done", baseline)
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "quick-dev",
+                "workflow": "auto-dev",
                 "story_key": "1-1-a",
                 "spec_file": str(sp),
-                "baseline_commit": rev_parse_head(project.project),
+                "baseline_commit": baseline,
                 "tasks_total": 3,
                 "tasks_done": 3,
                 "verification": [{"command": f"test -f {marker}", "ok": True}],
@@ -559,8 +872,10 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
     task = engine.state.tasks["1-1-a"]
     assert task.attempt == 2
     prompts = [s.prompt for s in adapter.sessions]
-    assert "--feedback" not in prompts[0] and "--feedback" in prompts[1]
-    feedback = Path(prompts[1].split("--feedback ", 1)[1])
+    # the repair re-invocation is the freeform resume prompt (no --feedback flag);
+    # the feedback file is referenced as the last backtick-wrapped path.
+    assert "Resume the autonomous" not in prompts[0] and "Resume the autonomous" in prompts[1]
+    feedback = Path(re.findall(r"`([^`]*)`", prompts[1])[-1])
     assert "test -f" in feedback.read_text()
     # the first attempt's work survived: no reset between attempts
     assert "change for 1-1-a" in (project.project / "src.txt").read_text()
@@ -583,7 +898,7 @@ def test_review_verify_failure_routes_fix_session_then_rereview(project):
     def fix(spec):
         marker.write_text("ok\n")
         return SessionResult(
-            status="completed", result_json={"workflow": "quick-dev", "escalations": []}
+            status="completed", result_json={"workflow": "auto-dev", "escalations": []}
         )
 
     policy = Policy(
@@ -607,7 +922,7 @@ def test_review_verify_failure_routes_fix_session_then_rereview(project):
     task = engine.state.tasks["1-1-a"]
     assert task.review_cycle == 2 and task.attempt == 2
     assert [s.role for s in adapter.sessions] == ["dev", "review", "dev", "review"]
-    assert "--feedback" in adapter.sessions[2].prompt
+    assert "Resume the autonomous" in adapter.sessions[2].prompt
 
 
 def test_review_verify_failure_without_fix_budget_defers(project):
@@ -653,7 +968,7 @@ def test_verify_commands_never_pass_defers_at_dev(project):
 
     assert summary.deferred == 1 and summary.done == 0
     assert [s.role for s in adapter.sessions] == ["dev", "dev"]
-    assert "--feedback" in adapter.sessions[1].prompt
+    assert "Resume the autonomous" in adapter.sessions[1].prompt
 
 
 def test_max_stories_limit(project):

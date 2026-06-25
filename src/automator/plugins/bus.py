@@ -49,7 +49,7 @@ def _run_subprocess(
     try:
         proc = subprocess.run(  # nosec B602 - operator-authored plugin command
             cmd,
-            shell=True,
+            shell=True,  # portability: operator-authored plugin command — sanctioned shell-out (see plan out-of-scope)
             cwd=cwd,
             env=env,
             capture_output=True,

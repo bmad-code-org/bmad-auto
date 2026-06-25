@@ -10,15 +10,17 @@ propagation / hook-signal waiting / kill end-to-end for any profile.
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
-from automator.adapters import generic_tmux
-from automator.adapters.base import SessionResult, SessionSpec
-from automator.adapters.generic_tmux import GenericTmuxAdapter
+from automator.adapters import generic, tmux_backend
+from automator.adapters.base import SessionHandle, SessionResult, SessionSpec
+from automator.adapters.generic import GenericDevAdapter, GenericTmuxAdapter
 from automator.adapters.profile import get_profile
 from automator.model import TokenUsage
 from automator.policy import LimitsPolicy, Policy
+from automator.signals import HookEvent
 
 HAVE_TMUX = shutil.which("tmux") is not None
 
@@ -29,7 +31,7 @@ ts=$(date +%s%N)
 mkdir -p "$BMAD_AUTO_RUN_DIR/events" "$BMAD_AUTO_RUN_DIR/tasks/$BMAD_AUTO_TASK_ID"
 printf '{"ts": %s, "event": "SessionStart", "task_id": "%s", "session_id": "fake-1"}' \\
     "$ts" "$BMAD_AUTO_TASK_ID" > "$BMAD_AUTO_RUN_DIR/events/$ts-$BMAD_AUTO_TASK_ID-SessionStart.json"
-echo "{\\"workflow\\": \\"quick-dev\\", \\"prompt\\": \\"$prompt\\"}" \\
+echo "{\\"workflow\\": \\"auto-dev\\", \\"prompt\\": \\"$prompt\\"}" \\
     > "$BMAD_AUTO_RUN_DIR/tasks/$BMAD_AUTO_TASK_ID/result.json"
 ts2=$(( ts + 1 ))
 printf '{"ts": %s, "event": "Stop", "task_id": "%s", "session_id": "fake-1"}' \\
@@ -55,9 +57,9 @@ def make_adapter(
 
 def test_ensure_session_tags_project(tmp_path, monkeypatch):
     """A freshly created agent session is stamped with its project so a cleanup
-    in another project never prunes this run."""
+    in another project never prunes this run. The set-option now flows through
+    the tmux backend, so patch its subprocess seam."""
     from automator import runs
-    from automator.adapters import generic_tmux
 
     project = tmp_path
     run_dir = project / ".automator" / "runs" / "RID"  # parents[2] == project
@@ -72,7 +74,7 @@ def test_ensure_session_tags_project(tmp_path, monkeypatch):
         rc = 1 if argv[1] == "has-session" else 0  # session missing -> create it
         return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
 
-    monkeypatch.setattr(generic_tmux.subprocess, "run", fake_run)
+    monkeypatch.setattr(tmux_backend.subprocess, "run", fake_run)
     adapter._ensure_session(project)
 
     assert [c for c in calls if c[1] == "set-option"] == [
@@ -91,7 +93,7 @@ def make_spec(tmp_path, task_id="1-1-a-dev-1", timeout_s=30.0, model="sonnet") -
     return SessionSpec(
         task_id=task_id,
         role="dev",
-        prompt="/bmad-auto-dev 1-1-a",
+        prompt="/bmad-dev-auto 1-1-a",
         cwd=tmp_path,
         env={"BMAD_AUTO_MODE": "1", "BMAD_AUTO_TASK_ID": task_id},
         model=model,
@@ -102,7 +104,7 @@ def make_spec(tmp_path, task_id="1-1-a-dev-1", timeout_s=30.0, model="sonnet") -
 def test_build_command_claude(tmp_path):
     adapter = make_adapter(tmp_path)
     cmd = adapter.build_command(make_spec(tmp_path))
-    assert cmd.startswith("claude '/bmad-auto-dev 1-1-a' --permission-mode bypassPermissions")
+    assert cmd.startswith("claude '/bmad-dev-auto 1-1-a' --permission-mode bypassPermissions")
     assert cmd.endswith("--model sonnet")
 
 
@@ -110,7 +112,7 @@ def test_build_command_codex_renders_skill_mention(tmp_path):
     adapter = make_adapter(tmp_path, profile_name="codex")
     cmd = adapter.build_command(make_spec(tmp_path))
     assert cmd.startswith(
-        "codex 'Use the $bmad-auto-dev skill now, and use subagents as needed: 1-1-a'"
+        "codex 'Use the $bmad-dev-auto skill now, and use subagents as needed: 1-1-a'"
     )
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
     assert cmd.endswith("--model sonnet")
@@ -119,7 +121,7 @@ def test_build_command_codex_renders_skill_mention(tmp_path):
 def test_build_command_gemini_uses_interactive_flag(tmp_path):
     adapter = make_adapter(tmp_path, profile_name="gemini")
     cmd = adapter.build_command(make_spec(tmp_path))
-    assert cmd.startswith("gemini -i '/bmad-auto-dev 1-1-a' --approval-mode=yolo")
+    assert cmd.startswith("gemini -i '/bmad-dev-auto 1-1-a' --approval-mode=yolo")
     assert cmd.endswith("--model sonnet")
 
 
@@ -149,6 +151,196 @@ def test_await_result_grace_expires_fast(tmp_path):
     start = time.monotonic()
     assert adapter._await_result("t1", grace_s=0.2) is None
     assert time.monotonic() - start < 5
+
+
+# ----------------------------------------------- GenericDevAdapter (B1/B7)
+#
+# Alex's generic bmad-dev-auto skill writes no result.json; this adapter
+# synthesizes the legacy result dict from the spec it leaves on disk, on the
+# Stop event, via devcontract. These exercise that override in isolation.
+
+
+def make_dev_adapter(tmp_path, profile_name="claude"):
+    impl = tmp_path / "impl"
+    impl.mkdir()
+    adapter = GenericDevAdapter(
+        run_dir=tmp_path / "run",
+        policy=Policy(limits=LimitsPolicy()),
+        profile=get_profile(profile_name),
+        impl_artifacts=impl,
+    )
+    return adapter, impl
+
+
+class _ScriptedWatcher:
+    """SignalWatcher stand-in: yields a scripted HookEvent per wait_for call, then
+    None. on_call(n) fires before the nth return so a test can flush an on-disk
+    artifact between events (mirrors a session writing its spec mid-run)."""
+
+    def __init__(self, events, on_call=None):
+        self._events = list(events)
+        self._on_call = on_call
+        self.calls = 0
+
+    def wait_for(self, task_id, kinds, timeout_s, since_ns=0):
+        self.calls += 1
+        if self._on_call:
+            self._on_call(self.calls)
+        return self._events.pop(0) if self._events else None
+
+
+def _stop_event(task_id, session_id, transcript_path):
+    return HookEvent(
+        ts=1,
+        event="Stop",
+        task_id=task_id,
+        session_id=session_id,
+        transcript_path=transcript_path,
+        path=Path("x"),
+    )
+
+
+def _dev_handle(launched_ns=0) -> SessionHandle:
+    return SessionHandle(task_id="3-1-dev-1", native_id="@1", launched_ns=launched_ns)
+
+
+def _dev_spec(tmp_path, story_key="3-1") -> SessionSpec:
+    return SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto 3-1",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": story_key},
+    )
+
+
+def test_generic_dev_synthesizes_done_spec(tmp_path):
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: done\nbaseline_revision: abc123\n---\n\n"
+        "## Auto Run Result\n\nStatus: done\nImplemented the thing.\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["workflow"] == "auto-dev"
+    assert rj["status"] == "done"
+    assert rj["baseline_commit"] == "abc123"  # mapped from baseline_revision
+    assert rj["story_key"] == "3-1"
+    assert rj["escalations"] == []
+
+
+def test_generic_dev_blocked_spec_is_critical(tmp_path):
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: blocked\n---\n\n## Auto Run Result\n\nStatus: blocked\nUnclear intent.\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["status"] == "blocked"
+    assert rj["escalations"][0]["severity"] == "CRITICAL"
+
+
+def test_generic_dev_finds_no_spec_fallback(tmp_path):
+    """The no-spec fallback has frontmatter status but no `## Auto Run Result`
+    heading, so it is located by filename rather than content."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "bmad-dev-auto-result-unclear-1234.md").write_text(
+        "---\nstatus: blocked\n---\n\n# BMad Dev Auto Result\n\n"
+        "Status: blocked\nBlocking condition: unclear intent\n"
+    )
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj["status"] == "blocked"
+    assert rj["escalations"][0]["type"] == "blocked"
+
+
+def test_generic_dev_ignores_pre_launch_artifact(tmp_path, monkeypatch):
+    """A spec left by a prior cycle (mtime below the launch floor) is not this
+    session's output and must not be read as a stale completion."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)  # don't sit out the await grace
+    spec = impl / "spec-old.md"
+    spec.write_text("---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n")
+    floor = spec.stat().st_mtime_ns + 1_000_000_000  # 1s after the file's mtime
+    assert adapter._result_json(_dev_handle(floor), _dev_spec(tmp_path), wait=True) is None
+
+
+def test_generic_dev_result_json_polls_until_artifact_flushed(tmp_path, monkeypatch):
+    """wait=True must briefly await a spec that isn't flushed the instant the Stop
+    event fires, rather than reading once and mis-reporting a live run as stalled."""
+    adapter, impl = make_dev_adapter(tmp_path)
+    spec_file = impl / "spec-3-1-foo.md"
+    calls = {"n": 0}
+
+    def delayed_find(artifacts, *, since_ns):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None  # not yet flushed to disk
+        spec_file.write_text("---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n")
+        return spec_file
+
+    monkeypatch.setattr(generic.devcontract, "find_result_artifact", delayed_find)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)  # spin without real sleeps
+    rj = adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=True)
+    assert rj is not None and rj["status"] == "done"
+    assert calls["n"] >= 3  # it polled rather than giving up on the first miss
+
+
+def test_generic_dev_result_json_no_wait_reads_once(tmp_path, monkeypatch):
+    """wait=False keeps the read-once behavior: no polling, immediate None."""
+    adapter, _ = make_dev_adapter(tmp_path)
+    calls = {"n": 0}
+
+    def find(artifacts, *, since_ns):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(generic.devcontract, "find_result_artifact", find)
+    assert adapter._result_json(_dev_handle(), _dev_spec(tmp_path), wait=False) is None
+    assert calls["n"] == 1
+
+
+def test_generic_dev_disables_nudges(tmp_path):
+    adapter, _ = make_dev_adapter(tmp_path)
+    assert adapter._stop_nudges == 0
+
+
+def test_wait_for_completion_skips_transcriptless_subagent_stop(tmp_path):
+    """Copilot (subagent_stop_without_transcript) fires agentStop for each subagent
+    turn with an empty transcriptPath and a tool-use session id. The dev stage runs
+    0 nudges, so without filtering that first subagent Stop would stall the run
+    outright (the v0.7.0 Copilot regression). It must be ignored, and the main
+    session's later turn-end must drive completion."""
+    adapter, impl = make_dev_adapter(tmp_path, profile_name="copilot")
+    assert adapter._stop_nudges == 0  # dev: a result-less *main* Stop is a real stall
+
+    def flush_terminal_spec(call_n):
+        # the spec lands only after the (ignored) subagent Stop — exactly as the main
+        # session writes it on its own turn-end, not on the subagent's premature one
+        if call_n == 2:
+            (impl / "spec-3-1-foo.md").write_text(
+                "---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n"
+            )
+
+    adapter.watcher = _ScriptedWatcher(
+        [
+            _stop_event("3-1-dev-1", "toolu_bdrk_subagent", None),  # subagent: ignored
+            _stop_event("3-1-dev-1", "main-sess", "/run/events.jsonl"),  # main turn-end
+        ],
+        on_call=flush_terminal_spec,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "completed"
+    assert result.transcript_path == "/run/events.jsonl"  # main's path, not empty
+    assert result.session_id == "main-sess"  # the subagent's toolu_ id is never recorded
+
+
+def test_wait_for_completion_transcriptless_stop_is_terminal_without_flag(tmp_path):
+    """Gating: a profile without subagent_stop_without_transcript (claude) still
+    treats every Stop as the main turn-end, so a result-less one stalls the dev
+    stage (0 nudges) — the filter must not leak to other CLIs."""
+    adapter, _ = make_dev_adapter(tmp_path, profile_name="claude")
+    assert adapter.profile.subagent_stop_without_transcript is False
+    adapter.watcher = _ScriptedWatcher([_stop_event("3-1-dev-1", "sess", None)])
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "stalled"
 
 
 def _usage_adapter(tmp_path, profile_name, **kw) -> GenericTmuxAdapter:
@@ -202,8 +394,8 @@ def test_read_usage_polls_for_late_metrics(tmp_path, monkeypatch):
         calls.append(parser)
         return None if len(calls) < 3 else usage
 
-    monkeypatch.setattr(generic_tmux, "tally_usage", fake_tally)
-    monkeypatch.setattr(generic_tmux.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(generic, "tally_usage", fake_tally)
+    monkeypatch.setattr(generic.time, "sleep", lambda *_: None)
     result = SessionResult(status="completed", transcript_path=str(tmp_path / "events.jsonl"))
     assert adapter.read_usage(result) is usage
     assert len(calls) == 3  # polled past the early None reads
@@ -221,8 +413,8 @@ def test_read_usage_single_read_when_no_grace(tmp_path, monkeypatch):
     def no_sleep(*_):
         raise AssertionError("read_usage must not sleep when the grace is 0")
 
-    monkeypatch.setattr(generic_tmux, "tally_usage", fake_tally)
-    monkeypatch.setattr(generic_tmux.time, "sleep", no_sleep)
+    monkeypatch.setattr(generic, "tally_usage", fake_tally)
+    monkeypatch.setattr(generic.time, "sleep", no_sleep)
     result = SessionResult(status="completed", transcript_path=str(tmp_path / "x.jsonl"))
     assert adapter.read_usage(result) is None
     assert len(calls) == 1
@@ -257,7 +449,7 @@ def test_tmux_end_to_end_with_fake_cli(tmp_path, profile_name):
     spec = SessionSpec(
         task_id="t-int-1",
         role="dev",
-        prompt="/bmad-auto-dev 1-1-a",
+        prompt="/bmad-dev-auto 1-1-a",
         cwd=tmp_path,
         env=spec_env,
         timeout_s=30.0,
@@ -268,7 +460,7 @@ def test_tmux_end_to_end_with_fake_cli(tmp_path, profile_name):
         subprocess.run(["tmux", "kill-session", "-t", adapter.session_name], capture_output=True)
 
     assert result.status == "completed"
-    assert result.result_json["workflow"] == "quick-dev"
+    assert result.result_json["workflow"] == "auto-dev"
     # the fake echoes back the rendered prompt it received
     assert result.result_json["prompt"] == adapter.profile.render_prompt(spec.prompt)
     assert result.session_id == "fake-1"
@@ -297,7 +489,7 @@ def test_tmux_reused_task_id_ignores_stale_artifacts(tmp_path):
     spec = SessionSpec(
         task_id=task_id,
         role="dev",
-        prompt="/bmad-auto-dev 1-1-a",
+        prompt="/bmad-dev-auto 1-1-a",
         cwd=tmp_path,
         env={"BMAD_AUTO_RUN_DIR": str(adapter.run_dir), "BMAD_AUTO_TASK_ID": task_id},
         timeout_s=30.0,
@@ -308,7 +500,7 @@ def test_tmux_reused_task_id_ignores_stale_artifacts(tmp_path):
         subprocess.run(["tmux", "kill-session", "-t", adapter.session_name], capture_output=True)
 
     assert result.status == "completed"
-    assert result.result_json["workflow"] == "quick-dev"  # fresh, not "STALE"
+    assert result.result_json["workflow"] == "auto-dev"  # fresh, not "STALE"
     assert result.session_id == "fake-1"  # fresh session, not "old"
 
 

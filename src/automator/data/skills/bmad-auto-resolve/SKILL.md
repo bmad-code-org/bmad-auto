@@ -1,6 +1,6 @@
 ---
 name: bmad-auto-resolve
-description: 'Interactive escalation-resolution workflow for the bmad-auto orchestrator. A bmad-auto run paused on a CRITICAL escalation (a contradiction or gap a dev/review session could not safely resolve alone); you and the human disambiguate the frozen spec so the story can be re-driven. Invoked as /bmad-auto-resolve <story-key>. Unlike bmad-auto-dev/review this session is interactive — a human is present and you SHOULD ask.'
+description: 'Interactive escalation-resolution workflow for the bmad-auto orchestrator. A bmad-auto run paused on a CRITICAL escalation (a contradiction or gap a dev/review session could not safely resolve alone); you and the human disambiguate the frozen spec so the story can be re-driven. Invoked as /bmad-auto-resolve <story-key>. Unlike the automated dev/review sessions this session is interactive — a human is present and you SHOULD ask.'
 ---
 
 # bmad-auto Escalation Resolution

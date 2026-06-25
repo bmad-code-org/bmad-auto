@@ -36,6 +36,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import sanitize
+from .adapters.multiplexer import MultiplexerError, get_multiplexer
 from .adapters.profile import CLIProfile
 from .install import merge_hooks
 from .signals import SignalWatcher
@@ -64,7 +65,6 @@ _TOKEN_KEY_RE = re.compile(
 PROBE_HOOK_NAME = "bmad_auto_probe_hook.py"
 PROBE_PROMPT = "Reply with exactly: OK"
 PROBE_TASK_ID = "probe"
-TMUX_TIMEOUT_S = 30
 PROBE_GRACE_S = 3.0
 MAX_SCHEMA_ENTRIES = 200
 
@@ -397,54 +397,31 @@ def scan(
 
 
 class _ProbeLauncher:
-    """The few tmux primitives PROBE needs — deliberately NOT GenericTmuxAdapter,
-    which mandates a Policy and story-completion logic irrelevant here."""
+    """The few multiplexer primitives PROBE needs — deliberately NOT a
+    GenericAdapter, which mandates a Policy and story-completion logic irrelevant
+    here. Drives the shared backend so PROBE shells out to no multiplexer
+    directly."""
 
     def __init__(self, session_name: str):
         self.session_name = session_name
-
-    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["tmux", *args], capture_output=True, text=True, timeout=TMUX_TIMEOUT_S
-        )
+        self.mux = get_multiplexer()
 
     def start(self, argv: list[str], env: dict[str, str], cwd: Path, log_file: Path) -> str | None:
-        new = self._tmux(
-            "new-session", "-d", "-s", self.session_name, "-c", str(cwd), "-x", "220", "-y", "50"
-        )
-        if new.returncode != 0:
+        try:
+            self.mux.new_session(self.session_name, cwd, 220, 50)
+            command = " ".join(shlex.quote(a) for a in argv)
+            window_id = self.mux.new_window(self.session_name, PROBE_TASK_ID, cwd, env, command)
+        except MultiplexerError:
             return None
-        env_args: list[str] = []
-        for key, value in env.items():
-            env_args += ["-e", f"{key}={value}"]
-        command = " ".join(shlex.quote(a) for a in argv)
-        win = self._tmux(
-            "new-window",
-            "-t",
-            f"={self.session_name}:",
-            "-c",
-            str(cwd),
-            "-P",
-            "-F",
-            "#{window_id}",
-            *env_args,
-            command,
-        )
-        if win.returncode != 0:
-            return None
-        window_id = win.stdout.strip()
         # pipe-pane may race a window that dies instantly; tolerate failure.
-        self._tmux("pipe-pane", "-t", window_id, "-o", f"cat >> {shlex.quote(str(log_file))}")
+        self.mux.pipe_pane(window_id, log_file)
         return window_id
 
     def window_alive(self, window_id: str) -> bool:
-        probe = self._tmux("list-windows", "-t", f"={self.session_name}", "-F", "#{window_id}")
-        if probe.returncode != 0:
-            return False
-        return window_id in probe.stdout.split()
+        return self.mux.window_alive(self.session_name, window_id)
 
     def kill(self) -> None:
-        self._tmux("kill-session", "-t", f"={self.session_name}")
+        self.mux.kill_session(self.session_name)
 
 
 def _probe_argv(profile: CLIProfile, binary: str, hints: Hints) -> list[str]:

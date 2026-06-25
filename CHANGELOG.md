@@ -5,6 +5,113 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.0] — 2026-06-24
+
+### Changed
+
+- **Retired the `bmad-auto-dev` fork; the orchestrator now drives the upstream `bmad-dev-auto`
+  skill unmodified** (bmad-code-org/BMAD-METHOD#2500, merged upstream) as its sole dev primitive.
+  The skill is the inner autonomous coding session; everything automator-specific — escalation,
+  sprint/ledger bookkeeping, repair-resume — stays in the orchestrator, which synthesizes
+  `result.json` from the spec the skill leaves on disk. There is no fork to keep in sync with upstream.
+
+- **Review is now a re-invocation of `bmad-dev-auto` on the done spec, not a separate skill.**
+  `bmad-dev-auto` routes a `status: done` spec to a fresh step-04 review pass (BMAD-METHOD#2508), so
+  the orchestrator's follow-up review just re-runs `/bmad-dev-auto <done spec>` in a fresh context.
+  `review.enabled` still gates whether that follow-up pass runs at all; the new `review.trigger` knob
+  (see Added) decides when it fires. The loop converges when a pass finishes `done` without the skill
+  setting `followup_review_recommended`, still bounded by `limits.max_review_cycles` (default 3).
+
+- **The skill commits each iteration; the orchestrator squashes to one commit per story.**
+  `bmad-dev-auto` now commits its own work at the end of a successful run (BMAD-METHOD#2506). At
+  finalize the orchestrator collapses that chain plus its own sprint/ledger writes back onto the
+  pre-dev baseline into a single commit carrying the configured message — `pre_commit`/`post_commit`
+  hooks and `scm.commit_message_template` stay authoritative.
+
+### Added
+
+- **Skill-recommended review (`review.trigger`).** `bmad-dev-auto` self-reviews inline and sets
+  `followup_review_recommended` on a `done` spec when its changes warrant an independent pass
+  (BMAD-METHOD#2505). The orchestrator consumes it: `review.trigger = "recommended"` (new default)
+  runs the follow-up `bmad-dev-auto` review pass only when flagged; `"always"` keeps the old
+  run-every-story behavior. Adjustable in the TUI and `policy.toml`. The follow-up loop stays bounded
+  by `limits.max_review_cycles` (default 3) — the oscillation guard — so a skill-recommended review
+  can never loop indefinitely.
+
+- **Non-bundled-skill preflight.** `bmad-auto validate` and run/sweep/resume start verify that
+  `bmad-dev-auto` and the two adversarial review hunters (`bmad-review-adversarial-general`,
+  `bmad-review-edge-case-hunter`) — which `bmad-dev-auto`'s step-04 invokes inline on every run — are
+  installed in each active CLI skill tree, failing loudly with remediation instead of stalling mid-run
+  on an `Unknown command`. Worktree provisioning copies these upstream skills from the main repo,
+  since they are not bundled in the wheel.
+
+- **`result.json` `workflow` is now an enforced contract on the dev path.** `verify_dev` /
+  `verify_dev_bundle` reject a mismatch against `verify.DEV_WORKFLOW` (`"auto-dev"`); the synthesized
+  result carries `"auto-dev"`. Review re-runs the same skill, so it carries the same tag, and
+  `verify_review` stays purely disk-derived — it is never handed the result.json.
+
+- **Pluggable terminal-multiplexer seam (groundwork for native Windows).** All tmux usage now goes
+  through a `TerminalMultiplexer` ABC (`get_multiplexer()`); `TmuxMultiplexer` is the only code that
+  shells out to `tmux` and the only place the POSIX `sh -c` parked-window trailer lives. The generic
+  adapter (renamed `generic_tmux.py` → `generic.py`), `runs.py`, `tui/launch.py`, `probe.py`, and
+  `tui/data.py` all route through it, so a future non-tmux backend slots in with no engine changes.
+  Behavior on Linux/macOS/WSL is byte-identical; **no native-Windows backend ships yet** (see [ROADMAP](docs/ROADMAP.md)).
+
+- **POSIX portability hardening + CI guard.** Scattered POSIX-only primitives are guarded behind a
+  platform seam — `SIGKILL` fallback, detach kwargs, `terminate_pid`, `os.devnull` — and the Unity
+  plugin degrades off Linux (`/proc` → `psutil` via a new optional `windows` extra, `/tmp`, `cp -a`
+  CoW, symlinks, `start_new_session`), keeping every Linux fast path unchanged. A new
+  `tests/test_portability_guard.py` AST/byte scan blocks new POSIX-only patterns from creeping back,
+  with sanctioned exceptions carrying `# portability:` acks.
+
+- **Adapter & profile authoring guide.** `docs/adapter-authoring-guide.md` now carries the complete
+  `CLIProfile` / `HookSpec` field reference (the single canonical schema home) and a "writing a new
+  adapter class" section for non-tmux transports — linked from the README documentation index.
+
+### Removed
+
+- **Retired the bundled `bmad-auto-dev` and `bmad-auto-review` skills.** `bmad-auto init` now installs
+  three bundled skills — `bmad-auto-resolve`, `bmad-auto-sweep`, `bmad-auto-setup` — and the upstream
+  `bmad-dev-auto` skill (from a recent bmm module) is a hard prerequisite. `bmad-auto-review`'s
+  adversarial review is fully covered by `bmad-dev-auto`'s inline step-04 (Blind + Edge-Case hunters);
+  the independent Acceptance Auditor layer is dropped, and the two hunters are now always-required base
+  skills rather than gated on `review.enabled`. The canonical `deferred-work-format.md` moved into
+  `bmad-auto-sweep`, its remaining owner.
+
+### Fixed
+
+- **Resolving a CRITICAL escalation no longer loops on a manual-rollback prompt.** Re-arming an
+  escalation requests a clean rebuild, which in non-worktree (in-place) runs means resetting to the
+  story baseline. With the default `scm.rollback_on_failure = false` the orchestrator paused for a
+  manual reset — but never cleared `baseline_commit`, so following the instructions (`git reset --hard`,
+  then `resume`) re-paused on the next resume, an endless loop. `_rollback_or_pause` now no-ops when the
+  tree is already at baseline (nothing this attempt touched), so a clean tree — including one the
+  operator just reset — proceeds straight to the re-drive. The same guard suppresses the spurious prompt
+  when an escalation left no changes at all.
+- **Manual-recovery notice wording.** The prompt no longer claims the story "failed" — it now reflects
+  the real cause ("escalation was resolved; re-driving needs a clean baseline" vs. "attempt was stopped").
+- **Resolved escalations now actually re-drive instead of HALTing on a stale `blocked` spec.** `verify_dev`
+  only recorded `task.spec_file` on a fully successful session, so a dev session that escalated with a
+  `blocked` spec (the common escalation case) left it unset. `rearm_escalation` then had no spec path to
+  flip to `ready-for-dev`, so on resume `bmad-dev-auto`'s step-01 routing re-HALTed on the still-`blocked`
+  frontmatter — a second loop. The orchestrator now captures the spec the session produced when it
+  escalates or defers (the synthesized result names it even on a HALT), so re-arm flips the status and
+  the re-drive proceeds, and a deferred story's spec is stashed as intended.
+- **Copilot dev stage no longer stalls on a subagent `agentStop`.** Copilot fires `agentStop` for
+  every subagent turn too — with an empty `transcriptPath` and a tool-use session id, not the main
+  session's turn-end. With dev decoupled to `bmad-dev-auto` (which implements via subagents), that
+  premature Stop reached the dev stage, where 0 nudges made the orchestrator declare an outright stall
+  before the skill wrote its terminal spec (same root cause as the 0.6.4 review stall). A new
+  per-profile `subagent_stop_without_transcript` (true for `copilot`) ignores a `Stop` carrying no
+  transcript, so the main session's real turn-end drives completion — and restores usage tallying,
+  since that Stop carries the transcript.
+- **Process liveness/termination no longer risks signaling the wrong process.** A corrupt
+  `engine.pid` read as `0` or negative would make `os.kill` target a process group — for `0`, the
+  orchestrator's own — so `pid_alive`/`terminate_pid` now reject non-positive PIDs before signaling.
+  The remaining liveness checks (`runs.py`, `tui/data.py`) that called `os.kill(pid, 0)` directly now
+  route through `pid_alive`, since on Windows `os.kill(pid, 0)` maps to `TerminateProcess` and is
+  destructive; a CI guard blocks bare `os.kill(_, 0)` from regressing.
+
 ## [0.6.4] — 2026-06-21
 
 ### Fixed
@@ -491,6 +598,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.0
 [0.6.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.4
 [0.6.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.3
 [0.6.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.2

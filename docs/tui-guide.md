@@ -14,8 +14,10 @@ cd /path/to/your/bmad/project
 bmad-auto tui              # or: bmad-auto tui --project /path/to/project
 ```
 
-`--project` defaults to the current directory. tmux must be on PATH for the
-launch/attach keys (`r` `s` `e` `a`); pure observation works without it.
+`--project` defaults to the current directory. tmux — the orchestrator's only
+terminal-multiplexer backend today — must be on PATH for the launch/attach keys
+(`r` `s` `e` `a`); pure observation works without it. (WSL counts as Linux, so
+tmux works there unchanged; native Windows awaits a non-tmux backend.)
 
 Over a slow or high-latency link (SSH, Tailscale), a 60fps update stream can't
 drain in time and partial frames paint over old ones. Launch with
@@ -381,6 +383,8 @@ behavior.
 | `verify.commands`                     | one per line           | (none)             | test/lint commands run before commit                                                                                                                 |
 | `notify.desktop`                      | switch                 | on                 | desktop notifications                                                                                                                                |
 | `notify.file`                         | switch                 | on                 | ATTENTION file logging                                                                                                                               |
+| `review.enabled`                      | switch                 | on                 | off = skip the separate review session; dev pass triple-reviews inline                                                                               |
+| `review.trigger`                      | select                 | `recommended`      | `recommended` (run only when bmad-dev-auto flags `followup_review_recommended`) / `always`; bounded by `limits.max_review_cycles`                    |
 | `adapter.name`                        | text                   | `claude`           | CLI profile: `claude` / `codex` / `gemini` / custom                                                                                                  |
 | `adapter.model`                       | text                   | (CLI default)      | model override                                                                                                                                       |
 | `adapter.extra_args`                  | override switch + args | profile defaults   | see below                                                                                                                                            |

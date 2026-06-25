@@ -58,6 +58,21 @@ def install_bmad_config(paths: ProjectPaths) -> None:
     )
 
 
+def install_base_skills(paths: ProjectPaths, trees=(".claude/skills", ".agents/skills")) -> None:
+    """Lay down stubs of the non-bundled upstream skills the orchestrator drives
+    (bmad-dev-auto + the review hunters) so the run-start preflight
+    (`install.missing_base_skills`) passes."""
+    from automator.install import BASE_SKILLS
+
+    for tree in trees:
+        for skill, markers in BASE_SKILLS.items():
+            d = paths.project / tree / skill
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text(f"# {skill}\n", encoding="utf-8")
+            for marker in markers:
+                (d / marker).write_text("x\n", encoding="utf-8")
+
+
 def write_sprint(paths: ProjectPaths, statuses: dict[str, str]) -> None:
     doc = dict(SPRINT_TEMPLATE)
     doc["development_status"] = dict(statuses)
@@ -81,23 +96,33 @@ def spec_path(paths: ProjectPaths, story_key: str) -> Path:
     return paths.implementation_artifacts / f"spec-{story_key}.md"
 
 
-def dev_effect(paths: ProjectPaths, story_key: str):
-    """Simulate a successful quick-dev automation session."""
+def dev_effect(
+    paths: ProjectPaths,
+    story_key: str,
+    *,
+    final_status: str = "done",
+    followup_review: bool = True,
+):
+    """Simulate a successful bmad-dev-auto session: it self-finalizes the spec
+    (no in-review handoff — always straight to ``done``) but never touches the
+    automator's sprint board (the orchestrator is the single sprint-status
+    writer). ``final_status`` lets a test leave the spec short of the success
+    status to exercise the dev-verify gating. ``followup_review`` mirrors the
+    skill's `followup_review_recommended` signal (PR #2505) — defaults True so
+    the review-flow tests still run the review under the default
+    ``review.trigger = "recommended"``; set False to exercise the skip path."""
 
     def effect(spec: SessionSpec) -> SessionResult:
         baseline = rev_parse_head(paths.project)
         source = paths.project / "src.txt"
         source.write_text(source.read_text() + f"change for {story_key}\n")
         sp = spec_path(paths, story_key)
-        # mirror the skill: with review disabled the dev finalizes straight to done
-        skip_review = spec.env.get("BMAD_AUTO_SKIP_REVIEW") == "1"
-        final = "done" if skip_review else "in-review"
-        write_spec(sp, final, baseline)
-        set_sprint(paths, story_key, final if skip_review else "review")
+        write_spec(sp, final_status, baseline)
+        # deliberately NO set_sprint: the dev skill does not write sprint-status
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "quick-dev",
+                "workflow": "auto-dev",
                 "story_key": story_key,
                 "spec_file": str(sp),
                 "baseline_commit": baseline,
@@ -105,29 +130,41 @@ def dev_effect(paths: ProjectPaths, story_key: str):
                 "tasks_done": 3,
                 "verification": [],
                 "escalations": [],
+                "followup_review_recommended": followup_review,
             },
         )
 
     return effect
 
 
+# bmad-dev-auto is the sole dev skill, so the generic effect IS the dev effect.
+# Alias kept so existing call sites that spell out the decoupled path still read.
+generic_dev_effect = dev_effect
+
+
 def review_effect(paths: ProjectPaths, story_key: str, clean: bool, patched: int = 0):
-    """Simulate a code-review automation session."""
+    """Simulate a follow-up review pass — a bmad-dev-auto re-invocation on the
+    done spec (BMAD-METHOD #2508). A review pass always finalizes the spec to
+    ``done`` and re-sets `followup_review_recommended`; the orchestrator
+    synthesizes the result the same way it does for a dev pass. ``clean=True``
+    means the pass no longer recommends a follow-up (the loop converges);
+    ``clean=False`` means it still does (the orchestrator loops). ``patched`` is
+    accepted for call-site compatibility and otherwise unused."""
 
     def effect(spec: SessionSpec) -> SessionResult:
-        if clean:
-            sp = spec_path(paths, story_key)
-            baseline = _spec_baseline(sp)
-            write_spec(sp, "done", baseline)
-            set_sprint(paths, story_key, "done")
+        sp = spec_path(paths, story_key)
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
+        set_sprint(paths, story_key, "done")
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": patched,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )
@@ -206,25 +243,33 @@ def triage_effect(result_json: dict):
     return effect
 
 
-def bundle_dev_effect(paths: ProjectPaths, name: str, dw_ids, mark_ledger: bool = True):
-    """Simulate a quick-dev bundle session (--dw-bundle): edits code, writes
-    the bundle spec, and (like step-auto-finalize bundle mode) marks the
-    bundle's ledger entries done."""
+def bundle_dev_effect(
+    paths: ProjectPaths,
+    name: str,
+    dw_ids,
+    mark_ledger: bool = False,
+    followup_review: bool = True,
+):
+    """Simulate a bmad-dev-auto bundle dev session: edits code and self-finalizes
+    the bundle spec to ``done`` (no in-review handoff). On the decoupled path the
+    orchestrator owns the ledger, so by default the session does NOT touch it;
+    ``mark_ledger=True`` is kept only for the legacy-marking path in older tests.
+    ``followup_review`` mirrors `followup_review_recommended` — defaults True so
+    the bundle review runs under the default trigger = "recommended"."""
 
     def effect(spec: SessionSpec) -> SessionResult:
         baseline = rev_parse_head(paths.project)
         source = paths.project / "src.txt"
         source.write_text(source.read_text() + f"change for dw-{name}\n")
         sp = bundle_spec_path(paths, name)
-        # mirror the skill: review disabled -> finalize the bundle to done
-        final = "done" if spec.env.get("BMAD_AUTO_SKIP_REVIEW") == "1" else "in-review"
-        write_spec(sp, final, baseline)
+        # mirror the skill: always self-finalize the bundle spec straight to done
+        write_spec(sp, "done", baseline)
         if mark_ledger:
             mark_ledger_done(paths, dw_ids)
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "quick-dev",
+                "workflow": "auto-dev",
                 "story_key": f"dw-{name}",
                 "spec_file": str(sp),
                 "baseline_commit": baseline,
@@ -233,6 +278,7 @@ def bundle_dev_effect(paths: ProjectPaths, name: str, dw_ids, mark_ledger: bool 
                 "verification": [],
                 "escalations": [],
                 "dw_ids": list(dw_ids),
+                "followup_review_recommended": followup_review,
             },
         )
 
@@ -240,20 +286,23 @@ def bundle_dev_effect(paths: ProjectPaths, name: str, dw_ids, mark_ledger: bool 
 
 
 def bundle_review_effect(paths: ProjectPaths, name: str, clean: bool = True):
-    """Simulate a code-review session over a bundle spec (no sprint sync)."""
+    """Simulate a follow-up review pass over a bundle spec — a bmad-dev-auto
+    re-invocation on the done bundle spec (no sprint-status entry for bundles).
+    ``clean=True`` converges; ``clean=False`` keeps recommending a follow-up."""
 
     def effect(spec: SessionSpec) -> SessionResult:
-        if clean:
-            sp = bundle_spec_path(paths, name)
-            write_spec(sp, "done", _spec_baseline(sp))
+        sp = bundle_spec_path(paths, name)
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": 0,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": f"dw-{name}",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )

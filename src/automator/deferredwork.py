@@ -1,10 +1,12 @@
 """Deterministic reading and editing of the deferred-work ledger.
 
 The ledger (`{implementation_artifacts}/deferred-work.md`) is append-only
-markdown written by skills per bmad-auto-dev/deferred-work-format.md:
-`### DW-<seq>: <title>` headings with `origin:`/`location:`/`reason:`/`status:`
-field lines. The orchestrator never trusts an LLM to have edited it — status
-flips and decision records happen here, and gates re-read the file from disk.
+markdown in the canonical form documented at
+bmad-auto-sweep/deferred-work-format.md: `### DW-<seq>: <title>` headings with
+`origin:`/`location:`/`reason:`/`status:` field lines. The inner bmad-dev-auto
+session appends flatter entries that the orchestrator normalizes on sweep. The
+orchestrator never trusts an LLM to have edited it — status flips and decision
+records happen here, and gates re-read the file from disk.
 """
 
 from __future__ import annotations
@@ -183,6 +185,14 @@ _LEAD_DONE_RE = re.compile(rf"^{_DONE_WORDS}\b")
 _LEAD_DONE_STRIP_RE = re.compile(
     rf"^{_DONE_WORDS}\b(?:[ \t]+\d{{4}}-\d{{2}}-\d{{2}})?(?:[ \t]*\([^)]*\))?[ \t]*[:.—–-]?[ \t]*"
 )
+# The generic bmad-dev-auto review appender writes a flat block per finding:
+#   - source_spec: `spec-foo.md`
+#     summary: <one sentence>
+#     evidence: <why this is real>
+# We recognize it so the `summary` becomes the title (not the source_spec path)
+# and the entry migrates cleanly into the canonical `### DW-<seq>` shape.
+_FLAT_SOURCE_RE = re.compile(r"^source_spec:[ \t]", re.IGNORECASE)
+_FLAT_SUMMARY_RE = re.compile(r"^[ \t]*summary:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
 _BULLET_RE = re.compile(r"^[-*][ \t]+(.*)$")
 _ITEM_ID_RE = re.compile(
     r"^(?:\*\*)?([^\s:*~]*\d[^\s:*~]*)(?:\*\*)?(?:[ \t]*[—–][ \t]+|:[ \t]+|[ \t]+-[ \t]+)"
@@ -207,6 +217,17 @@ def _clean_title(s: str) -> str:
 
 def _item_entry(first: str, body: str, section: str, section_done: bool) -> dict:
     """Interpret one bullet item; returns the pre-key entry fields."""
+    if _FLAT_SOURCE_RE.match(first):
+        # generic bmad-dev-auto flat appender block: title is the `summary`
+        sm = _FLAT_SUMMARY_RE.search(body)
+        summary = sm.group(1).strip() if sm else ""
+        return {
+            "id": "",
+            "title": _clean_title(summary) if summary else _clean_title(first),
+            "done": section_done,
+            "severity": field_severity(body),
+            "section": section,
+        }
     content = first
     struck = False
     m = _STRUCK_LINE_RE.match(content)

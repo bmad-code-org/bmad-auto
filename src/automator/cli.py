@@ -16,6 +16,7 @@ from . import (
     bmadconfig,
     decisions,
     deferredwork,
+    install,
 )
 from . import policy as policy_mod
 from . import (
@@ -58,27 +59,48 @@ ROLES = ("dev", "review", "triage")
 
 
 def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIAdapter]:
-    from .adapters.generic_tmux import GenericTmuxAdapter
+    from .adapters.generic import GenericAdapter, GenericDevAdapter
+    from .adapters.multiplexer import get_multiplexer
     from .adapters.profile import ProfileError, get_profile
+
+    # The dev skill (bmad-dev-auto) writes no result.json: its adapter
+    # synthesizes the result from the spec, and so needs the
+    # implementation-artifacts dir to find that spec.
+    impl_artifacts = bmadconfig.load_paths(project).implementation_artifacts
+    # One shared terminal-multiplexer backend for every role's adapter.
+    mux = get_multiplexer()
 
     adapters: dict[str, CodingCLIAdapter] = {}
     by_cfg: dict = {}
     for role in ROLES:
         cfg = policy.adapter.resolved(role)
-        if cfg not in by_cfg:
+        # Both the dev and review sessions are now bmad-dev-auto runs (the review
+        # session re-invokes the dev skill on the done spec for a follow-up pass),
+        # and the skill writes no result.json — its adapter synthesizes the result
+        # from the spec it leaves on disk, so it needs impl_artifacts to find that
+        # spec and cannot be shared with the triage role even on identical config.
+        synthesizes = role in ("dev", "review") and policy.dev.skill == "bmad-dev-auto"
+        key = (cfg, synthesizes)
+        if key not in by_cfg:
             try:
                 profile = get_profile(cfg.name, project)
             except ProfileError as e:
                 raise SystemExit(f"error: {e}") from e
-            by_cfg[cfg] = GenericTmuxAdapter(
+            common = dict(
                 run_dir=run_dir,
                 policy=policy,
                 profile=profile,
                 extra_args=cfg.extra_args,
                 usage_grace_s=cfg.usage_grace_s,
                 stop_without_result_nudges=cfg.stop_without_result_nudges,
+                mux=mux,
             )
-        adapters[role] = by_cfg[cfg]
+            by_cfg[key] = (
+                GenericDevAdapter(**common, impl_artifacts=impl_artifacts)
+                if synthesizes
+                else GenericAdapter(**common)
+            )
+        adapters[role] = by_cfg[key]
     return adapters
 
 
@@ -164,11 +186,41 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"run `bmad-auto init --cli {profile.name}`"
             )
 
+    base_problems = install.missing_base_skills(project, [p.skill_tree for p in profiles])
+    if profiles and not base_problems:
+        notes.append("upstream skills present (bmad-dev-auto + review hunters)")
+    problems.extend(base_problems)
+
     for note in notes:
         print(f"  ok: {note}")
     for problem in problems:
         print(f"FAIL: {problem}", file=sys.stderr)
     return 1 if problems else 0
+
+
+def _require_base_skills(project: Path, pol) -> bool:
+    """Preflight the upstream skills the orchestrator drives (bmad-dev-auto + the
+    two adversarial review hunters it invokes inline).
+
+    Returns True when everything is in place; otherwise prints the problems and
+    returns False so the caller can abort before spawning any session (a missing
+    skill would otherwise stall as an `Unknown command` until the run times out).
+    """
+    from .adapters.profile import ProfileError, get_profile
+
+    skill_trees = []
+    for name in dict.fromkeys(pol.adapter.resolved(role).name for role in ROLES):
+        try:
+            skill_trees.append(get_profile(name, project).skill_tree)
+        except ProfileError:
+            continue
+    problems = install.missing_base_skills(project, skill_trees)
+    if problems:
+        for problem in problems:
+            print(f"FAIL: {problem}", file=sys.stderr)
+        print("run `bmad-auto validate` for details", file=sys.stderr)
+        return False
+    return True
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -189,6 +241,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if not verify.worktree_clean(paths.repo_root):
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
+        return 1
+
+    if not _require_base_skills(project, pol):
         return 1
 
     _reconcile_stale(project, paths, pol)
@@ -266,8 +321,8 @@ def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> i
     print(f"would process {len(queue)} stories (gates={pol.gates.mode}):")
     for story in queue:
         print(f"\n  {story.key} (epic {story.epic}, status {story.status})")
-        print(f"    dev:    {render('dev', f'/bmad-auto-dev {story.key}')}")
-        print(f"    review: {render('review', '/bmad-auto-review <spec from dev>')}")
+        print(f"    dev:    {render('dev', f'/bmad-dev-auto {story.key}')}")
+        print(f"    review: {render('review', '/bmad-dev-auto <done spec from dev>')}")
         print(f"    env:    BMAD_AUTO_MODE=1 BMAD_AUTO_STORY_KEY={story.key}")
     return 0
 
@@ -360,6 +415,9 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         print("git worktree is not clean — commit or stash first", file=sys.stderr)
         return 1
 
+    if not _require_base_skills(project, pol):
+        return 1
+
     _reconcile_stale(project, paths, pol)
 
     return _start_sweep(
@@ -412,6 +470,8 @@ def _resume_paused_run(project: Path, run_dir: Path) -> int:
         print(f"run {run_dir.name} already finished", file=sys.stderr)
         return 1
     pol = policy_mod.load(_policy_path(project))
+    if not _require_base_skills(project, pol):
+        return 1
     journal = Journal(run_dir)
     journal.append("run-resume", was_paused=state.paused_reason)
     state.clear_pause()

@@ -12,13 +12,13 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | Deterministic control loop           | Story selection, retries, gates, completion checks run in plain Python                                                                                                   | LLM-as-orchestrator is nondeterministic, hard to debug, and costs tokens for control flow |
 | Trust-nothing verification           | Checks on-disk artifacts (spec status, baseline-commit match, non-empty diff, sprint sync) + runs your test/lint commands before commit                                  | Agents claim success without working code; broken builds slip through                     |
-| Fresh-context adversarial review     | Dev and review are separate sessions; review uses 3 parallel layers                                                                                                      | Self-review anchoring bias; implementer marks own work correct                            |
+| Fresh-context adversarial review     | Dev and review are separate sessions; review uses 2 parallel layers (Blind Hunter / Edge Case Hunter)                                                                    | Self-review anchoring bias; implementer marks own work correct                            |
 | Hook-based transport                 | Coding-agent hooks write structured event files; skills write `result.json`                                                                                              | Brittle terminal pane-scraping                                                            |
 | Resumable state machine              | Every run is on-disk state, resumable after gate/escalation/crash                                                                                                        | Long unattended runs lost to interruptions                                                |
 | Plateau-defer                        | Stuck stories are skipped, stashed, and the run continues                                                                                                                | One unconvergeable story blocking a whole sprint                                          |
 | Typed escalations + resolve workflow | CRITICAL pauses + notifies; interactive resolve agent re-arms the story                                                                                                  | Ambiguous specs silently producing wrong code                                             |
 | Deferred-work sweeps                 | Triages an append-only ledger against real code, bundles + executes                                                                                                      | Split-off goals and review findings get lost                                              |
-| Multi-CLI adapter + profiles         | Generic tmux driver runs claude/codex/gemini; per-stage overrides; TOML profiles                                                                                         | Vendor lock-in; no way to mix models per stage                                            |
+| Multi-CLI adapter + profiles         | Generic driver runs claude/codex/gemini; per-stage overrides; TOML profiles; transport behind a pluggable multiplexer seam (tmux today)                                  | Vendor lock-in; no way to mix models per stage; future non-tmux/Windows transport         |
 | Cost-weighted token budgets          | Per-story budget counts cache reads at ~0.1x; raw totals displayed                                                                                                       | Naive token caps misjudge real cost (cache reads dominate)                                |
 | Non-invasive skill forks             | Drives its own `bmad-auto-*` skill forks; reads `sprint-status.yaml` only                                                                                                | Modifying a user's standard BMAD install                                                  |
 | Read-only TUI + launcher             | Live dashboard over run-dir artifacts; launches detached runs                                                                                                            | No visibility into what an unattended run is doing                                        |
@@ -37,7 +37,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 ### Spec + implementation (dev stage)
 
-- Drives `bmad-auto-dev` (fork of `bmad-quick-dev`) in a fresh tmux session: plans a 1.5–4k-token spec, auto-approves it, implements, syncs `sprint-status` to `in-review`, writes `result.json`.
+- Drives the upstream `bmad-dev-auto` skill (unmodified) in a fresh tmux session: it plans a 1.5–4k-token spec, auto-approves it, implements, and self-finalizes the spec; the orchestrator syncs `sprint-status` and synthesizes `result.json` from the spec the skill leaves on disk.
 - Spec-only contract between stages — review consumes the frozen spec, not the dev session's context.
 
 ### Verification (trust-nothing gate)
@@ -47,10 +47,11 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 ### Adversarial review (review stage)
 
-- Drives `bmad-auto-review` (fork of `bmad-code-review`) in a separate, fresh-context session — no anchoring bias from the implementer.
-- Static prefilter → 3 parallel layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor) → verify findings against code → triage → auto-apply patches → log → defer ambiguity.
-- Bounded review loop (default 3 cycles); done when clean.
-- Optional (`[review].enabled`, default `true`): set `false` to skip the separate review session. The dev pass then runs `bmad-quick-dev`'s own internal triple-review (same three layers, in-context) and finalizes the story to `done` — one session per story instead of two. Verify commands still gate the commit. Applies to story runs and deferred-work sweeps alike.
+- The follow-up review is a re-invocation of `bmad-dev-auto` on the `done` spec — a fresh-context session with no anchoring bias from the implementer (BMAD-METHOD#2508 routes a `done` spec to a fresh step-04 review pass), so there is no separate review skill.
+- Two parallel adversarial layers (Blind Hunter / Edge Case Hunter) → verify findings against code → triage → auto-apply patches → log → defer ambiguity → commit.
+- Bounded review loop (`limits.max_review_cycles`, default 3 cycles); done when the pass finishes `done` and no longer recommends a follow-up. This bound is also the oscillation guard for skill-recommended follow-up review.
+- Optional (`[review].enabled`, default `true`): set `false` to skip the follow-up review session. The dev pass's own inline review (same two layers, in-context) is then the only review and it finalizes the story to `done` — one session per story instead of two. Verify commands still gate the commit. Applies to story runs and deferred-work sweeps alike.
+- Trigger (`[review].trigger`, default `recommended`): when review is enabled, decides _when_ the follow-up pass runs. `recommended` runs it only when `bmad-dev-auto` sets `followup_review_recommended` on a `done` spec (it self-reviews inline and flags an independent pass only when its review-driven changes were significant — BMAD-METHOD#2505). `always` runs it on every story (pre-0.7.0 behavior).
 
 ### Failure handling & resilience
 
@@ -111,7 +112,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 ### Multi-CLI / multi-agent support
 
-- Generic tmux adapter drives any CLI fitting the tmux-injection + hook-signal transport; CLI specifics live in declarative TOML profiles.
+- Generic adapter drives any CLI fitting the injection + hook-signal transport; CLI specifics live in declarative TOML profiles. Two independent axes: the **CLI** (`CodingCLIAdapter` + profile) and the **terminal transport** (`TerminalMultiplexer`) — tmux is the only backend today, behind a pluggable seam so a native-Windows backend can be added without touching the engine (see the [adapter authoring guide](adapter-authoring-guide.md#two-axes-cli-vs-transport)).
 - Supported, E2E-verified: `claude` (reference), `codex` (≥ 0.139), `gemini` (≥ 0.46), `copilot` (GitHub Copilot CLI ≥ 2026-02 — the `copilot` binary, not the VS Code extension; `agentStop` turn-end, `-i` interactive launch, `--allow-all-tools`; pin a capable model — the free GPT-5 mini default is unreliable for multi-step skills).
 - Per-stage CLI/model overrides: run dev on one CLI/model, review on another (`[adapter.dev]`, `[adapter.review]`, `[adapter.triage]`).
 - Add a CLI without touching Python: drop a TOML profile in `.automator/profiles/<name>.toml` (binary, prompt template, bypass flags, hook dialect, native→canonical event map).
@@ -151,7 +152,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 - `bmad-auto init` installs the five `bmad-auto-*` skills (`.claude/skills/` and/or `.agents/skills/`), the hook relay, `.automator/policy.toml`, and a runs-dir gitignore. Flags: `--cli` (repeatable), `--no-skills`, `--force-skills`.
 - `bmad-auto validate` preflights every prerequisite: BMAD config, sprint-status, git, tmux, CLI binary, hook registration.
-- Non-invasive: drives its own forks of the dev/review skills — your standard BMAD install is never modified. Upstream improvements are merged by diffing fork vs. upstream (forks keep the upstream file structure).
+- Non-invasive: drives the upstream `bmad-dev-auto` skill unmodified — there is no fork to keep in sync — and review is just a re-invocation of it on the `done` spec. Your standard BMAD install is never modified.
 
 ### Command reference
 

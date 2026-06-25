@@ -30,9 +30,15 @@ usage_parser = "copilot-events"
 # the transcript before the totals land (reads as 0/None).
 usage_grace_s = 8.0
 # agentStop fires PER response turn, so a parallel-subagent review (e.g. the
-# bmad-auto-review layers) ends several turns; the global default of 1 nudge
-# would declare it stalled on the 2nd Stop. 5 lets a multi-turn review finish.
+# bmad-dev-auto step-04 hunter layers) ends several turns; the global default of
+# 1 nudge would declare it stalled on the 2nd Stop. 5 lets a multi-turn review finish.
 stop_without_result_nudges = 5
+# agentStop also fires for each SUBAGENT turn — with an empty transcriptPath and a
+# tool-use session id (toolu_…), not the main session's id. Those are not the main
+# turn-end: ignore a Stop with no transcript so a subagent's premature Stop is not
+# read as a (result-less) completion. Without this the dev stage (0 nudges) stalls
+# outright on the first subagent Stop, before bmad-dev-auto writes its terminal spec.
+subagent_stop_without_transcript = true
 first_run_note = "run `copilot` once and authenticate (gh / Copilot subscription); requires Copilot CLI GA (>= 2026-02)"
 skill_tree = ".agents/skills"
 # .github/copilot/settings.json is the inline hook config (and can also hold MCP

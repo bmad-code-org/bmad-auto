@@ -5,15 +5,15 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
-import signal
-import subprocess
 import tarfile
 import time
 from pathlib import Path
 
 from . import verify
+from .adapters.multiplexer import get_multiplexer
 from .journal import STATE_FILE, Journal, load_state, save_state
 from .model import PAUSE_ESCALATION, Phase
+from .platform_util import pid_alive, terminate_pid
 
 RUNS_DIR = Path(".automator") / "runs"
 ARCHIVE_DIR = Path(".automator") / "archive"
@@ -23,7 +23,6 @@ PID_FILE = "engine.pid"
 # marking the run stopped itself.
 _STOP_WAIT_S = 10.0
 _STOP_POLL_S = 0.1
-_TMUX_TIMEOUT_S = 5.0
 
 
 def new_run_id() -> str:
@@ -45,8 +44,8 @@ def latest_run_dir(project: Path) -> Path | None:
 
 
 def write_pid(run_dir: Path) -> None:
-    """Record the engine process pid. Never deleted: a stale pid that fails
-    os.kill(pid, 0) is the signal that a run was interrupted."""
+    """Record the engine process pid. Never deleted: a stale pid that
+    ``pid_alive`` reports as gone is the signal that a run was interrupted."""
     (run_dir / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
 
 
@@ -55,11 +54,9 @@ def session_name(run_id: str) -> str:
 
 
 def attach_target_argv(target: str) -> list[str]:
-    """tmux command to reach a target session/window. Inside tmux, nesting is
-    refused, so switch this client instead (tmux switch-client -l comes back)."""
-    if os.environ.get("TMUX"):
-        return ["tmux", "switch-client", "-t", target]
-    return ["tmux", "attach", "-t", target]
+    """Multiplexer command to reach a target session/window (see
+    :meth:`TerminalMultiplexer.attach_target_argv`)."""
+    return get_multiplexer().attach_target_argv(target)
 
 
 def attach_argv(run_id: str) -> list[str]:
@@ -123,33 +120,16 @@ def engine_alive(run_dir: Path) -> bool:
     pid = read_pid(run_dir)
     if pid is None:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_alive(pid)
 
 
 # ----------------------------------------------------------- stop / delete / archive
 
 
 def kill_session(run_id: str) -> None:
-    """Kill a run's agent tmux session (bmad-auto-<id>); a no-op when it is
-    already gone or tmux is unavailable."""
-    if not shutil.which("tmux"):
-        return
-    try:
-        subprocess.run(
-            ["tmux", "kill-session", "-t", f"={session_name(run_id)}"],
-            capture_output=True,
-            timeout=_TMUX_TIMEOUT_S,
-        )
-    except (subprocess.SubprocessError, OSError):
-        pass
+    """Kill a run's agent session (bmad-auto-<id>); a no-op when it is already
+    gone or the multiplexer is unavailable."""
+    get_multiplexer().kill_session(session_name(run_id))
 
 
 CTL_SESSION = "bmad-auto-ctl"
@@ -170,46 +150,15 @@ def project_tag(project: Path) -> str:
 
 
 def tmux_sessions() -> list[str]:
-    """All live tmux session names, or [] when tmux is missing, no server is
-    running, or the query fails."""
-    if not shutil.which("tmux"):
-        return []
-    try:
-        proc = subprocess.run(
-            ["tmux", "list-sessions", "-F", "#{session_name}"],
-            capture_output=True,
-            text=True,
-            timeout=_TMUX_TIMEOUT_S,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return []
-    if proc.returncode != 0:  # no server / no sessions
-        return []
-    return [line for line in proc.stdout.splitlines() if line]
+    """All live session names, or [] when the multiplexer is missing, no server
+    is running, or the query fails."""
+    return get_multiplexer().list_sessions()
 
 
 def session_project_tags() -> dict[str, str]:
     """Map each live session name to its PROJECT_OPTION value ("" when unset).
-    Same missing-tmux/no-server guards as tmux_sessions()."""
-    if not shutil.which("tmux"):
-        return {}
-    try:
-        proc = subprocess.run(
-            ["tmux", "list-sessions", "-F", f"#{{session_name}}\t#{{{PROJECT_OPTION}}}"],
-            capture_output=True,
-            text=True,
-            timeout=_TMUX_TIMEOUT_S,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return {}
-    if proc.returncode != 0:  # no server / no sessions
-        return {}
-    tags: dict[str, str] = {}
-    for line in proc.stdout.splitlines():
-        name, _, tag = line.partition("\t")
-        if name:
-            tags[name] = tag
-    return tags
+    Same missing-multiplexer/no-server guards as tmux_sessions()."""
+    return get_multiplexer().session_options(PROJECT_OPTION)
 
 
 def prunable_sessions(project: Path) -> tuple[list[str], list[str]]:
@@ -273,15 +222,13 @@ def stop_run(run_dir: Path) -> bool:
     pid = read_pid(run_dir)
     if pid is not None:
         try:
-            os.kill(pid, signal.SIGTERM)
+            terminate_pid(pid)
         except (ProcessLookupError, PermissionError, OSError):
             pid = None  # already gone / not ours — go straight to fallback
     if pid is not None:
         deadline = time.monotonic() + _STOP_WAIT_S
         while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except OSError:
+            if not pid_alive(pid):
                 break  # exited
             time.sleep(_STOP_POLL_S)
         # the engine clears its agent window itself, but kill the session as a
@@ -488,9 +435,11 @@ def rearm_escalation(run_dir: Path, story_key: str | None = None) -> str:
     task.attempt = 0
     task.review_cycle = 0
     task.defer_reason = None
+    task.rearmed = True  # resume-time recovery notice describes a clean rebuild,
+    # not a failed attempt (engine._finish_inflight clears it once the rebuild runs)
 
     if task.spec_file:
-        # route /bmad-auto-dev to re-implement (decision table: ready-for-dev
+        # route /bmad-dev-auto to re-implement (decision table: ready-for-dev
         # -> step-03); independent of the resolve agent having set it.
         verify.set_frontmatter_status(Path(task.spec_file), "ready-for-dev")
 

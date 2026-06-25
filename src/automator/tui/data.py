@@ -15,9 +15,6 @@ from __future__ import annotations
 
 import bisect
 import json
-import os
-import shutil
-import subprocess
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,9 +25,11 @@ from rich.style import Style
 from rich.text import Text
 
 from .. import bmadconfig, deferredwork, sprintstatus
+from ..adapters.multiplexer import MultiplexerError, get_multiplexer
 from ..gates import ATTENTION_FILE
 from ..journal import JOURNAL_FILE, LOGS_DIR, STATE_FILE, load_state
 from ..model import RunState
+from ..platform_util import pid_alive
 from ..runs import PID_FILE, list_run_dirs, session_name
 
 # Run statuses shown by the dashboard.
@@ -59,7 +58,7 @@ def liveness(run_dir: Path) -> str:
     """'alive' | 'dead' | 'unknown' for the engine that owns run_dir.
 
     engine.pid is authoritative (written at run/sweep/resume start, never
-    deleted). Legacy runs without one fall back to the per-run tmux session —
+    deleted). Legacy runs without one fall back to the per-run agent session —
     but that session only exists while an agent session runs, so its absence
     proves nothing: 'unknown', never falsely dead. Pid checks are local-only;
     runs on other hosts always come back 'unknown'.
@@ -67,30 +66,27 @@ def liveness(run_dir: Path) -> str:
     try:
         pid = int((run_dir / PID_FILE).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        return _tmux_liveness(run_dir.name)
+        return _session_liveness(run_dir.name)
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return "dead"
-    except PermissionError:
-        return "alive"
-    except OSError:
+        return "alive" if pid_alive(pid) else "dead"
+    except Exception:
+        # never falsely dead — an unexpected probe failure stays 'unknown'
         return "unknown"
-    return "alive"
 
 
-def _tmux_liveness(run_id: str) -> str:
-    if not shutil.which("tmux"):
+def _session_liveness(run_id: str) -> str:
+    # An absent multiplexer / dead query proves nothing about a legacy run, so the
+    # only positive signal is a live session; everything else is 'unknown'.
+    mux = get_multiplexer()
+    if not mux.available():
         return "unknown"
     try:
-        proc = subprocess.run(
-            ["tmux", "has-session", "-t", f"={session_name(run_id)}"],
-            capture_output=True,
-            timeout=5,
-        )
-    except (subprocess.SubprocessError, OSError):
+        return "alive" if mux.has_session(session_name(run_id)) else "unknown"
+    except (OSError, MultiplexerError):
+        # The seam raises MultiplexerError (not OSError) on a backend failure; a
+        # dead query proves nothing about a legacy run, so degrade to 'unknown'
+        # rather than crashing the TUI poll.
         return "unknown"
-    return "alive" if proc.returncode == 0 else "unknown"
 
 
 def _classify(finished: bool, paused: bool, stopped: bool, run_dir: Path) -> str:
@@ -250,7 +246,7 @@ class JournalTail:
         return entries
 
 
-# Pane geometry mirrors adapters.generic_tmux PANE_COLUMNS/PANE_LINES (not
+# Pane geometry mirrors adapters.generic PANE_COLUMNS/PANE_LINES (not
 # imported: that module drags in Policy/SignalWatcher, and this layer stays
 # a pure observer).
 _PANE_COLUMNS = 220

@@ -1,10 +1,79 @@
-# Finalizing a CLI adapter profile with `probe-adapter`
+# Authoring CLI adapters & profiles
 
 bmad-auto drives any coding CLI that fits the **tmux-injection + hook-signal**
-transport through one generic adapter (`adapters/generic_tmux.py`); everything
-CLI-specific lives in a declarative **TOML profile** (`adapters/profile.py`). The
-[README adapter section](../README.md#other-coding-clis) covers the profile fields
-and how to drop one in without touching Python.
+transport through one generic adapter (`adapters/generic.py`); everything
+CLI-specific lives in a declarative **TOML profile** (`adapters/profile.py`). This
+guide is the canonical home for the profile schema and the two ways to teach
+bmad-auto a new CLI:
+
+- **The common case — a TOML profile.** If the CLI fits tmux + hook-signal, you
+  write no Python. The [Profile field reference](#profile-field-reference) is the
+  complete `CLIProfile` / `HookSpec` schema; the
+  [walkthrough below](#walkthrough-finalizing-a-profile) shows how `probe-adapter`
+  finalizes one against a real run.
+- **The advanced case — a new adapter class.** If the CLI does _not_ fit that
+  transport (e.g. an HTTP/SSE service), see
+  [Writing a new adapter class](#writing-a-new-adapter-class) for the
+  `CodingCLIAdapter` ABC.
+
+## Two axes: CLI vs transport
+
+These are independent and abstracted separately:
+
+- **CLI axis** — `CodingCLIAdapter` (`adapters/base.py`): _which_ binary to launch,
+  how the prompt is rendered, the hook dialect, where the transcript lives. The
+  generic adapter + a TOML profile cover this; the rest of this guide is about it.
+- **Transport axis** — `TerminalMultiplexer` (`adapters/multiplexer.py`): how
+  sessions, windows, and panes are created, observed, and torn down. The generic
+  adapter never shells out itself — it goes through `self.mux`, obtained from
+  `get_multiplexer()`. The one backend today is tmux
+  (`adapters/tmux_backend.py`), which is the **only** file allowed to invoke
+  `tmux` (and the only place POSIX-shell trailers live). A future non-POSIX
+  backend (e.g. a native-Windows "psmux") implements the `TerminalMultiplexer`
+  contract and slots in behind `get_multiplexer()` with no change to the adapters.
+  A backend author reads `multiplexer.py` for the contract and `tmux_backend.py`
+  for the reference implementation.
+
+### The transport contract (for a backend author)
+
+Every part of the codebase that touches sessions, windows, or clients now goes
+through `get_multiplexer()` — not just the generic adapter but also `runs.py`
+(session listing/tagging, kill, attach argv), `tui/launch.py` (the control
+session and its parked orchestrator windows), `probe.py` (the throwaway probe
+session), and `tui/data.py` (legacy-run liveness). A grep for `"tmux"` outside
+`adapters/tmux_backend.py` should turn up only `shutil.which("tmux")` presence
+checks, never an invocation.
+
+To add a backend, implement `TerminalMultiplexer` (`adapters/multiplexer.py`) and
+return it from `get_multiplexer()`. The contract groups into:
+
+- **Sessions** — `has_session`, `new_session` (geometry is optional: agent
+  sessions pin a fixed pane size because they are observed while detached; the
+  control session omits it), `kill_session`, `list_sessions`, `session_options`
+  (read a user option across all sessions), `set_session_option`.
+- **Windows** — `new_window` (run a command in a fresh window), `new_parked_window`
+  (run a command, then _park_ on a keypress so the exit status stays inspectable,
+  then return any attached client to its origin — this is where the POSIX `sh -c`
+  trailer is quarantined; a non-POSIX backend reimplements the same behavior in
+  its own terms), `list_window_ids`, `list_windows` (selected fields per window),
+  `window_alive`, `kill_window`, `select_window`, `set_window_option`,
+  `unset_window_option`, `show_window_option`, `pipe_pane` (tee a pane to a log),
+  `send_text`.
+- **Client / attach** — `attach_target_argv` (argv that reaches a target, nesting-
+  aware), `current_pane_id` / `current_window_id` / `current_session`,
+  `detach_client`, `switch_client` (with an optional last-client fallback),
+  `available` (is this backend usable on the current host).
+
+Operations that can race a window dying (`pipe_pane`) or a session already being
+gone (`kill_session`) must tolerate it rather than raise; everything else raises a
+`MultiplexerError` subclass on failure, which call sites catch at the seam (e.g.
+`tui/launch.start_detached` turns it into a `LaunchError`) without importing the
+backend. `window_alive` uses `list-windows` membership, not `display-message`, because
+`display-message -t <dead-window>` exits 0 on tmux.
+
+`tmux_backend.py` is the reference implementation; reading it alongside the ABC is
+the fastest way to see exactly what a `new_parked_window` or `session_options` must
+produce.
 
 The hard part of a new profile isn't the TOML — it's the **facts that live in no
 doc**: the CLI's exact hook payload shape (field names and casing, whether
@@ -79,10 +148,8 @@ loud **"raw retained — do not share"** warning; never paste a `--keep-temp` ru
 ### 1. Draft a profile
 
 Drop a TOML file in `<project>/.automator/profiles/<name>.toml` with the fields
-described in the [README adapter section](../README.md#other-coding-clis). The
-contract is the `CLIProfile` / `HookSpec` dataclasses in
-[`src/automator/adapters/profile.py`](../src/automator/adapters/profile.py): a
-`binary`, a `prompt_template`, bypass flags, a `[hooks]` block picking one of the
+from the [Profile field reference](#profile-field-reference) below. The minimum is
+a `binary`, a `prompt_template`, bypass flags, a `[hooks]` block picking one of the
 config dialects (`claude-settings-json` / `codex-hooks-json` /
 `gemini-settings-json` / `copilot-settings-json`) and a native→canonical event
 map, and a `usage_parser` (start with `"none"` until you've written one).
@@ -172,3 +239,141 @@ On Copilot CLI 1.0.63 this surfaced three corrections:
   to it instead of `"none"`.
 
 Confirm the `mkdtemp` dir is gone afterward.
+
+---
+
+## Profile field reference
+
+A profile is the `CLIProfile` dataclass in
+[`src/automator/adapters/profile.py`](../src/automator/adapters/profile.py),
+loaded from TOML. **Built-ins** ship as packaged TOML
+(`automator/data/profiles/*.toml`); **project overrides** in
+`<project>/.automator/profiles/*.toml` overlay them — same `name` overrides a
+built-in, a new `name` extends the set. The legacy alias `claude-code-tmux`
+resolves to `claude`.
+
+### `CLIProfile`
+
+| Field                              | Required | Default            | Meaning                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------- | -------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                             | ✅       | —                  | Profile id, also the `--cli` value and override key.                                                                                                                                                                                                                                                                                                    |
+| `binary`                           | ✅       | —                  | Executable to launch (resolved on `PATH`).                                                                                                                                                                                                                                                                                                              |
+| `[hooks]`                          | ✅       | —                  | The `HookSpec` table (see below).                                                                                                                                                                                                                                                                                                                       |
+| `skill_tree`                       |          | `.claude/skills`   | Project-relative tree this CLI reads skills from (`.agents/skills` for codex/gemini); `bmad-auto init` installs the `bmad-auto-*` skills here. Must be relative.                                                                                                                                                                                        |
+| `prompt_template`                  |          | `{prompt}`         | How the canonical `/skill args` prompt is rendered. Placeholders: `{prompt}` (whole string), `{skill}` (leading slash-command name, no `/`), `{args}` (the remainder).                                                                                                                                                                                  |
+| `launch_args`                      |          | `()`               | Extra argv passed at launch, e.g. `["-i"]` to stay interactive (gemini/copilot).                                                                                                                                                                                                                                                                        |
+| `bypass_args`                      |          | `()`               | Flags that bypass permission/approval prompts for unattended runs (e.g. `--allow-all-tools`).                                                                                                                                                                                                                                                           |
+| `model_flag`                       |          | `--model`          | Flag used to pass the model name when one is configured.                                                                                                                                                                                                                                                                                                |
+| `env`                              |          | `{}`               | Extra environment variables for the session.                                                                                                                                                                                                                                                                                                            |
+| `usage_parser`                     |          | `none`             | Which transcript token parser to use — one of `claude-jsonl`, `codex-rollout`, `gemini-chat`, `copilot-events`, `none`.                                                                                                                                                                                                                                 |
+| `usage_grace_s`                    |          | `0.0`              | Seconds to keep polling the transcript for token totals after the session ends. `0` = read once. Raise it for CLIs that flush totals only on shutdown (copilot writes `modelMetrics` ~1s after the turn-end hook). Must be ≥ 0.                                                                                                                         |
+| `stop_without_result_nudges`       |          | unset (use global) | Per-adapter floor for Stop-without-result nudges. Leave unset to inherit `limits.stop_without_result_nudges`. Raise it for CLIs that fire a turn-end hook _per response turn_ (copilot's `agentStop`), where the global default of 1 declares them stalled too early. Must be ≥ 0 if set.                                                               |
+| `subagent_stop_without_transcript` |          | `false`            | Set `true` for CLIs that fire the turn-end hook for _subagent_ turns too, with an empty `transcriptPath` and a tool-use session id (copilot's `agentStop`). A `Stop` carrying no transcript is then treated as a subagent stop and ignored, so the main session's real turn-end drives completion. Leave `false` and every `Stop` is the main turn-end. |
+| `first_run_note`                   |          | `""`               | Human note printed by `init` about a manual first-run/auth step this CLI needs.                                                                                                                                                                                                                                                                         |
+| `seed_files`                       |          | `()`               | Project-relative gitignored configs (MCP/CLI settings) a `git worktree add` checkout omits; `provision_worktree` copies them into isolated dev/review worktrees. Must be relative.                                                                                                                                                                      |
+
+### `HookSpec` (the `[hooks]` table)
+
+| Field         | Required | Meaning                                                                                                                                                                                                                                   |
+| ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dialect`     | ✅       | The CLI's hook-config format — one of `claude-settings-json`, `codex-hooks-json`, `gemini-settings-json`, `copilot-settings-json`.                                                                                                        |
+| `config_path` | ✅       | Project-relative path the hook config is written to (e.g. `.claude/settings.json`). Absolute paths are rejected.                                                                                                                          |
+| `events`      | ✅       | Map of **native** event name → **canonical** event name. The canonical side must be one of `SessionStart`, `Stop`, `SessionEnd`, `PreCompact`; the native side is whatever the CLI emits (e.g. `agentStop = "Stop"`). At least one entry. |
+
+### Worked TOML — copilot
+
+The shipped `copilot` profile exercises the non-default tuning knobs
+(`usage_grace_s`, `stop_without_result_nudges`, `subagent_stop_without_transcript`)
+and a camelCase event map — all discovered by the
+[copilot probe walkthrough](#worked-example-copilot) above:
+
+```toml
+name = "copilot"
+binary = "copilot"
+skill_tree = ".agents/skills"
+launch_args = ["-i"]
+bypass_args = ["--allow-all-tools", "--allow-all-paths"]
+usage_parser = "copilot-events"
+usage_grace_s = 8.0        # token totals land ~1s after agentStop, on session.shutdown
+stop_without_result_nudges = 5   # agentStop fires per response turn
+subagent_stop_without_transcript = true  # ignore subagent agentStops (empty transcriptPath)
+seed_files = [".github/copilot/settings.json"]
+
+[hooks]
+dialect = "copilot-settings-json"
+config_path = ".github/copilot/settings.json"
+events = { agentStop = "Stop", sessionStart = "SessionStart", sessionEnd = "SessionEnd" }
+```
+
+(The shipped profile under `automator/data/profiles/copilot.toml` also carries a
+`prompt_template` and `first_run_note`, trimmed here for focus — read it for the
+exact shipped values.)
+
+---
+
+## Writing a new adapter class
+
+Reach for this **only** when a CLI does not fit the tmux-injection + hook-signal
+transport — for example an HTTP/SSE service with no terminal. A CLI that _does_
+fit (a binary you launch in a pane that fires lifecycle hooks) needs no Python:
+reuse `generic.py` with a [profile](#profile-field-reference) instead of
+subclassing.
+
+The contract is the `CodingCLIAdapter` ABC in
+[`src/automator/adapters/base.py`](../src/automator/adapters/base.py).
+
+### Declare the three capability axes
+
+Set these class attributes so the engine can reason about transport quality
+instead of treating every CLI as a dumb terminal:
+
+- `injection` — how a prompt reaches the CLI: `tmux-initial-prompt` | `launch-flag` | `http`.
+- `observation` — how completion is detected: `hook-signal` | `sse` | `transcript-poll`.
+- `state` — where session state is readable: `local-jsonl` | `local-json-tree` | `remote`.
+
+### The data contracts
+
+Three frozen dataclasses cross the seam:
+
+- **`SessionSpec`** (engine → adapter) — `task_id`, `role` (`"dev"` / `"review"` /
+  `"retro"`), `prompt`, `cwd`, `env`, `model` (empty = CLI default),
+  `timeout_s`.
+- **`SessionHandle`** (returned by `start_session`) — `task_id`, `native_id` (tmux
+  window id, HTTP session id, …), `launched_ns` (wall-clock ns just before launch;
+  the floor for hook events).
+- **`SessionResult`** (returned by `wait_for_completion`) — `status` (one of
+  `completed`, `stalled`, `timeout`, `crashed`), `result_json`, `session_id`,
+  `transcript_path`.
+
+### Methods
+
+Required (abstract):
+
+- `start_session(spec) -> SessionHandle` — launch the session.
+- `wait_for_completion(handle, spec) -> SessionResult` — block until the session
+  ends (or stalls/times out), then report status.
+
+The base class provides `run(spec)`, the template that chains
+`start_session` → `wait_for_completion` → `kill` (the kill runs in a `finally`).
+You normally don't override it.
+
+Optional capabilities (default to "unsupported" / no-op):
+
+- `send_text(handle, text)` — nudge a running session. Raises `NotImplementedError`
+  by default (an HTTP adapter that can't inject mid-turn leaves it).
+- `interactive_argv(spec)` / `interactive_env(spec)` — argv + env that launch the
+  CLI **attached** to the caller's terminal, seeded with the prompt, for the
+  interactive escalation-resolution flow. HTTP adapters have no terminal and leave
+  `interactive_argv` raising.
+- `kill(handle)` — tear down the session (no-op default).
+- `read_usage(result) -> TokenUsage | None` — parse token usage from the result
+  (returns `None` by default).
+
+### References
+
+- [`adapters/opencode_http.py`](../src/automator/adapters/opencode_http.py) — the
+  worked **design stub** for a non-tmux (HTTP/SSE) transport.
+- [`adapters/mock.py`](../src/automator/adapters/mock.py) — the test-only reference
+  implementation.
+- [`adapters/generic.py`](../src/automator/adapters/generic.py) — the tmux +
+  hook-signal adapter to reuse with a profile rather than subclass.

@@ -69,6 +69,13 @@ class CLIProfile:
     # response turn (Copilot's agentStop) end a parallel-subagent phase across
     # several turns, so the global default of 1 declares them stalled too early.
     stop_without_result_nudges: int | None = None
+    # Some CLIs (Copilot) fire the turn-end hook for EVERY subagent turn too, with
+    # an empty transcriptPath and a tool-use session id (toolu_…) — not the main
+    # session's turn-end. When true, a Stop carrying no transcript_path is treated
+    # as a subagent stop and ignored, so the main session's real turn-end drives
+    # completion (and supplies the transcript for usage tallying). Without this a
+    # subagent's premature Stop reads as a result-less completion -> false stall.
+    subagent_stop_without_transcript: bool = False
     first_run_note: str = ""
     # project-relative gitignored configs (MCP/CLI settings) this CLI needs but
     # that a `git worktree add` checkout omits; provision_worktree copies them in
@@ -149,6 +156,7 @@ def _parse_profile(doc: dict, source: str) -> CLIProfile:
         usage_parser=usage_parser,
         usage_grace_s=usage_grace_s,
         stop_without_result_nudges=stop_nudges,
+        subagent_stop_without_transcript=bool(doc.get("subagent_stop_without_transcript", False)),
         first_run_note=str(doc.get("first_run_note", "")),
         seed_files=seed_files,
     )

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import gates, verify
+from . import devcontract, gates, verify
 from .adapters.base import CodingCLIAdapter, SessionResult, SessionSpec
 from .bmadconfig import ProjectPaths
 from .escalation import (
@@ -38,6 +38,7 @@ from .model import (
 from .plugins import HookBus, HookContext, PluginRegistry
 from .policy import Policy
 from .runs import kill_session
+from .sprintstatus import advance as sprint_advance
 from .sprintstatus import load as load_sprint_status
 from .sprintstatus import next_actionable, parse_selector
 from .statemachine import advance
@@ -360,8 +361,8 @@ class Engine:
         task.branch = unit.branch
         # A worktree checks out tracked files only, but the bmad-auto-* skill
         # trees + signal-hook config are typically gitignored, so they are absent
-        # from the fresh checkout. Re-lay them into the worktree so the session
-        # finds /bmad-auto-dev and the Stop-signal hook fires. Also seed the loaded
+        # from the fresh checkout. Re-lay them into the worktree so the bundled
+        # bmad-auto-* skills are present and the Stop-signal hook fires. Also seed the loaded
         # adapters' gitignored MCP/CLI configs so isolated sessions can reach their
         # MCP server (seed_adapter_defaults) plus any extra project-listed paths.
         profiles = self._worktree_profiles()
@@ -636,19 +637,30 @@ class Engine:
                 continue
             return story
 
-    def _rollback_or_pause(self, task: StoryTask) -> None:
-        """Recover from a failed in-place attempt.
+    def _rollback_or_pause(self, task: StoryTask, *, cause: str = "stopped") -> None:
+        """Recover from an in-place attempt that won't proceed.
 
-        With ``scm.rollback_on_failure`` OFF (default) the orchestrator never
-        touches the working tree: it emits a bold manual-recovery notice and
+        No-op when the tree is already at the attempt's baseline (nothing this
+        attempt touched): neither a reset nor a pause is needed. This is also
+        what lets the manual-recovery instructions terminate — after the operator
+        resets and resumes, the now-clean tree skips straight through instead of
+        re-pausing on the still-set ``baseline_commit``.
+
+        Otherwise, with ``scm.rollback_on_failure`` OFF (default) the orchestrator
+        never touches the working tree: it emits a bold manual-recovery notice and
         pauses the run (stop-and-wait), so nothing proceeds on a half-finished
         tree. With it ON, it does the safest possible automatic rollback —
         revert the attempt's tracked changes to baseline and delete only the
         untracked files this run created (the whole BMAD output folder and every
         pre-existing untracked file are preserved; there is no blanket
-        ``git clean``)."""
+        ``git clean``). ``cause`` tunes the manual notice's wording."""
+        if task.baseline_commit and not verify.attempt_dirty(
+            self.workspace.root, task.baseline_commit, task.baseline_untracked
+        ):
+            self.journal.append("rollback-skipped-clean", story_key=task.story_key)
+            return
         if not self.policy.scm.rollback_on_failure:
-            self._pause_for_manual_recovery(task, task.baseline_commit or "")
+            self._pause_for_manual_recovery(task, task.baseline_commit or "", cause=cause)
             return  # unreachable: _pause_for_manual_recovery always raises
         self.journal.append(
             "rollback-auto",
@@ -681,14 +693,29 @@ class Engine:
             keep=tuple(keep),
         )
 
-    def _pause_for_manual_recovery(self, task: StoryTask, baseline: str) -> None:
+    def _pause_for_manual_recovery(
+        self, task: StoryTask, baseline: str, *, cause: str = "stopped"
+    ) -> None:
         """OFF path: leave the tree untouched, surface bold manual-recovery
-        instructions, and pause the run. Always raises RunPaused."""
+        instructions, and pause the run. Always raises RunPaused. ``cause``
+        selects the wording: ``"resolved"`` for an escalation re-armed into a
+        clean rebuild, anything else for a stopped/abandoned attempt."""
         short = baseline[:12] or "the run's baseline commit"
+        if cause == "resolved":
+            why = (
+                f"Story **{task.story_key}**'s escalation was resolved; re-driving "
+                "it needs a clean baseline, but auto-rollback is OFF, so the "
+                "working tree was left exactly as-is for you to inspect.\n"
+            )
+        else:
+            why = (
+                f"Story **{task.story_key}**'s attempt was stopped and auto-rollback "
+                "is OFF, so the working tree was left exactly as-is for you to "
+                "inspect.\n"
+            )
         notice = (
             "**ACTION REQUIRED — manual rollback needed**\n"
-            f"Story **{task.story_key}** failed and auto-rollback is OFF, so the "
-            "working tree was left exactly as-is for you to inspect.\n"
+            f"{why}"
             "To discard this attempt yourself:\n"
             "  1. **BACK UP any untracked files you want to keep** — the reset "
             "below deletes uncommitted work.\n"
@@ -740,7 +767,8 @@ class Engine:
                     task.worktree_path = ""
                     task.branch = ""
                 elif task.baseline_commit:
-                    self._rollback_or_pause(task)
+                    self._rollback_or_pause(task, cause="resolved" if task.rearmed else "stopped")
+                task.rearmed = False  # past rollback (only reached when not paused)
                 task.phase = Phase.PENDING  # deliberate reset, not a normal transition
                 self._save()
                 self._run_story(task)
@@ -990,6 +1018,15 @@ class Engine:
             advance(task, Phase.DEV_VERIFY)
             outcome = None
             if result.status == "completed":
+                # generic-path single-writer for the bookkeeping the decoupled
+                # skill never touches (sprint-status for stories, the deferred-work
+                # ledger for sweep bundles), before verify reads that state.
+                self._post_dev_state_sync(task, result.result_json)
+                # carry the skill's follow-up-review recommendation (PR #2505)
+                # onto the task so _review_and_commit can gate the review loop.
+                task.followup_review_recommended = bool(
+                    (result.result_json or {}).get("followup_review_recommended", False)
+                )
                 outcome = self._verify_dev_artifacts(task, result.result_json)
                 if outcome.ok:
                     # deterministic gates run here too: a broken build must not
@@ -1027,12 +1064,55 @@ class Engine:
                     self._rollback_or_pause(task)
                 continue
             if decision.action == Action.DEFER:
+                self._record_dev_spec(task, result.result_json)
                 self._defer(task, decision.reason)
                 return False
+            self._record_dev_spec(task, result.result_json)
             self._escalate(task, decision.reason)
+
+    def _record_dev_spec(self, task: StoryTask, result_json: dict | None) -> None:
+        """Capture the spec the dev session produced when the session escalates or
+        defers. ``verify_dev`` only records ``task.spec_file`` on full success, so
+        a blocked/escalated spec (the common escalation case) would otherwise leave
+        it unset — and then escalation resolution (``runs.rearm_escalation`` flips
+        the spec's frontmatter status to ``ready-for-dev``) and deferral stashing
+        have no spec path to act on, so the re-drive HALTs on the stale ``blocked``
+        status. The synthesized result names the spec even on a HALT
+        (``devcontract.synthesize_result``). No-op once set or when the claimed
+        spec is absent."""
+        if task.spec_file:
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if spec_path.is_file():
+            task.spec_file = str(spec_path)
 
     def _review_and_commit(self, task: StoryTask) -> None:
         if not self.policy.review.enabled:
+            # review.enabled = false: the bmad-dev-auto session's own inline
+            # review is the only review; verify the deterministic gates + commit.
+            self._skip_review_and_commit(task)
+            return
+        # review.enabled = true (default): run a follow-up review session by
+        # re-invoking bmad-dev-auto on the done spec (BMAD-METHOD #2508 routes a
+        # `done` spec to a fresh step-04 review pass). The dev session self-
+        # finalizes the spec to done (no in-review handoff) and the orchestrator
+        # advances sprint-status at dev time (_post_dev_state_sync), so this runs
+        # as an independent second-opinion pass on a done spec before commit.
+        #
+        # review.trigger = "recommended" (default) gates that loop per-story on the
+        # bmad-dev-auto session's `followup_review_recommended` signal (PR #2505):
+        # the skill already self-reviews inline every story and only recommends an
+        # independent pass when its review-driven changes were significant. When it
+        # didn't, skip the separate session and let the deterministic gates +
+        # commit run (_skip_review_and_commit still validates them). "always"
+        # keeps the pre-#2505 behavior of reviewing every story. Either way the
+        # loop below is bounded by limits.max_review_cycles — the oscillation guard
+        # for orchestrator-applied follow-up review.
+        if self.policy.review.trigger == "recommended" and not task.followup_review_recommended:
+            self.journal.append("review-not-recommended", story_key=task.story_key)
             self._skip_review_and_commit(task)
             return
         if self._vetoed(self._emit("pre_review_phase", task), task):
@@ -1072,19 +1152,26 @@ class Engine:
             rj = result.result_json or {}
             for pref in preference_escalations(rj):
                 self.journal.append("preference-escalation", story_key=task.story_key, **pref)
+            # A review pass is itself a bmad-dev-auto run: it produces a spec
+            # (status done/blocked + a refreshed followup_review_recommended),
+            # not a result.json with `clean`. devcontract synthesizes that for us.
+            # Convergence = the pass finished `done` and no longer recommends an
+            # independent follow-up. A blocked pass is already handled above
+            # (decide_review_session PAUSEs on its synthesized CRITICAL).
+            status = str(rj.get("status", "")).strip()
+            followup = bool(rj.get("followup_review_recommended", False))
+            task.followup_review_recommended = followup  # latest pass wins
             self.journal.append(
                 "review-result",
                 story_key=task.story_key,
                 cycle=task.review_cycle,
-                clean=bool(rj.get("clean")),
-                patched=rj.get("patched", 0),
-                deferred=rj.get("deferred", 0),
-                dismissed=rj.get("dismissed", 0),
+                status=status,
+                followup_review_recommended=followup,
             )
             self._emit("post_review_result", task, role="review", result_json=rj)
             if self._run_workflows("post_review_result", task, task.review_cycle):
                 return
-            if rj.get("clean"):
+            if status == "done" and not followup:
                 outcome = self._verify_review(task)
                 if outcome.ok:
                     clean = True
@@ -1102,18 +1189,21 @@ class Engine:
                         self._defer(task, "verify commands kept failing after clean review")
                         return
                 continue
-            # not clean: patches were applied; loop runs a fresh review of the new tree
+            # still recommends a follow-up (or a non-terminal status): loop runs a
+            # fresh review pass on the newly-patched tree, bounded by max_review_cycles
 
         if not clean:
-            self._defer(task, "review did not converge to clean within budget")
+            self._defer(
+                task, "review did not converge within budget (still recommending a follow-up pass)"
+            )
             return
 
         self._commit(task)
 
     def _skip_review_and_commit(self, task: StoryTask) -> None:
-        """review.enabled = false: the dev session ran quick-dev's own internal
-        triple-review and finalized the story to done. No separate review
-        session runs — validate the deterministic gates (verify commands,
+        """review.enabled = false: no separate review session runs. The
+        bmad-dev-auto session ran its own inline review and finalized the
+        story to done. Validate the deterministic gates (verify commands,
         spec/sprint = done) and commit, repairing once if verify is fixable."""
         self.journal.append("review-skipped", story_key=task.story_key)
         outcome = self._verify_review(task)
@@ -1140,7 +1230,12 @@ class Engine:
             if ctx.proposed_commit_message:
                 message = ctx.proposed_commit_message
         try:
-            task.commit_sha = verify.commit_story(self.workspace.root, message)
+            # bmad-dev-auto commits its own work each iteration; the orchestrator
+            # squashes that chain plus its uncommitted bookkeeping back onto the
+            # pre-dev baseline as one commit carrying `message`. None means there
+            # was nothing to finalize (NO_VCS, or the tree already at baseline).
+            sha = verify.finalize_commit(self.workspace.root, task.baseline_commit, message)
+            task.commit_sha = sha or task.baseline_commit
         except verify.GitError as e:
             self._escalate(task, f"commit failed: {e}")
         advance(task, Phase.DONE)
@@ -1160,16 +1255,65 @@ class Engine:
     # SweepEngine reuses the dev/review pipeline for deferred-work bundles by
     # overriding these (bundles have no sprint-status entry).
 
+    def _generic_dev(self) -> bool:
+        """True when the orchestrator is driving the decoupled `bmad-dev-auto`
+        dev skill — currently the only supported dev skill, so always True. Kept
+        as the predicate the decoupled-path seams (B2/B4/B6/B7) read through, so
+        a future alternative dev skill can re-introduce the legacy branch."""
+        return self.policy.dev.skill == "bmad-dev-auto"
+
+    def _dev_review_enabled(self) -> bool:
+        """Spec-status/sprint semantics for verify_dev and the sprint sync. The
+        generic skill always self-finalizes to ``done`` (no in-review handoff), so
+        its dev artifacts are verified as the review-disabled case regardless of
+        whether a B3 deep review will later run; the legacy skill follows
+        ``policy.review.enabled``."""
+        if self._generic_dev():
+            return False
+        return self.policy.review.enabled
+
+    def _post_dev_state_sync(self, task: StoryTask, result_json: dict | None) -> None:
+        """Single-writer for the on-disk bookkeeping the generic skill never touches.
+
+        For a story that is sprint-status: the decoupled ``bmad-dev-auto`` skill
+        knows nothing of the automator's sprint board, so the orchestrator writes
+        it — and must do so
+        before ``verify_dev`` checks the sprint stage. Mirrors ``verify_dev``:
+        advance the story to the sprint stage matching the spec status the skill
+        actually reached, so a failed or blocked session (spec not at the success
+        status) never advances the sprint. No-op for the legacy path; SweepEngine
+        overrides this to flip the deferred-work ledger instead (bundles carry no
+        sprint-status entry)."""
+        if not self._generic_dev():
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if not spec_path.is_file():
+            return
+        review_enabled = self._dev_review_enabled()  # always False for the generic path
+        success_status = "in-review" if review_enabled else "done"
+        status = str(verify.read_frontmatter(spec_path).get("status", "")).strip()
+        if status != success_status:
+            return
+        target = "review" if review_enabled else "done"
+        sprint_advance(self.workspace.paths.sprint_status, task.story_key, target)
+
     def _verify_dev_artifacts(self, task: StoryTask, result_json: dict | None):
         return verify.verify_dev(
-            task, self.workspace.paths, result_json, review_enabled=self.policy.review.enabled
+            task, self.workspace.paths, result_json, review_enabled=self._dev_review_enabled()
         )
 
     def _verify_review(self, task: StoryTask):
         return verify.verify_review(task, self.workspace.paths, self.policy)
 
     def _review_prompt(self, task: StoryTask) -> str:
-        return f"/bmad-auto-review {task.spec_file}"
+        # Re-invoking bmad-dev-auto on a `done` spec resets review_loop_iteration
+        # and routes to step-04 for a fresh independent review pass (BMAD-METHOD
+        # #2508) — so the follow-up review is just another dev-skill run, no
+        # separate review skill. task.spec_file is set by verify_dev on success.
+        return f"/bmad-dev-auto {task.spec_file}"
 
     def _render_commit_template(self, task: StoryTask) -> str | None:
         """The configured commit message template with {story_key}/{run_id}
@@ -1215,8 +1359,10 @@ class Engine:
             "BMAD_AUTO_STORY_KEY": task.story_key,
         }
         if role == "dev" and not self.policy.review.enabled:
-            # tells the dev skill to run its own internal triple-review and
-            # finalize straight to done (the orchestrator runs no review session)
+            # signals that the orchestrator will run no follow-up review session.
+            # bmad-dev-auto always self-reviews inline (step-03 → step-04) and
+            # commits regardless, so this is a no-op for it; kept for any future
+            # dev skill that honors a skip-review mode (cf. the legacy seam).
             env["BMAD_AUTO_SKIP_REVIEW"] = "1"
         # plugin session hooks: a role-specific stage (pre_dev_session / fix /
         # migrate / ...) then the generic pre_session, both able to rewrite the
@@ -1277,10 +1423,36 @@ class Engine:
         return result
 
     def _dev_prompt(self, task: StoryTask, feedback: Path | None) -> str:
-        prompt = f"/bmad-auto-dev {task.story_key}"
-        if feedback is not None:
-            prompt += f" --feedback {feedback}"
-        return prompt
+        return self._generic_dev_prompt(task, feedback)
+
+    def _generic_dev_prompt(self, task: StoryTask, feedback: Path | None) -> str:
+        """Invocation for the generic `bmad-dev-auto` dev skill, which has no
+        `--feedback` flag: feedback is inlined as freeform intent pointing at the
+        existing spec. On a repair re-invocation the spec is first re-opened
+        (status → `in-progress`) so the skill's step-01 re-enters implement/review
+        on it rather than ingesting a finalized spec as mere context."""
+        if feedback is None:
+            return f"/bmad-dev-auto {task.story_key}"
+        self._reset_spec_for_repair(task)
+        spec_ref = task.spec_file or task.story_key
+        return (
+            f"/bmad-dev-auto Resume the autonomous dev session on the in-progress "
+            f"spec at `{spec_ref}`. The previous session's work failed deterministic "
+            f"verification; repair the working tree so verification passes without "
+            f"changing the spec's frozen intent contract. Verification evidence is "
+            f"in `{feedback}`."
+        )
+
+    def _reset_spec_for_repair(self, task: StoryTask) -> None:
+        """Re-open a generic-skill spec before a repair re-invocation. bmad-dev-auto
+        self-finalizes to `done` (or `in-review`); its step-01 routes such a spec to
+        "ingest as context, do not resume," so a repair must flip the frontmatter
+        `status` back to `in-progress` to re-enter implement/review in place against
+        the frozen intent contract. No-op when no spec is recorded yet (the prompt
+        then falls back to the story key)."""
+        if not task.spec_file:
+            return
+        devcontract.reset_spec_status(Path(task.spec_file), "in-progress")
 
     def _write_feedback(self, task: StoryTask, reason: str) -> Path:
         """Persist a verification failure where the next session can read it —

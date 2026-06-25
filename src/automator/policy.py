@@ -13,9 +13,11 @@ POLICY_FILE = Path(".automator") / "policy.toml"
 GATE_MODES = {"none", "per-epic", "per-story-spec-approval"}
 RETRO_MODES = {"never", "notify", "auto"}
 SWEEP_AUTO_MODES = {"never", "per-epic", "run-end"}
+REVIEW_TRIGGER_MODES = {"always", "recommended"}
 ISOLATION_MODES = {"none", "worktree"}
 BRANCH_PER_MODES = {"story", "run"}
 MERGE_STRATEGIES = {"ff", "merge", "squash"}
+DEV_SKILLS = {"bmad-dev-auto"}
 
 # Deprecated [engine] keys, folded into [plugins.unity] at load time. The
 # game-engine layer is now a plugin; [engine] is a one-release compatibility
@@ -58,10 +60,33 @@ class NotifyPolicy:
 
 @dataclass(frozen=True)
 class ReviewPolicy:
-    # When False, the orchestrator skips the separate bmad-auto-review session;
-    # the dev session runs quick-dev's own internal triple-review instead and
+    # When False, the orchestrator runs no follow-up review session; the
+    # bmad-dev-auto session's own inline review is the only review and it
     # finalizes the story straight to done.
     enabled: bool = True
+    # When (and only when) enabled is True, decides when the follow-up review
+    # session (a bmad-dev-auto re-invocation on the done spec) actually runs:
+    #   "recommended" (default) — only when the bmad-dev-auto session set
+    #       `followup_review_recommended: true` in the spec frontmatter. The
+    #       skill self-reviews inline on every story and flags this when its
+    #       review-driven changes were significant enough to warrant an
+    #       independent second opinion. Otherwise the deterministic gates run
+    #       and the story commits without a second review session.
+    #   "always" — run the second-opinion review on every story (pre-PR-#2505
+    #       behavior). The skill's recommendation flag is recorded but ignored.
+    # Either way the review loop is bounded by limits.max_review_cycles, which is
+    # the oscillation guard for orchestrator-applied follow-up review.
+    trigger: str = "recommended"
+
+
+@dataclass(frozen=True)
+class DevPolicy:
+    # Which inner dev skill the orchestrator drives. The sole supported value is
+    # "bmad-dev-auto", the generic upstream dev primitive (BMAD-METHOD PR #2500):
+    # it writes no result.json — the GenericDevAdapter synthesizes one from the
+    # spec the session leaves on disk. The field is retained (rather than inlined)
+    # as the seam for a future alternative dev skill; see DEV_SKILLS.
+    skill: str = "bmad-dev-auto"
 
 
 @dataclass(frozen=True)
@@ -257,6 +282,7 @@ class Policy:
     verify: VerifyPolicy = field(default_factory=VerifyPolicy)
     notify: NotifyPolicy = field(default_factory=NotifyPolicy)
     review: ReviewPolicy = field(default_factory=ReviewPolicy)
+    dev: DevPolicy = field(default_factory=DevPolicy)
     adapter: AdapterPolicy = field(default_factory=AdapterPolicy)
     sweep: SweepPolicy = field(default_factory=SweepPolicy)
     scm: ScmPolicy = field(default_factory=ScmPolicy)
@@ -371,6 +397,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
     verify_d = _section(doc, "verify")
     notify_d = _section(doc, "notify")
     review_d = _section(doc, "review")
+    dev_d = _section(doc, "dev")
     adapter_d = _section(doc, "adapter")
     sweep_d = _section(doc, "sweep")
     scm_d = _section(doc, "scm")
@@ -417,7 +444,17 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         desktop=bool(notify_d.get("desktop", NotifyPolicy.desktop)),
         file=bool(notify_d.get("file", NotifyPolicy.file)),
     )
-    review = ReviewPolicy(enabled=bool(review_d.get("enabled", ReviewPolicy.enabled)))
+    review = ReviewPolicy(
+        enabled=bool(review_d.get("enabled", ReviewPolicy.enabled)),
+        trigger=str(review_d.get("trigger", ReviewPolicy.trigger)).strip(),
+    )
+    if review.trigger not in REVIEW_TRIGGER_MODES:
+        raise PolicyError(
+            f"review.trigger must be one of {sorted(REVIEW_TRIGGER_MODES)}: got {review.trigger!r}"
+        )
+    dev = DevPolicy(skill=str(dev_d.get("skill", DevPolicy.skill)))
+    if dev.skill not in DEV_SKILLS:
+        raise PolicyError(f"dev.skill must be one of {sorted(DEV_SKILLS)}: got {dev.skill!r}")
     for legacy, replacement in (
         ("model_dev", "[adapter.dev] model"),
         ("model_review", "[adapter.review] model"),
@@ -546,6 +583,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         verify=verify,
         notify=notify,
         review=review,
+        dev=dev,
         adapter=adapter,
         sweep=sweep,
         scm=scm,
@@ -608,11 +646,18 @@ desktop = true               # notify-send, best-effort
 file = true                  # ATTENTION file in the run dir
 
 [review]
-# enabled = true  -> run the separate bmad-auto-review session after each dev pass
-#                    (quick-dev's own internal triple-review is skipped in this mode).
-# enabled = false -> skip that session; the dev pass runs quick-dev's internal
-#                    triple-review instead and finalizes the story straight to done.
+# enabled = true  -> run a follow-up review session (bmad-dev-auto re-invoked on
+#                    the done spec for a fresh review pass) after a dev pass.
+# enabled = false -> skip that session; the bmad-dev-auto pass's own inline review
+#                    is the only review and it finalizes the story straight to done.
 enabled = true
+# trigger (only consulted when enabled = true) decides WHEN that session runs:
+#   "recommended" -> only when the bmad-dev-auto pass flags the story with
+#                    `followup_review_recommended: true` (it self-reviews inline
+#                    and flags this when its changes warrant an independent pass).
+#   "always"      -> run the second-opinion review on every story.
+# The loop is bounded by limits.max_review_cycles either way.
+trigger = "recommended"
 
 [adapter]
 name = "claude"              # claude | codex | gemini | <custom .automator/profiles/*.toml>
