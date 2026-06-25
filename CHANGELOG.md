@@ -105,6 +105,12 @@ breaking changes may land in a minor release.
   per-profile `subagent_stop_without_transcript` (true for `copilot`) ignores a `Stop` carrying no
   transcript, so the main session's real turn-end drives completion — and restores usage tallying,
   since that Stop carries the transcript.
+- **Process liveness/termination no longer risks signaling the wrong process.** A corrupt
+  `engine.pid` read as `0` or negative would make `os.kill` target a process group — for `0`, the
+  orchestrator's own — so `pid_alive`/`terminate_pid` now reject non-positive PIDs before signaling.
+  The remaining liveness checks (`runs.py`, `tui/data.py`) that called `os.kill(pid, 0)` directly now
+  route through `pid_alive`, since on Windows `os.kill(pid, 0)` maps to `TerminateProcess` and is
+  destructive; a CI guard blocks bare `os.kill(_, 0)` from regressing.
 
 ## [0.6.4] — 2026-06-21
 
