@@ -37,7 +37,7 @@ def test_init_without_policy_defaults_to_claude(tmp_path):
     assert (tmp_path / ".claude" / "settings.json").is_file()
     assert not (tmp_path / ".codex").exists()
     # init installs the bundled skills by default
-    assert (tmp_path / ".claude" / "skills" / "bmad-auto-review" / "SKILL.md").is_file()
+    assert (tmp_path / ".claude" / "skills" / "bmad-auto-sweep" / "SKILL.md").is_file()
 
 
 def test_init_no_skills_flag(tmp_path):
@@ -47,7 +47,7 @@ def test_init_no_skills_flag(tmp_path):
 
 
 def test_init_force_skills_flag(tmp_path):
-    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-review" / "SKILL.md"
+    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-sweep" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
     skill_md.write_text("CUSTOM", encoding="utf-8")
     assert cli.main(["init", "--project", str(tmp_path), "--force-skills"]) == 0
@@ -358,6 +358,22 @@ def test_sweep_dry_run_renders_triage_adapter_from_policy(project, capsys):
 def test_sweep_dry_run_no_ledger(project, capsys):
     assert cli._sweep_dry_run(project, policy_mod.load(None)) == 0
     assert "no deferred-work ledger" in capsys.readouterr().out
+
+
+def test_make_adapters_review_synthesizes_from_spec(project):
+    """Both dev AND review are bmad-dev-auto runs that write no result.json, so
+    both roles must get the spec-synthesizing GenericDevAdapter; triage (a real
+    result.json skill) stays a plain GenericAdapter."""
+    from automator.adapters.generic import GenericAdapter, GenericDevAdapter
+
+    install_bmad_config(project)
+    adapters = cli._make_adapters(
+        project.project, project.project / ".automator" / "runs" / "r", policy_mod.load(None)
+    )
+    assert isinstance(adapters["dev"], GenericDevAdapter)
+    assert isinstance(adapters["review"], GenericDevAdapter)
+    assert isinstance(adapters["triage"], GenericAdapter)
+    assert not isinstance(adapters["triage"], GenericDevAdapter)
 
 
 class _StubEngine:

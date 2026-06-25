@@ -132,11 +132,11 @@ def test_install_into_full(tmp_path):
     assert ".automator/runs/" in gitignore
     assert ".automator/cache/" in gitignore  # engine plugins' rebuildable caches
 
-    # all four skills land in claude's tree, with nested files intact
+    # all bundled skills land in claude's tree, with nested files intact
     skills_dir = tmp_path / ".claude" / "skills"
     for skill in MODULE_SKILLS:
         assert (skills_dir / skill / "SKILL.md").is_file()
-    assert (skills_dir / "bmad-auto-review" / "steps" / "step-01-gather-context.md").is_file()
+    assert (skills_dir / "bmad-auto-sweep" / "deferred-work-format.md").is_file()
 
     # second run: idempotent, does not duplicate
     assert install_into(tmp_path) == 0
@@ -181,11 +181,11 @@ def test_install_skills_skip_existing(tmp_path):
     assert install_into(tmp_path) == 0
     assert skill_md.read_text() == "CUSTOM"
     # but a skill that was absent still gets installed
-    assert (tmp_path / ".claude" / "skills" / "bmad-auto-review" / "SKILL.md").is_file()
+    assert (tmp_path / ".claude" / "skills" / "bmad-auto-resolve" / "SKILL.md").is_file()
 
 
 def test_install_skills_force(tmp_path):
-    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-review" / "SKILL.md"
+    skill_md = tmp_path / ".claude" / "skills" / "bmad-auto-resolve" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
     skill_md.write_text("CUSTOM", encoding="utf-8")
     assert install_into(tmp_path, force_skills=True) == 0
@@ -236,8 +236,8 @@ def test_provision_worktree_covers_multiple_profiles(tmp_path):
     claude, codex = get_profile("claude"), get_profile("codex")
     provision_worktree(wt, [claude, codex], repo)
 
-    assert (wt / claude.skill_tree / "bmad-auto-review" / "SKILL.md").is_file()
-    assert (wt / codex.skill_tree / "bmad-auto-review" / "SKILL.md").is_file()
+    assert (wt / claude.skill_tree / "bmad-auto-sweep" / "SKILL.md").is_file()
+    assert (wt / codex.skill_tree / "bmad-auto-sweep" / "SKILL.md").is_file()
     assert (wt / claude.hooks.config_path).is_file()
     assert (wt / codex.hooks.config_path).is_file()
 
@@ -247,14 +247,14 @@ def test_provision_worktree_does_not_clobber_existing_skill(tmp_path):
     is left untouched, so no diff is merged back."""
     wt, repo = tmp_path / "wt", tmp_path / "repo"
     claude = get_profile("claude")
-    existing = wt / claude.skill_tree / "bmad-auto-review" / "SKILL.md"
+    existing = wt / claude.skill_tree / "bmad-auto-sweep" / "SKILL.md"
     existing.parent.mkdir(parents=True)
     existing.write_text("COMMITTED", encoding="utf-8")
 
     provision_worktree(wt, [claude], repo)
     assert existing.read_text() == "COMMITTED"
     # a skill that was absent is still laid down
-    assert (wt / claude.skill_tree / "bmad-auto-review" / "SKILL.md").is_file()
+    assert (wt / claude.skill_tree / "bmad-auto-resolve" / "SKILL.md").is_file()
 
 
 def test_provision_worktree_empty_profiles_is_noop(tmp_path):
@@ -277,17 +277,14 @@ def test_provision_worktree_copies_base_skills_from_repo(tmp_path):
     assert (wt / claude.skill_tree / "bmad-dev-auto" / "step-04-review.md").is_file()
 
 
-def test_missing_base_skills_reports_absent_incomplete_and_review_gate(tmp_path):
+def test_missing_base_skills_reports_absent_and_incomplete(tmp_path):
     claude = get_profile("claude")
-    # nothing installed → dev primitive + both review hunters reported missing
+    # nothing installed → dev primitive + both inline review hunters reported
+    # missing (the hunters are always required — bmad-dev-auto's step-04 invokes
+    # them on every run, regardless of the orchestrator's follow-up review)
     problems = missing_base_skills(tmp_path, [claude.skill_tree])
     assert len(problems) == 3
     assert all("install the BMad Method" in p for p in problems)
-
-    # review disabled → only the dev primitive is required
-    problems = missing_base_skills(tmp_path, [claude.skill_tree], review_enabled=False)
-    assert len(problems) == 1
-    assert "bmad-dev-auto" in problems[0]
 
     # install everything → no problems
     _install_base_skills(tmp_path, claude.skill_tree)

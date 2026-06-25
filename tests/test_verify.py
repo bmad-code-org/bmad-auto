@@ -369,6 +369,58 @@ def test_commit_story(project):
     assert verify.worktree_clean(project.project)
 
 
+def test_finalize_commit_squashes_chain_to_one(project):
+    """The skill commits each iteration; finalize_commit collapses the whole
+    chain since baseline (plus the orchestrator's uncommitted bookkeeping) into
+    ONE commit carrying the orchestrator's message."""
+    baseline = verify.rev_parse_head(project.project)
+    # two "skill" commits since baseline (a dev pass + a review pass)
+    (project.project / "src.txt").write_text("dev work\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: implement")
+    (project.project / "src.txt").write_text("dev work\nreview fix\n")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "skill: review fix")
+    # an uncommitted orchestrator bookkeeping write (e.g. sprint-status)
+    (project.project / "sprint.txt").write_text("done\n")
+
+    sha = verify.finalize_commit(project.project, baseline, "story 1-1-a: via bmad-auto")
+
+    assert sha is not None and sha != baseline
+    assert verify.worktree_clean(project.project)
+    # exactly one commit on top of baseline, with the orchestrator's message
+    log = git(project.project, "log", "--format=%s", f"{baseline}..HEAD")
+    assert log.splitlines() == ["story 1-1-a: via bmad-auto"]
+    # all the content (skill commits + bookkeeping) is in that single commit
+    assert (project.project / "src.txt").read_text() == "dev work\nreview fix\n"
+    assert (project.project / "sprint.txt").read_text() == "done\n"
+
+
+def test_finalize_commit_no_vcs_or_missing_baseline_returns_none(project):
+    assert verify.finalize_commit(project.project, None, "msg") is None
+    assert verify.finalize_commit(project.project, "NO_VCS", "msg") is None
+
+
+def test_finalize_commit_nothing_to_finalize_returns_none(project):
+    """Tree already equals baseline (no skill commits, no bookkeeping delta)."""
+    baseline = verify.rev_parse_head(project.project)
+    assert verify.finalize_commit(project.project, baseline, "msg") is None
+    assert verify.rev_parse_head(project.project) == baseline
+
+
+def test_finalize_commit_only_uncommitted_bookkeeping(project):
+    """No skill commits, just the orchestrator's uncommitted writes → one commit."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.project / "src.txt").write_text("uncommitted change\n")
+
+    sha = verify.finalize_commit(project.project, baseline, "story: via bmad-auto")
+
+    assert sha is not None and sha != baseline
+    assert verify.worktree_clean(project.project)
+    log = git(project.project, "log", "--format=%s", f"{baseline}..HEAD")
+    assert log.splitlines() == ["story: via bmad-auto"]
+
+
 def test_commit_paths_commits_only_listed(project):
     base = verify.rev_parse_head(project.project)
     (project.project / "src.txt").write_text("ledger-ish edit\n")  # the "tracked" target

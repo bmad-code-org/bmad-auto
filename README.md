@@ -40,7 +40,7 @@ Inspired by the original [bmad-automator](https://github.com/bmad-code-org/bmad-
 
 - **Python 3.11+**, **tmux**, and a supported coding CLI — `claude` by default; `codex` and `gemini` via [profiles](#other-coding-clis).
 - **Linux or macOS** (or **Windows via WSL**, which _is_ Linux — it runs as-is). tmux is the one terminal-multiplexer backend today, but it now sits behind a pluggable seam (`TerminalMultiplexer`), so a native-Windows backend can slot in later without touching the engine — see the [adapter authoring guide](docs/adapter-authoring-guide.md#two-axes-cli-vs-transport). Native Windows is not yet shipped.
-- A **BMAD v6 project** (`_bmad/bmm/config.yaml`, a `sprint-status.yaml` from `bmad-sprint-planning`) with the upstream `bmad-dev-auto` skill and the automator skill module from this repo installed (`bmad-auto-review`, `bmad-auto-sweep` — see [Installing the skill module](#installing-the-skill-module)). Standard BMAD skills stay untouched.
+- A **BMAD v6 project** (`_bmad/bmm/config.yaml`, a `sprint-status.yaml` from `bmad-sprint-planning`) with the upstream `bmad-dev-auto` skill and the automator skill module from this repo installed (`bmad-auto-resolve`, `bmad-auto-sweep` — see [Installing the skill module](#installing-the-skill-module)). Standard BMAD skills stay untouched.
 
 ## Quick start
 
@@ -159,22 +159,23 @@ Press **`g`** to edit `.automator/policy.toml` in a form grouped by section — 
 sprint-status.yaml: 1-2-account-mgmt: ready-for-dev
   │
   ├─ DEV     tmux window: claude "/bmad-dev-auto 1-2-account-mgmt"
-  │          bmad-dev-auto: plans a 1.5–4k-token spec,
-  │          auto-approves it, implements, syncs sprint → review,
-  │          writes result.json … Stop hook signals the orchestrator
-  ├─ VERIFY  spec exists · status in-review · baseline matches · diff non-empty
+  │          bmad-dev-auto: plans a 1.5–4k-token spec, auto-approves it,
+  │          implements, self-reviews inline (Blind + Edge-Case hunters),
+  │          commits, finalizes spec → done … Stop hook signals the orchestrator
+  ├─ VERIFY  spec exists · status done · baseline matches · diff non-empty
   │          · run [verify].commands (pytest, ruff…) — a broken build never
   │          reaches review; a failure spawns a fix session fed the output
-  ├─ REVIEW  fresh window: claude "/bmad-auto-review <spec>"
-  │          static prefilter → 3 layers (Blind Hunter / Edge Case Hunter /
-  │          Acceptance Auditor) → verify findings against code → triage →
-  │          auto-apply patches → ledger → defer ambiguity → done when clean
-  │          (bounded loop, default 3 cycles)
+  ├─ REVIEW  fresh window: claude "/bmad-dev-auto <done spec>" — re-invoking on a
+  │  (gated) done spec runs a fresh independent step-04 review pass (Blind + Edge-Case
+  │          hunters → triage → auto-apply patches → ledger → defer ambiguity →
+  │          commit). Gated on the skill's `followup_review_recommended` flag
+  │          (review.trigger = "recommended") or every story ("always"); bounded
+  │          loop, default 3 cycles
   ├─ VERIFY  spec done · sprint done · run [verify].commands again — a failure
   │          routes a feedback-driven dev fix session, then a fresh review cycle
-  └─ COMMIT  orchestrator commits (then, under [scm] isolation = "worktree",
-             merges the unit branch back into the target branch locally);
-             epic boundary → gate / retro notification
+  └─ COMMIT  orchestrator squashes the iteration's commits into one story commit
+             (then, under [scm] isolation = "worktree", merges the unit branch
+             back into the target branch locally); epic boundary → gate / retro
 ```
 
 **Failure handling:** bounded dev retries (verify-command failures keep the tree and feed the failing output to the next session via `--feedback`; other failures roll back to baseline), **plateau-defer** when review won't converge (story skipped, spec stashed into the run dir, `deferred-work.md` additions preserved, run continues), and typed escalations — `CRITICAL` pauses the run and notifies you (desktop + `ATTENTION` file), `PREFERENCE` is journaled and the run continues.
@@ -199,8 +200,9 @@ bmad-auto sweep [--no-prompt] [--decisions-only] [--max-bundles N] [--repeat] [-
   │           recommendation); answers land in the ledger as `decision:`
   │           lines. Unattended runs skip this and leave decisions open.
   └─ BUNDLES  each bundle runs the normal pipeline: bmad-dev-auto (on the bundle
-              spec) → bmad-auto-review → verify commands → commit. The review gate also
-              checks every bundle entry is `status: done` in the ledger.
+              spec, then re-invoked on the done spec for review) → verify commands
+              → commit. The review gate also checks every bundle entry is
+              `status: done` in the ledger.
 ```
 
 **Answering missed decisions later.** An unattended sweep (`--no-prompt`) skips decisions, and an interactive one can be abandoned before you answer them all — those answers would otherwise be lost, since triage re-derives the decision set from the ledger every run. `bmad-auto decisions` (or press `d` in the TUI) surfaces every decision past sweeps left unanswered, reconstructed from their triage output, and lets you answer them out of band. A `close` is applied immediately; a `build`/`keep-open` is saved to `.automator/decisions.json` and consumed by the next sweep (build → bundle, keep-open → recorded) with no re-prompt. `--list` shows them without answering; `bmad-auto status` reports the outstanding count.
@@ -211,15 +213,14 @@ Bundle dev sessions can themselves append new deferred entries (split-off goals,
 
 ## Installing the skill module
 
-The orchestrator drives the upstream `bmad-dev-auto` skill as its inner dev primitive — unmodified, so there is no fork to keep in sync — plus its own bundled `bmad-auto-*` skills for review, escalation, sweep, and setup. Your standard BMAD install is never modified. The four bundled skills ship in the `bmad-auto` wheel (canonical source: `src/automator/data/skills/`, BMAD module code `bauto`) so `bmad-auto init` lays them down for you; `bmad-dev-auto` is a prerequisite installed by the BMad Method (bmm) module:
+The orchestrator drives the upstream `bmad-dev-auto` skill as its inner dev primitive — unmodified, so there is no fork to keep in sync; it both implements and (re-invoked on the done spec) runs the follow-up review — plus its own bundled `bmad-auto-*` skills for escalation, sweep, and setup. Your standard BMAD install is never modified. The three bundled skills ship in the `bmad-auto` wheel (canonical source: `src/automator/data/skills/`, BMAD module code `bauto`) so `bmad-auto init` lays them down for you; `bmad-dev-auto` is a prerequisite installed by the BMad Method (bmm) module:
 
-| Skill               | Role                                                                      |
-| ------------------- | ------------------------------------------------------------------------- |
-| `bmad-dev-auto`     | unattended implementation (**upstream** — bmm prerequisite, not bundled)  |
-| `bmad-auto-review`  | unattended adversarial review (fork of `bmad-code-review`)                |
-| `bmad-auto-resolve` | interactive CRITICAL-escalation resolution (`/bmad-auto-resolve <story>`) |
-| `bmad-auto-sweep`   | deferred-work ledger triage (automation-only)                             |
-| `bmad-auto-setup`   | registers the module in `_bmad/` config + help                            |
+| Skill               | Role                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------- |
+| `bmad-dev-auto`     | unattended implementation + follow-up review (**upstream** — bmm prerequisite, not bundled) |
+| `bmad-auto-resolve` | interactive CRITICAL-escalation resolution (`/bmad-auto-resolve <story>`)                   |
+| `bmad-auto-sweep`   | deferred-work ledger triage (automation-only)                                               |
+| `bmad-auto-setup`   | registers the module in `_bmad/` config + help                                              |
 
 **Via uv + `bmad-auto init` (self-sufficient).** Installing the tool and running `init` is all you need — `init` installs the `bmad-auto-*` skills into `.claude/skills/` (claude) and/or `.agents/skills/` (codex/gemini) for the CLIs you select, alongside the hooks and policy:
 
@@ -269,9 +270,7 @@ claude "/bmad-auto-setup accept all defaults"
 
 See **[docs/setup-guide.md](docs/setup-guide.md)** for the full walkthrough — choosing CLIs, installing the tool and TUI together or separately, and initializing codex/gemini.
 
-The bundled skills must be installed together: `bmad-auto-review` and `bmad-auto-sweep` both reference `bmad-auto-review/deferred-work-format.md` (sibling skill directory). If you carry a `_bmad/custom/bmad-code-review.toml` customization override, duplicate it as `bmad-auto-review.toml` — overrides are keyed by skill directory name. The upstream `bmad-dev-auto` skill is driven unmodified, so its own `customize.toml` applies as-is.
-
-To pull in upstream BMAD improvements to the review fork, diff the upstream skill against it (`diff -r <bmad-install>/bmad-code-review src/automator/data/skills/bmad-auto-review`) and merge manually; the fork keeps the upstream file structure to make this easy. `bmad-dev-auto` needs no merge — it is consumed directly from the bmm module.
+The bundled skills must be installed together with the upstream `bmad-dev-auto` dev session: `bmad-auto-sweep` owns the canonical `deferred-work-format.md` that the orchestrator normalizes the ledger to, and `bmad-dev-auto` appends the flat deferred-work entries it normalizes. The `bmad-dev-auto` skill is driven unmodified, so its own `customize.toml` applies as-is; it needs no merge — it is consumed directly from the bmm module. There is no review fork to keep in sync: review is just a re-invocation of `bmad-dev-auto` on the done spec.
 
 ## Policy (`.automator/policy.toml`)
 

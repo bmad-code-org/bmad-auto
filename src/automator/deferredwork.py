@@ -1,10 +1,12 @@
 """Deterministic reading and editing of the deferred-work ledger.
 
 The ledger (`{implementation_artifacts}/deferred-work.md`) is append-only
-markdown written by skills per bmad-auto-review/deferred-work-format.md:
-`### DW-<seq>: <title>` headings with `origin:`/`location:`/`reason:`/`status:`
-field lines. The orchestrator never trusts an LLM to have edited it — status
-flips and decision records happen here, and gates re-read the file from disk.
+markdown in the canonical form documented at
+bmad-auto-sweep/deferred-work-format.md: `### DW-<seq>: <title>` headings with
+`origin:`/`location:`/`reason:`/`status:` field lines. The inner bmad-dev-auto
+session appends flatter entries that the orchestrator normalizes on sweep. The
+orchestrator never trusts an LLM to have edited it — status flips and decision
+records happen here, and gates re-read the file from disk.
 """
 
 from __future__ import annotations

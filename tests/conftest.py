@@ -143,22 +143,28 @@ generic_dev_effect = dev_effect
 
 
 def review_effect(paths: ProjectPaths, story_key: str, clean: bool, patched: int = 0):
-    """Simulate a code-review automation session."""
+    """Simulate a follow-up review pass — a bmad-dev-auto re-invocation on the
+    done spec (BMAD-METHOD #2508). A review pass always finalizes the spec to
+    ``done`` and re-sets `followup_review_recommended`; the orchestrator
+    synthesizes the result the same way it does for a dev pass. ``clean=True``
+    means the pass no longer recommends a follow-up (the loop converges);
+    ``clean=False`` means it still does (the orchestrator loops). ``patched`` is
+    accepted for call-site compatibility and otherwise unused."""
 
     def effect(spec: SessionSpec) -> SessionResult:
-        if clean:
-            sp = spec_path(paths, story_key)
-            baseline = _spec_baseline(sp)
-            write_spec(sp, "done", baseline)
-            set_sprint(paths, story_key, "done")
+        sp = spec_path(paths, story_key)
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
+        set_sprint(paths, story_key, "done")
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": patched,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )
@@ -280,20 +286,23 @@ def bundle_dev_effect(
 
 
 def bundle_review_effect(paths: ProjectPaths, name: str, clean: bool = True):
-    """Simulate a code-review session over a bundle spec (no sprint sync)."""
+    """Simulate a follow-up review pass over a bundle spec — a bmad-dev-auto
+    re-invocation on the done bundle spec (no sprint-status entry for bundles).
+    ``clean=True`` converges; ``clean=False`` keeps recommending a follow-up."""
 
     def effect(spec: SessionSpec) -> SessionResult:
-        if clean:
-            sp = bundle_spec_path(paths, name)
-            write_spec(sp, "done", _spec_baseline(sp))
+        sp = bundle_spec_path(paths, name)
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": 0,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": f"dw-{name}",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )

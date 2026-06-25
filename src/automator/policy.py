@@ -60,12 +60,12 @@ class NotifyPolicy:
 
 @dataclass(frozen=True)
 class ReviewPolicy:
-    # When False, the orchestrator skips the separate bmad-auto-review session;
-    # the bmad-dev-auto session runs its own inline review instead and
+    # When False, the orchestrator runs no follow-up review session; the
+    # bmad-dev-auto session's own inline review is the only review and it
     # finalizes the story straight to done.
     enabled: bool = True
-    # When (and only when) enabled is True, decides when the separate
-    # bmad-auto-review session actually runs:
+    # When (and only when) enabled is True, decides when the follow-up review
+    # session (a bmad-dev-auto re-invocation on the done spec) actually runs:
     #   "recommended" (default) — only when the bmad-dev-auto session set
     #       `followup_review_recommended: true` in the spec frontmatter. The
     #       skill self-reviews inline on every story and flags this when its
@@ -646,9 +646,10 @@ desktop = true               # notify-send, best-effort
 file = true                  # ATTENTION file in the run dir
 
 [review]
-# enabled = true  -> run the separate bmad-auto-review session after a dev pass.
-# enabled = false -> skip that session; the bmad-dev-auto pass runs its own inline
-#                    review instead and finalizes the story straight to done.
+# enabled = true  -> run a follow-up review session (bmad-dev-auto re-invoked on
+#                    the done spec for a fresh review pass) after a dev pass.
+# enabled = false -> skip that session; the bmad-dev-auto pass's own inline review
+#                    is the only review and it finalizes the story straight to done.
 enabled = true
 # trigger (only consulted when enabled = true) decides WHEN that session runs:
 #   "recommended" -> only when the bmad-dev-auto pass flags the story with

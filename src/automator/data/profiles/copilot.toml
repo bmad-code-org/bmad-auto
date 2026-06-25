@@ -30,8 +30,8 @@ usage_parser = "copilot-events"
 # the transcript before the totals land (reads as 0/None).
 usage_grace_s = 8.0
 # agentStop fires PER response turn, so a parallel-subagent review (e.g. the
-# bmad-auto-review layers) ends several turns; the global default of 1 nudge
-# would declare it stalled on the 2nd Stop. 5 lets a multi-turn review finish.
+# bmad-dev-auto step-04 hunter layers) ends several turns; the global default of
+# 1 nudge would declare it stalled on the 2nd Stop. 5 lets a multi-turn review finish.
 stop_without_result_nudges = 5
 first_run_note = "run `copilot` once and authenticate (gh / Copilot subscription); requires Copilot CLI GA (>= 2026-02)"
 skill_tree = ".agents/skills"

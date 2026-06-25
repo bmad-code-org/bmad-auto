@@ -44,7 +44,7 @@ commits the migrated ledger after validating it.
    orchestrator fails the migration if a pre-existing entry's status changes
    or an entry disappears.
 3. Replace all legacy content with canonical entries per
-   `bmad-auto-review/deferred-work-format.md`. Number new entries continuing
+   `./deferred-work-format.md`. Number new entries continuing
    from the highest existing `DW-<n>` (start at DW-1 when none exist), in
    the items' original file order. Per item:
    - `### DW-<n>: <title>` — the manifest title, refined from the original

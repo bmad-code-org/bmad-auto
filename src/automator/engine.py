@@ -1095,11 +1095,12 @@ class Engine:
             # review is the only review; verify the deterministic gates + commit.
             self._skip_review_and_commit(task)
             return
-        # review.enabled = true (default): run the separate bmad-auto-review
-        # second-opinion session over the dev spec. The dev session self-finalizes
-        # the spec to done (no in-review handoff) and the orchestrator advances
-        # sprint-status at dev time (_post_dev_state_sync), so this review runs as
-        # an adversarial pass on a done spec before commit.
+        # review.enabled = true (default): run a follow-up review session by
+        # re-invoking bmad-dev-auto on the done spec (BMAD-METHOD #2508 routes a
+        # `done` spec to a fresh step-04 review pass). The dev session self-
+        # finalizes the spec to done (no in-review handoff) and the orchestrator
+        # advances sprint-status at dev time (_post_dev_state_sync), so this runs
+        # as an independent second-opinion pass on a done spec before commit.
         #
         # review.trigger = "recommended" (default) gates that loop per-story on the
         # bmad-dev-auto session's `followup_review_recommended` signal (PR #2505):
@@ -1151,19 +1152,26 @@ class Engine:
             rj = result.result_json or {}
             for pref in preference_escalations(rj):
                 self.journal.append("preference-escalation", story_key=task.story_key, **pref)
+            # A review pass is itself a bmad-dev-auto run: it produces a spec
+            # (status done/blocked + a refreshed followup_review_recommended),
+            # not a result.json with `clean`. devcontract synthesizes that for us.
+            # Convergence = the pass finished `done` and no longer recommends an
+            # independent follow-up. A blocked pass is already handled above
+            # (decide_review_session PAUSEs on its synthesized CRITICAL).
+            status = str(rj.get("status", "")).strip()
+            followup = bool(rj.get("followup_review_recommended", False))
+            task.followup_review_recommended = followup  # latest pass wins
             self.journal.append(
                 "review-result",
                 story_key=task.story_key,
                 cycle=task.review_cycle,
-                clean=bool(rj.get("clean")),
-                patched=rj.get("patched", 0),
-                deferred=rj.get("deferred", 0),
-                dismissed=rj.get("dismissed", 0),
+                status=status,
+                followup_review_recommended=followup,
             )
             self._emit("post_review_result", task, role="review", result_json=rj)
             if self._run_workflows("post_review_result", task, task.review_cycle):
                 return
-            if rj.get("clean"):
+            if status == "done" and not followup:
                 outcome = self._verify_review(task)
                 if outcome.ok:
                     clean = True
@@ -1181,10 +1189,13 @@ class Engine:
                         self._defer(task, "verify commands kept failing after clean review")
                         return
                 continue
-            # not clean: patches were applied; loop runs a fresh review of the new tree
+            # still recommends a follow-up (or a non-terminal status): loop runs a
+            # fresh review pass on the newly-patched tree, bounded by max_review_cycles
 
         if not clean:
-            self._defer(task, "review did not converge to clean within budget")
+            self._defer(
+                task, "review did not converge within budget (still recommending a follow-up pass)"
+            )
             return
 
         self._commit(task)
@@ -1219,7 +1230,12 @@ class Engine:
             if ctx.proposed_commit_message:
                 message = ctx.proposed_commit_message
         try:
-            task.commit_sha = verify.commit_story(self.workspace.root, message)
+            # bmad-dev-auto commits its own work each iteration; the orchestrator
+            # squashes that chain plus its uncommitted bookkeeping back onto the
+            # pre-dev baseline as one commit carrying `message`. None means there
+            # was nothing to finalize (NO_VCS, or the tree already at baseline).
+            sha = verify.finalize_commit(self.workspace.root, task.baseline_commit, message)
+            task.commit_sha = sha or task.baseline_commit
         except verify.GitError as e:
             self._escalate(task, f"commit failed: {e}")
         advance(task, Phase.DONE)
@@ -1293,7 +1309,11 @@ class Engine:
         return verify.verify_review(task, self.workspace.paths, self.policy)
 
     def _review_prompt(self, task: StoryTask) -> str:
-        return f"/bmad-auto-review {task.spec_file}"
+        # Re-invoking bmad-dev-auto on a `done` spec resets review_loop_iteration
+        # and routes to step-04 for a fresh independent review pass (BMAD-METHOD
+        # #2508) — so the follow-up review is just another dev-skill run, no
+        # separate review skill. task.spec_file is set by verify_dev on success.
+        return f"/bmad-dev-auto {task.spec_file}"
 
     def _render_commit_template(self, task: StoryTask) -> str | None:
         """The configured commit message template with {story_key}/{run_id}
@@ -1339,8 +1359,10 @@ class Engine:
             "BMAD_AUTO_STORY_KEY": task.story_key,
         }
         if role == "dev" and not self.policy.review.enabled:
-            # tells the dev skill to run its own internal triple-review and
-            # finalize straight to done (the orchestrator runs no review session)
+            # signals that the orchestrator will run no follow-up review session.
+            # bmad-dev-auto always self-reviews inline (step-03 → step-04) and
+            # commits regardless, so this is a no-op for it; kept for any future
+            # dev skill that honors a skip-review mode (cf. the legacy seam).
             env["BMAD_AUTO_SKIP_REVIEW"] = "1"
         # plugin session hooks: a role-specific stage (pre_dev_session / fix /
         # migrate / ...) then the generic pre_session, both able to rewrite the

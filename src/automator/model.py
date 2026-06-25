@@ -124,7 +124,8 @@ class StoryTask:
     review_cycle: int = 0
     # set from the bmad-dev-auto session's `followup_review_recommended`
     # frontmatter (PR #2505): when True and review.trigger = "recommended", the
-    # orchestrator runs the separate bmad-auto-review pass; otherwise it skips it.
+    # orchestrator runs a follow-up review pass (bmad-dev-auto re-invoked on the
+    # done spec); otherwise it skips it.
     followup_review_recommended: bool = False
     baseline_commit: str | None = None
     # untracked, non-ignored paths present at baseline capture (repo-relative

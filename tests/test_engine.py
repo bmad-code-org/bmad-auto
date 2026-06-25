@@ -164,7 +164,7 @@ def test_happy_path(project):
     assert summary.total_tokens == 30  # 2 sessions x 15
     assert [s.role for s in adapter.sessions] == ["dev", "review"]
     assert adapter.sessions[0].env["BMAD_AUTO_MODE"] == "1"
-    assert adapter.sessions[1].prompt.startswith("/bmad-auto-review ")
+    assert adapter.sessions[1].prompt.startswith("/bmad-dev-auto ")
 
 
 def test_inplace_ready_gate_veto_defers_before_any_session(project):
@@ -238,7 +238,7 @@ def test_review_not_recommended_skips_review_session(project):
 
 def test_review_recommended_runs_review_session(project):
     """followup_review_recommended True under the default trigger runs the
-    separate bmad-auto-review pass."""
+    follow-up review pass (bmad-dev-auto re-invoked on the done spec)."""
     write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
     engine, adapter = make_engine(
         project,
@@ -250,7 +250,9 @@ def test_review_recommended_runs_review_session(project):
     summary = engine.run()
 
     assert summary.done == 1 and not summary.paused
-    assert engine.state.tasks["1-1-a"].followup_review_recommended is True
+    # dev recommended review → the follow-up pass ran; it converged (the latest
+    # pass no longer recommends a further follow-up, so the flag is now False)
+    assert engine.state.tasks["1-1-a"].followup_review_recommended is False
     assert [s.role for s in adapter.sessions] == ["dev", "review"]
     kinds = {e["kind"] for e in Journal(engine.run_dir).entries()}
     assert "review-not-recommended" not in kinds

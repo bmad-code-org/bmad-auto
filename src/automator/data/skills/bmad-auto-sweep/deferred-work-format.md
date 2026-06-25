@@ -1,14 +1,13 @@
 # Deferred Work Format
 
-Canonical entry format for `{implementation_artifacts}/deferred-work.md`.
-Written by bmad-auto-review (defer findings) and, on the inner dev path, by the
-bmad-dev-auto session (multi-goal splits, token splits) — though the
-orchestrator owns the ledger and normalizes the dev session's flat entries on
-sweep. The file is append-only — never rewrite or
-delete existing entries. (One exception: freeform pre-DW-format content from
-older projects is rewritten wholesale into canonical entries by a
-`bmad-auto sweep` migration session — see `bmad-auto-sweep/migration-mode.md`;
-the TUI displays such legacy items read-only until that happens.)
+Canonical entry format for `{implementation_artifacts}/deferred-work.md`. On the
+inner dev path the bmad-dev-auto session appends its own flat entries (review
+defers, multi-goal splits, token splits); the orchestrator owns the ledger and
+normalizes those flat entries into this canonical form on sweep, and a
+`bmad-auto sweep` migration rewrites freeform pre-DW-format content from older
+projects into it wholesale (see `./migration-mode.md`; the TUI displays such
+legacy items read-only until that happens). The file is append-only — never
+rewrite or delete existing entries.
 
 ## Before appending: dedupe check
 

@@ -39,7 +39,6 @@ COPILOT_HOOK_TIMEOUT_SEC = 60
 # `bmad-auto init` lays down. The inner dev primitive `bmad-dev-auto` is upstream
 # (not bundled here): the orchestrator drives it as an already-installed skill.
 MODULE_SKILLS = (
-    "bmad-auto-review",
     "bmad-auto-resolve",
     "bmad-auto-sweep",
     "bmad-auto-setup",
@@ -50,34 +49,29 @@ MODULE_SKILLS = (
 # tree and carry its marker files (a half-installed or pre-automation skill is
 # caught by the `bmad-auto validate` preflight). `{skill: (marker-rel-path, ...)}`.
 #   - bmad-dev-auto: the inner dev primitive — always required.
+#   - the two review hunters bmad-dev-auto's step-04 invokes inline on EVERY dev
+#     run (and on each follow-up review re-invocation) — also always required, no
+#     longer gated on a separate review session.
 DEV_BASE_SKILLS = {
     "bmad-dev-auto": ("step-04-review.md",),
-}
-#   - the two review hunters bmad-auto-review invokes inline — required only when
-#     the separate review session is enabled (policy.review.enabled).
-REVIEW_BASE_SKILLS = {
     "bmad-review-adversarial-general": (),
     "bmad-review-edge-case-hunter": (),
 }
 # Every non-bundled skill that might need copying into an isolated worktree.
-BASE_SKILLS = {**DEV_BASE_SKILLS, **REVIEW_BASE_SKILLS}
+BASE_SKILLS = dict(DEV_BASE_SKILLS)
 
 
-def missing_base_skills(
-    project: Path, trees: Sequence[str], *, review_enabled: bool = True
-) -> list[str]:
+def missing_base_skills(project: Path, trees: Sequence[str]) -> list[str]:
     """Problems for the upstream skills the orchestrator drives but doesn't bundle.
 
-    The dev primitive (bmad-dev-auto) and — when review is enabled — the two review
-    hunters are installed by the BMad Method module, not by `bmad-auto init`. Each
-    must exist in every active CLI skill tree and carry its marker files. Returns
-    one human-readable problem string per missing/incomplete skill; empty list
-    means OK. Run as a preflight so a missing skill fails loudly with remediation
-    instead of stalling as an `Unknown command` until the run times out.
+    The dev primitive (bmad-dev-auto) and the two adversarial review hunters it
+    invokes inline are installed by the BMad Method module, not by `bmad-auto
+    init`. Each must exist in every active CLI skill tree and carry its marker
+    files. Returns one human-readable problem string per missing/incomplete skill;
+    empty list means OK. Run as a preflight so a missing skill fails loudly with
+    remediation instead of stalling as an `Unknown command` until the run times out.
     """
     required = dict(DEV_BASE_SKILLS)
-    if review_enabled:
-        required.update(REVIEW_BASE_SKILLS)
     problems: list[str] = []
     for tree in dict.fromkeys(trees):
         for skill, markers in required.items():

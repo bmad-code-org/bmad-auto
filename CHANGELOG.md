@@ -5,6 +5,29 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [Unreleased]
+
+### Changed
+
+- **Review is now a re-invocation of `bmad-dev-auto` on the done spec, not a separate skill.**
+  `bmad-dev-auto` now routes a `status: done` spec to a fresh step-04 review pass (BMAD-METHOD#2508),
+  so the orchestrator's follow-up review just re-runs `/bmad-dev-auto <done spec>`. `review.enabled`
+  and `review.trigger` (`recommended`/`always`) are unchanged; the loop converges when a pass finishes
+  `done` and no longer sets `followup_review_recommended`, still bounded by `limits.max_review_cycles`.
+- **The skill commits each iteration; the orchestrator squashes to one commit per story.**
+  `bmad-dev-auto` now commits its own work at the end of a successful run (BMAD-METHOD#2506). At
+  finalize the orchestrator collapses that chain plus its own sprint/ledger writes back onto the
+  pre-dev baseline into a single commit carrying the configured message — `pre_commit`/`post_commit`
+  hooks and `scm.commit_message_template` stay authoritative.
+
+### Removed
+
+- **Retired the `bmad-auto-review` skill.** Its adversarial review is fully covered by `bmad-dev-auto`'s
+  inline step-04 (Blind + Edge-Case hunters); the independent Acceptance Auditor layer is dropped. The
+  canonical `deferred-work-format.md` moved into `bmad-auto-sweep`, its remaining owner. The two review
+  hunters are now always-required base skills (the dev skill invokes them inline on every run), no longer
+  gated on `review.enabled`.
+
 ## [0.6.5] — 2026-06-24
 
 ### Changed

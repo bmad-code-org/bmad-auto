@@ -3,13 +3,14 @@
 This module is two things: the bundled `bmad-auto-*` skills and the `bmad-auto`
 orchestrator tool (the Python program that actually drives the loop). The skills do
 nothing on their own — the orchestrator is what spawns the fresh coding-CLI sessions
-that invoke the upstream `bmad-dev-auto` skill plus `bmad-auto-review`,
-`bmad-auto-sweep`, and `bmad-auto-resolve`, watches their hook signals, and verifies
+that invoke the upstream `bmad-dev-auto` skill (which implements and, re-invoked on
+the done spec, runs the follow-up review) plus `bmad-auto-sweep` and
+`bmad-auto-resolve`, watches their hook signals, and verifies
 their artifacts. Installing the tool is part of setup, not
 an optional extra.
 
 There are two ways the skills land in a project. The orchestrator's wheel **bundles**
-the five skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
+the three skills, so the simplest path is **pip + `bmad-auto init`**, which installs them
 itself. Alternatively the **BMAD-method installer** copies them. Either way the
 `/bmad-auto-setup` skill registers the `_bmad/` config, ensures the tool is installed,
 picks which coding CLIs to drive, and bootstraps the project. For the one-page summary,
@@ -77,13 +78,14 @@ uv run bmad-auto init --project /path/to/project --cli claude   # installs skill
 claude "/bmad-auto-setup accept all defaults"                   # register _bmad/ config + help
 ```
 
-Add `--cli codex --cli gemini` to also populate `.agents/skills/`. The bundled skills
-must be installed together: `bmad-auto-review` and `bmad-auto-sweep` both reference
-`bmad-auto-review/deferred-work-format.md` (a sibling skill directory) — `init` always
-installs them all (`bmad-auto-review`, `bmad-auto-resolve`, `bmad-auto-sweep`,
-`bmad-auto-setup`). The dev primitive `bmad-dev-auto` is **not** bundled: it is the
-upstream skill the orchestrator drives, installed by the BMad Method (bmm) module.
-`bmad-auto validate` checks it is present before a run starts.
+Add `--cli codex --cli gemini` to also populate `.agents/skills/`. `init` always
+installs all the bundled skills together (`bmad-auto-resolve`, `bmad-auto-sweep`,
+`bmad-auto-setup`); `bmad-auto-sweep` owns the canonical `deferred-work-format.md`
+the orchestrator normalizes the ledger to. The dev primitive `bmad-dev-auto` is
+**not** bundled: it is the upstream skill the orchestrator drives (for both
+implementation and the follow-up review), installed by the BMad Method (bmm)
+module. `bmad-auto validate` checks it — plus the two adversarial review hunters it
+invokes inline — are present before a run starts.
 
 ## Choosing which CLIs to drive
 

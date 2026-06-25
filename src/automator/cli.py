@@ -74,10 +74,13 @@ def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIA
     by_cfg: dict = {}
     for role in ROLES:
         cfg = policy.adapter.resolved(role)
-        # The dev adapter synthesizes the result from the spec, so it cannot be
-        # shared with the other roles even when their adapter config is identical.
-        is_dev = role == "dev"
-        key = (cfg, is_dev)
+        # Both the dev and review sessions are now bmad-dev-auto runs (the review
+        # session re-invokes the dev skill on the done spec for a follow-up pass),
+        # and the skill writes no result.json — its adapter synthesizes the result
+        # from the spec it leaves on disk, so it needs impl_artifacts to find that
+        # spec and cannot be shared with the triage role even on identical config.
+        synthesizes = role in ("dev", "review") and policy.dev.skill == "bmad-dev-auto"
+        key = (cfg, synthesizes)
         if key not in by_cfg:
             try:
                 profile = get_profile(cfg.name, project)
@@ -94,7 +97,7 @@ def _make_adapters(project: Path, run_dir: Path, policy) -> dict[str, CodingCLIA
             )
             by_cfg[key] = (
                 GenericDevAdapter(**common, impl_artifacts=impl_artifacts)
-                if is_dev
+                if synthesizes
                 else GenericAdapter(**common)
             )
         adapters[role] = by_cfg[key]
@@ -183,10 +186,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 f"run `bmad-auto init --cli {profile.name}`"
             )
 
-    review_enabled = pol.review.enabled if pol else True
-    base_problems = install.missing_base_skills(
-        project, [p.skill_tree for p in profiles], review_enabled=review_enabled
-    )
+    base_problems = install.missing_base_skills(project, [p.skill_tree for p in profiles])
     if profiles and not base_problems:
         notes.append("upstream skills present (bmad-dev-auto + review hunters)")
     problems.extend(base_problems)
@@ -200,7 +200,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def _require_base_skills(project: Path, pol) -> bool:
     """Preflight the upstream skills the orchestrator drives (bmad-dev-auto + the
-    review hunters when review is enabled).
+    two adversarial review hunters it invokes inline).
 
     Returns True when everything is in place; otherwise prints the problems and
     returns False so the caller can abort before spawning any session (a missing
@@ -214,7 +214,7 @@ def _require_base_skills(project: Path, pol) -> bool:
             skill_trees.append(get_profile(name, project).skill_tree)
         except ProfileError:
             continue
-    problems = install.missing_base_skills(project, skill_trees, review_enabled=pol.review.enabled)
+    problems = install.missing_base_skills(project, skill_trees)
     if problems:
         for problem in problems:
             print(f"FAIL: {problem}", file=sys.stderr)
@@ -322,7 +322,7 @@ def _dry_run(paths: bmadconfig.ProjectPaths, pol, args: argparse.Namespace) -> i
     for story in queue:
         print(f"\n  {story.key} (epic {story.epic}, status {story.status})")
         print(f"    dev:    {render('dev', f'/bmad-dev-auto {story.key}')}")
-        print(f"    review: {render('review', '/bmad-auto-review <spec from dev>')}")
+        print(f"    review: {render('review', '/bmad-dev-auto <done spec from dev>')}")
         print(f"    env:    BMAD_AUTO_MODE=1 BMAD_AUTO_STORY_KEY={story.key}")
     return 0
 

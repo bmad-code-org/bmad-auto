@@ -80,7 +80,7 @@ def decide_dev(
 
 
 def decide_review_session(task: StoryTask, result: SessionResult, policy: Policy) -> Decision:
-    """After a review session returns, before interpreting clean/patched counts."""
+    """After a review session returns, before interpreting its done/followup status."""
     crits = critical_escalations(result.result_json)
     if crits:
         details = "; ".join(str(e.get("detail", e.get("type", "?"))) for e in crits)

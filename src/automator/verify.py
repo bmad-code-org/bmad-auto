@@ -777,6 +777,44 @@ def commit_story(repo: Path, message: str) -> str:
     return rev_parse_head(repo)
 
 
+def finalize_commit(repo: Path, baseline: str | None, message: str) -> str | None:
+    """Collapse everything since `baseline` into ONE commit with `message`.
+
+    bmad-dev-auto now commits its own work at the end of each iteration (one
+    commit for the dev pass, one for each follow-up review pass), while the
+    orchestrator still writes its own bookkeeping (sprint-status.yaml for
+    stories, the deferred-work ledger for sweep bundles) into the working tree
+    uncommitted. This squashes that whole chain — the skill's per-iteration
+    commits PLUS the orchestrator's uncommitted writes — back onto `baseline`
+    as a single commit carrying the orchestrator's message, so the one-commit-
+    per-story invariant and the message template / pre_commit hook stay
+    authoritative regardless of how many times the skill committed.
+
+    Mechanics: stage the working tree (`add -A`), move HEAD back to `baseline`
+    keeping the index (`reset --soft`), then commit the accumulated index. The
+    working tree is never touched, so a failure leaves the chain intact.
+
+    Returns the new HEAD sha, or None when there is nothing to finalize: no
+    version control (`baseline` falsy or NO_VCS) or the tree already equals
+    `baseline` (no skill commits and no bookkeeping delta)."""
+    if not baseline or baseline == "NO_VCS":
+        return None
+    rc, out = _git(repo, "add", "-A")
+    if rc != 0:
+        raise GitError(f"git add failed: {out}")
+    rc, out = _git(repo, "reset", "--soft", baseline)
+    if rc != 0:
+        raise GitError(f"git reset --soft {baseline} failed: {out}")
+    # index now holds the cumulative diff vs baseline; nothing staged → no-op
+    rc, _ = _git(repo, "diff", "--cached", "--quiet")
+    if rc == 0:
+        return None
+    rc, out = _git(repo, "commit", "-m", message)
+    if rc != 0:
+        raise GitError(f"git commit failed: {out}")
+    return rev_parse_head(repo)
+
+
 def commit_paths(repo: Path, message: str, paths: list[Path]) -> str | None:
     """Commit exactly `paths` (and nothing else), leaving any unrelated working
     or staged changes untouched. Unlike commit_story's `add -A`, this is safe to

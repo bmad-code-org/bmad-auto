@@ -78,21 +78,25 @@ def wt_dev_effect(project, story_key, *, final_status="done", followup_review=Tr
 
 
 def wt_review_effect(project, story_key, clean: bool, patched: int = 0):
+    """Follow-up review pass in a worktree — a bmad-dev-auto re-invocation on the
+    done spec. ``clean=True`` converges; ``clean=False`` keeps recommending."""
+
     def effect(spec):
         cwd = spec.cwd
         wt = project.rebased(cwd)
-        if clean:
-            sp = wt.implementation_artifacts / f"spec-{story_key}.md"
-            write_spec(sp, "done", _spec_baseline(sp))
-            set_sprint(wt, story_key, "done")
+        sp = wt.implementation_artifacts / f"spec-{story_key}.md"
+        baseline = _spec_baseline(sp)
+        write_spec(sp, "done", baseline)
+        set_sprint(wt, story_key, "done")
         return SessionResult(
             status="completed",
             result_json={
-                "workflow": "code-review",
-                "clean": clean,
-                "patched": patched,
-                "deferred": 0,
-                "dismissed": 0,
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "status": "done",
+                "followup_review_recommended": not clean,
                 "escalations": [],
             },
         )
