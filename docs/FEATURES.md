@@ -152,7 +152,7 @@ See [README.md](../README.md) for the narrative overview and [setup-guide.md](se
 
 - `bmad-auto init` installs the five `bmad-auto-*` skills (`.claude/skills/` and/or `.agents/skills/`), the hook relay, `.automator/policy.toml`, and a runs-dir gitignore. Flags: `--cli` (repeatable), `--no-skills`, `--force-skills`.
 - `bmad-auto validate` preflights every prerequisite: BMAD config, sprint-status, git, tmux, CLI binary, hook registration.
-- Non-invasive: drives its own forks of the dev/review skills — your standard BMAD install is never modified. Upstream improvements are merged by diffing fork vs. upstream (forks keep the upstream file structure).
+- Non-invasive: drives the upstream `bmad-dev-auto` skill unmodified — there is no fork to keep in sync — and review is just a re-invocation of it on the `done` spec. Your standard BMAD install is never modified.
 
 ### Command reference
 

@@ -249,8 +249,8 @@ rm -rf .automator/
 
 ### 3. Remove the bundled skills
 
-`init` installed exactly five `bmad-auto-*` skill directories — delete only those. **Leave the
-standard BMAD skills alone**; install never touched them.
+`init` installed the three bundled `bmad-auto-*` skill directories — delete only those. **Leave
+the standard BMAD skills alone**; install never touched them.
 
 ```bash
 # claude reads from .claude/skills/ ; codex/gemini read from .agents/skills/
@@ -258,7 +258,9 @@ rm -rf .claude/skills/bmad-auto-{dev,review,resolve,sweep,setup}
 rm -rf .agents/skills/bmad-auto-{dev,review,resolve,sweep,setup}
 ```
 
-(Run only the line for the skill tree your CLIs use — drop the other.)
+(Run only the line for the skill tree your CLIs use — drop the other. The `dev` and `review`
+names are retired — current `init` never lays them down — but listing them is a harmless no-op
+that also cleans up a pre-0.6.5 install.)
 
 ### 4. Deregister the hooks
 

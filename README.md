@@ -455,7 +455,7 @@ One generic driver (`adapters/generic.py`) runs any coding CLI that fits the inj
 
 **Shared prerequisites:** the `bmad-auto-*` skills must be present in `.agents/skills/` (codex and gemini read it; Claude Code reads `.claude/skills/`), and each CLI must have been run once interactively in the project for auth/trust — `bmad-auto init --cli codex --cli gemini` installs the skills into `.agents/skills/`, registers the hook relay, and prints the per-CLI first-run steps.
 
-**Adding a CLI without touching Python:** drop a TOML file in `<project>/.automator/profiles/<name>.toml` (same fields as the built-ins: binary, `prompt_template`, bypass flags, a `[hooks]` block picking one of the config dialects `claude-settings-json` / `codex-hooks-json` / `gemini-settings-json` / `copilot-settings-json`, and a native→canonical event map). The hook relay script and orchestrator are CLI-agnostic — each registration passes the canonical event name as the script argument. A CLI whose hook config clones one of the existing dialects (the ecosystem trend) needs nothing else; a genuinely different transport gets its own adapter class instead (see the opencode HTTP+SSE design stub in `adapters/opencode_http.py`).
+**Adding a CLI without touching Python:** drop a TOML file in `<project>/.automator/profiles/<name>.toml` with at minimum a binary, `prompt_template`, bypass flags, and a `[hooks]` block picking one of the config dialects (`claude-settings-json` / `codex-hooks-json` / `gemini-settings-json` / `copilot-settings-json`) plus a native→canonical event map. The full profile schema — every `CLIProfile` / `HookSpec` field and its default — lives in the **[Profile field reference](docs/adapter-authoring-guide.md#profile-field-reference)** of the adapter authoring guide, the single canonical home for it. The hook relay script and orchestrator are CLI-agnostic — each registration passes the canonical event name as the script argument. A CLI whose hook config clones one of the existing dialects (the ecosystem trend) needs nothing else; a genuinely different transport gets its own adapter class instead (see [Writing a new adapter class](docs/adapter-authoring-guide.md#writing-a-new-adapter-class) and the opencode HTTP+SSE design stub in `adapters/opencode_http.py`).
 
 **Finalizing a profile:** the facts a profile needs that live in no doc — the CLI's exact hook payload shape, its transcript location/format, and the token schema a `usage_parser` reads — are collected and sanitized by `bmad-auto probe-adapter <cli>` (a zero-launch scan by default, or `--probe` for a live capture). The [adapter authoring guide](docs/adapter-authoring-guide.md) walks through using it end to end.
 
@@ -486,6 +486,9 @@ The hero **demo GIF** (`docs/images/demo.gif`) is generated the same headless wa
 - **[docs/tui-guide.md](docs/tui-guide.md)** — the complete TUI reference.
 - **[src/automator/data/skills/README.md](src/automator/data/skills/README.md)** — the `bauto` skill module overview.
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — planned/deferred orchestrator work and the rationale behind it.
+- **[docs/adapter-authoring-guide.md](docs/adapter-authoring-guide.md)** — authoring CLI adapters & profiles (and transport backends).
+- **[docs/plugin-authoring-guide.md](docs/plugin-authoring-guide.md)** — authoring plugins (hooks, workflows, settings).
+- **[docs/game-engine-plugin-guide.md](docs/game-engine-plugin-guide.md)** — the game-engine plugin shape (Unity reference).
 
 ## Contributing
 
