@@ -5,68 +5,57 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [Unreleased]
+## [0.7.0] — 2026-06-24
 
 ### Changed
 
+- **Retired the `bmad-auto-dev` fork; the orchestrator now drives the upstream `bmad-dev-auto`
+  skill unmodified** (bmad-code-org/BMAD-METHOD#2500, merged upstream) as its sole dev primitive.
+  The skill is the inner autonomous coding session; everything automator-specific — escalation,
+  sprint/ledger bookkeeping, repair-resume — stays in the orchestrator, which synthesizes
+  `result.json` from the spec the skill leaves on disk. There is no fork to keep in sync with upstream.
+
 - **Review is now a re-invocation of `bmad-dev-auto` on the done spec, not a separate skill.**
-  `bmad-dev-auto` now routes a `status: done` spec to a fresh step-04 review pass (BMAD-METHOD#2508),
-  so the orchestrator's follow-up review just re-runs `/bmad-dev-auto <done spec>`. `review.enabled`
-  and `review.trigger` (`recommended`/`always`) are unchanged; the loop converges when a pass finishes
-  `done` and no longer sets `followup_review_recommended`, still bounded by `limits.max_review_cycles`.
+  `bmad-dev-auto` routes a `status: done` spec to a fresh step-04 review pass (BMAD-METHOD#2508), so
+  the orchestrator's follow-up review just re-runs `/bmad-dev-auto <done spec>` in a fresh context.
+  `review.enabled` and `review.trigger` are unchanged; the loop converges when a pass finishes `done`
+  and no longer sets `followup_review_recommended`, still bounded by `limits.max_review_cycles`
+  (default 3).
+
 - **The skill commits each iteration; the orchestrator squashes to one commit per story.**
   `bmad-dev-auto` now commits its own work at the end of a successful run (BMAD-METHOD#2506). At
   finalize the orchestrator collapses that chain plus its own sprint/ledger writes back onto the
   pre-dev baseline into a single commit carrying the configured message — `pre_commit`/`post_commit`
   hooks and `scm.commit_message_template` stay authoritative.
 
-### Removed
-
-- **Retired the `bmad-auto-review` skill.** Its adversarial review is fully covered by `bmad-dev-auto`'s
-  inline step-04 (Blind + Edge-Case hunters); the independent Acceptance Auditor layer is dropped. The
-  canonical `deferred-work-format.md` moved into `bmad-auto-sweep`, its remaining owner. The two review
-  hunters are now always-required base skills (the dev skill invokes them inline on every run), no longer
-  gated on `review.enabled`.
-
-## [0.6.5] — 2026-06-24
-
-### Changed
-
-- **Retired the `bmad-auto-dev` fork; the orchestrator now drives the upstream `bmad-dev-auto`
-  skill directly** (bmad-code-org/BMAD-METHOD#2500, merged upstream) as the sole, unmodified dev
-  primitive. The skill is the inner autonomous coding session; everything automator-specific —
-  escalation, sprint/ledger bookkeeping, repair-resume — stays in the orchestrator, which
-  synthesizes `result.json` from the spec the skill leaves on disk. There is no fork to keep in sync
-  with upstream. `bmad-auto-review` stays bundled and runs by default (gated on `review.enabled`).
-
 ### Added
 
-- **Skill-recommended review (`review.trigger`).** `bmad-dev-auto` now self-reviews inline and sets
+- **Skill-recommended review (`review.trigger`).** `bmad-dev-auto` self-reviews inline and sets
   `followup_review_recommended` on a `done` spec when its changes warrant an independent pass
   (BMAD-METHOD#2505). The orchestrator consumes it: `review.trigger = "recommended"` (new default)
-  runs the separate `bmad-auto-review` pass only when flagged; `"always"` keeps the old run-every-story
-  behavior. Adjustable in the TUI and `policy.toml`. The follow-up loop stays bounded by
-  `limits.max_review_cycles` (default 3) — the oscillation guard — so a skill-recommended review can
-  never loop indefinitely.
+  runs the follow-up `bmad-dev-auto` review pass only when flagged; `"always"` keeps the old
+  run-every-story behavior. Adjustable in the TUI and `policy.toml`. The follow-up loop stays bounded
+  by `limits.max_review_cycles` (default 3) — the oscillation guard — so a skill-recommended review
+  can never loop indefinitely.
 
 - **Non-bundled-skill preflight.** `bmad-auto validate` and run/sweep/resume start verify that
-  `bmad-dev-auto` (and the `bmad-review-adversarial-general` / `bmad-review-edge-case-hunter` review
-  hunters when review is enabled) are installed in each active CLI skill tree — failing loudly with
-  remediation instead of stalling mid-run on an `Unknown command`. Worktree provisioning copies these
-  upstream skills from the main repo, since they are not bundled in the wheel.
+  `bmad-dev-auto` and the two adversarial review hunters (`bmad-review-adversarial-general`,
+  `bmad-review-edge-case-hunter`) — which `bmad-dev-auto`'s step-04 invokes inline on every run — are
+  installed in each active CLI skill tree, failing loudly with remediation instead of stalling mid-run
+  on an `Unknown command`. Worktree provisioning copies these upstream skills from the main repo,
+  since they are not bundled in the wheel.
 
 - **`result.json` `workflow` is now an enforced contract on the dev path.** `verify_dev` /
   `verify_dev_bundle` reject a mismatch against `verify.DEV_WORKFLOW` (`"auto-dev"`); the synthesized
-  result carries `"auto-dev"`. Review's `"code-review"` stays informational by design — `verify_review`
-  is purely disk-derived and is never handed the result.json (documented in
-  `src/automator/data/skills/README.md`).
+  result carries `"auto-dev"`. Review re-runs the same skill, so it carries the same tag, and
+  `verify_review` stays purely disk-derived — it is never handed the result.json.
 
 - **Pluggable terminal-multiplexer seam (groundwork for native Windows).** All tmux usage now goes
   through a `TerminalMultiplexer` ABC (`get_multiplexer()`); `TmuxMultiplexer` is the only code that
   shells out to `tmux` and the only place the POSIX `sh -c` parked-window trailer lives. The generic
-  adapter (`generic_tmux.py` → `generic.py`), `runs.py`, `tui/launch.py`, `probe.py`, and `tui/data.py`
-  all route through it, so a future non-tmux backend slots in with no engine changes. Behavior on
-  Linux/macOS/WSL is byte-identical; **no native-Windows backend ships yet** (see [ROADMAP](docs/ROADMAP.md)).
+  adapter (renamed `generic_tmux.py` → `generic.py`), `runs.py`, `tui/launch.py`, `probe.py`, and
+  `tui/data.py` all route through it, so a future non-tmux backend slots in with no engine changes.
+  Behavior on Linux/macOS/WSL is byte-identical; **no native-Windows backend ships yet** (see [ROADMAP](docs/ROADMAP.md)).
 
 - **POSIX portability hardening + CI guard.** Scattered POSIX-only primitives are guarded behind a
   platform seam — `SIGKILL` fallback, detach kwargs, `terminate_pid`, `os.devnull` — and the Unity
@@ -75,12 +64,19 @@ breaking changes may land in a minor release.
   `tests/test_portability_guard.py` AST/byte scan blocks new POSIX-only patterns from creeping back,
   with sanctioned exceptions carrying `# portability:` acks.
 
+- **Adapter & profile authoring guide.** `docs/adapter-authoring-guide.md` now carries the complete
+  `CLIProfile` / `HookSpec` field reference (the single canonical schema home) and a "writing a new
+  adapter class" section for non-tmux transports — linked from the README documentation index.
+
 ### Removed
 
-- The bundled `bmad-auto-dev` skill directory and its `MODULE_SKILLS` entry. `bmad-auto init` now
-  installs `bmad-auto-review`, `bmad-auto-resolve`, `bmad-auto-sweep`, and `bmad-auto-setup`; the
-  upstream `bmad-dev-auto` skill (from a recent bmm module) is a hard prerequisite. `deferred-work-format.md`
-  moved into `bmad-auto-review/` — it is a sibling dependency of the review and sweep skills, not dev.
+- **Retired the bundled `bmad-auto-dev` and `bmad-auto-review` skills.** `bmad-auto init` now installs
+  three bundled skills — `bmad-auto-resolve`, `bmad-auto-sweep`, `bmad-auto-setup` — and the upstream
+  `bmad-dev-auto` skill (from a recent bmm module) is a hard prerequisite. `bmad-auto-review`'s
+  adversarial review is fully covered by `bmad-dev-auto`'s inline step-04 (Blind + Edge-Case hunters);
+  the independent Acceptance Auditor layer is dropped, and the two hunters are now always-required base
+  skills rather than gated on `review.enabled`. The canonical `deferred-work-format.md` moved into
+  `bmad-auto-sweep`, its remaining owner.
 
 ### Fixed
 
@@ -588,6 +584,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.0
 [0.6.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.4
 [0.6.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.3
 [0.6.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.2
