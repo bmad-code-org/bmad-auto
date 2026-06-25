@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
-import signal
 import tarfile
 import time
 from pathlib import Path
@@ -14,6 +13,7 @@ from . import verify
 from .adapters.multiplexer import get_multiplexer
 from .journal import STATE_FILE, Journal, load_state, save_state
 from .model import PAUSE_ESCALATION, Phase
+from .platform_util import terminate_pid
 
 RUNS_DIR = Path(".automator") / "runs"
 ARCHIVE_DIR = Path(".automator") / "archive"
@@ -230,7 +230,7 @@ def stop_run(run_dir: Path) -> bool:
     pid = read_pid(run_dir)
     if pid is not None:
         try:
-            os.kill(pid, signal.SIGTERM)
+            terminate_pid(pid)
         except (ProcessLookupError, PermissionError, OSError):
             pid = None  # already gone / not ours — go straight to fallback
     if pid is not None:

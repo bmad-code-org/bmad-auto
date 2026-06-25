@@ -7,6 +7,7 @@ policy's test/lint gates with the orchestrator's own subprocess calls.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -481,12 +482,12 @@ def capture_diff(repo: Path, baseline: str, *, max_file_bytes: int | None = None
                     "cap (raise scm.failed_diff_max_mb or set scm.failed_diff_unlimited = true)\n"
                 )
                 continue
-        # --no-index synthesizes an add-from-/dev/null diff for the untracked
-        # file; it exits 1 precisely because the files differ — expected here.
-        # Any other non-zero code is a real failure (bad path, internal error),
-        # not "files differ", so don't silently fold it into the patch.
+        # --no-index synthesizes an add-from-empty diff for the untracked file;
+        # it exits 1 precisely because the files differ — expected here. Any other
+        # non-zero code is a real failure (bad path, internal error), not "files
+        # differ", so don't silently fold it into the patch.
         u = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--no-index", "--", "/dev/null", rel],
+            ["git", "-C", str(repo), "diff", "--no-index", "--", os.devnull, rel],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_S,

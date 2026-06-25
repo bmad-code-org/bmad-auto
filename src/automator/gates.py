@@ -17,6 +17,8 @@ def notify(policy: Policy, run_dir: Path, title: str, message: str) -> None:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with (run_dir / ATTENTION_FILE).open("a", encoding="utf-8") as f:
             f.write(f"[{stamp}] {title}: {message}\n")
+    # portability: notify-send is Linux-only; the shutil.which guard makes this a
+    # no-op on macOS/Windows (no desktop notification), so no platform branch needed.
     if policy.notify.desktop and shutil.which("notify-send"):
         try:
             subprocess.run(
