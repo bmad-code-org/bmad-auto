@@ -5,6 +5,24 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.1] — 2026-06-25
+
+### Fixed
+
+- **Resolving a CRITICAL escalation no longer loops on a manual-rollback prompt when the resolve
+  edited the spec.** 0.7.0 fixed the loop only for an already-clean tree, but the resolve workflow's
+  whole job is to correct the frozen spec under the BMAD artifact folder (`_bmad-output/...`, which is
+  tracked). So on resume the orchestrator saw a dirty tree and — with the default
+  `scm.rollback_on_failure = false` — paused for a manual reset; because the dirty check diffs against
+  the frozen `baseline_commit`, even committing the spec re-paused on the next resume, an endless loop.
+  A resolved re-drive is human-initiated, so it now always auto-recovers regardless of the flag: the
+  BMAD artifact folders are treated as orchestrator-owned — excluded from the dirty check and preserved
+  through the reset — so the spec correction survives while the failed attempt's source changes revert
+  to baseline. This also fixes a latent sibling bug: with `rollback_on_failure = true` the reset
+  previously reverted the just-corrected spec silently. `scm.rollback_on_failure` still defaults OFF and
+  now governs only unattended/stopped attempts; the manual-recovery notice (reached by stopped attempts
+  only now) drops its resolved-cause wording.
+
 ## [0.7.0] — 2026-06-24
 
 ### Changed

@@ -55,6 +55,35 @@ def test_attempt_dirty_none_snapshot_ignores_untracked(project):
     assert verify.attempt_dirty(project.project, baseline, None) is True
 
 
+def test_attempt_dirty_excludes_untracked_artifact(project):
+    """A new untracked spec under an orchestrator-owned artifact folder is not the
+    dev attempt's dirtiness when that folder is excluded — but counts otherwise."""
+    repo = project.project
+    artifact_rel = project.implementation_artifacts.relative_to(repo).as_posix()
+    baseline = verify.rev_parse_head(repo)
+    (project.implementation_artifacts / "spec-1-1-a.md").write_text("corrected\n")
+    assert verify.attempt_dirty(repo, baseline, [], exclude=(artifact_rel,)) is False
+    assert verify.attempt_dirty(repo, baseline, []) is True
+
+
+def test_attempt_dirty_excludes_tracked_artifact(project):
+    """A tracked edit confined to the artifact folder reads as clean when excluded;
+    a source edit alongside it still counts."""
+    repo = project.project
+    spec = project.implementation_artifacts / "spec-1-1-a.md"
+    spec.write_text("orig\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "spec")
+    baseline = verify.rev_parse_head(repo)
+    artifact_rel = project.implementation_artifacts.relative_to(repo).as_posix()
+
+    spec.write_text("corrected by resolve\n")  # tracked artifact edit
+    assert verify.attempt_dirty(repo, baseline, [], exclude=(artifact_rel,)) is False
+
+    (repo / "src.txt").write_text("dev work\n")  # real source change
+    assert verify.attempt_dirty(repo, baseline, [], exclude=(artifact_rel,)) is True
+
+
 def test_verify_dev_happy(project):
     write_sprint(project, {"1-1-a": "review"})
     task = make_task(project)
@@ -337,6 +366,33 @@ def test_safe_rollback_prunes_emptied_dirs(project):
 
     verify.safe_rollback(repo, baseline, baseline_untracked=snap, keep=(".automator",))
     assert not (repo / "tmpdir").exists()  # emptied parent dirs pruned
+
+
+def test_safe_rollback_preserves_tracked_artifact(project):
+    """`preserve` keeps a *tracked* artifact edit (the resolve workflow's corrected
+    spec) alive through the hard reset, while a tracked source edit is still
+    reverted — `keep` alone only guards untracked deletion, not the reset."""
+    repo = project.project
+    spec = project.implementation_artifacts / "spec-1-1-a.md"
+    spec.write_text("frozen: original\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "spec")
+    baseline = verify.rev_parse_head(repo)
+    snap = sorted(verify.untracked_files(repo))
+    artifact_rel = project.implementation_artifacts.relative_to(repo).as_posix()
+
+    (repo / "src.txt").write_text("dev attempt\n")  # tracked source edit
+    spec.write_text("frozen: corrected\n")  # tracked artifact edit (resolve)
+
+    verify.safe_rollback(
+        repo,
+        baseline,
+        baseline_untracked=snap,
+        keep=(".automator", artifact_rel),
+        preserve=(artifact_rel,),
+    )
+    assert (repo / "src.txt").read_text() == "original\n"  # source reverted
+    assert spec.read_text() == "frozen: corrected\n"  # spec correction preserved
 
 
 def test_worktree_clean_ignores_policy_file(project):
