@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -316,6 +317,30 @@ def _render_row(row: dict) -> Text:
     return text
 
 
+# CSI sequences with a private/secondary marker (< > = ?) are terminal capability
+# negotiation, never display SGR. pyte 0.8.2 ignores the marker and misdispatches
+# them to SGR anyway: e.g. XTMODKEYS `CSI > 4 ; 2 m` (modifyOtherKeys, emitted at
+# session start by Claude Code et al.) is read as SGR 4 = underline-on, leaving the
+# whole log underlined until an exit-time disable a live capture never contains.
+# Strip them before pyte sees them; a legitimate SGR carries no marker, so this can
+# only remove non-display sequences (never printable text or genuine styling).
+_PRIVATE_MARKER_SGR = re.compile(rb"\x1b\[[<>=?][0-9;:]*m")
+# A trailing, not-yet-terminated CSI at the end of a read: ESC, or ESC[ followed by
+# only param/marker bytes with no final letter. Held back so a marker sequence split
+# across two reads is filtered whole next time (the filter must see it complete).
+_INCOMPLETE_CSI_TAIL = re.compile(rb"\x1b(?:\[[0-9;:<>=?]*)?\Z")
+
+
+def _strip_private_marker_sgr(chunk: bytes) -> tuple[bytes, int]:
+    """(filtered chunk, bytes held back). Drops private-marker SGR sequences and
+    returns the length of an unterminated trailing CSI that should not be consumed
+    yet, so the caller can re-read it next time and see the sequence whole."""
+    m = _INCOMPLETE_CSI_TAIL.search(chunk)
+    held = len(m.group()) if m else 0
+    body = chunk[: len(chunk) - held] if held else chunk
+    return _PRIVATE_MARKER_SGR.sub(b"", body), held
+
+
 class _CountingDeque(deque):
     """history.top replacement that counts rows permanently gone above the
     window: maxlen evictions plus the clear() from pyte's reset()/ED-3.
@@ -441,19 +466,36 @@ class LogView:
         with self.path.open("rb") as f:
             f.seek(self._offset)
             chunk = f.read(size - self._offset)
+        # Drop private-marker SGR (pyte misreads it as underline); hold back an
+        # unterminated trailing CSI so a sequence split across reads is filtered
+        # whole next time. `consumed` is the original byte span we commit here —
+        # the file offset advances over it while pyte sees only the filtered bytes.
+        filtered, held = _strip_private_marker_sgr(chunk)
+        consumed = len(chunk) - held
+        base, total = self._offset, len(filtered)
         top = self._screen.history.top
-        for start in range(0, len(chunk), self._checkpoint_bytes):
-            piece = chunk[start : start + self._checkpoint_bytes]
+        for start in range(0, total, self._checkpoint_bytes):
+            piece = filtered[start : start + self._checkpoint_bytes]
             # ByteStream buffers escape sequences split across feeds
             self._stream.feed(piece)
-            self._offset += len(piece)
+            # map back to an original-file offset (filtering only removes a few
+            # marker bytes; the log_pos->line mapping is already approximate)
+            end = start + len(piece)
+            self._offset = base + (consumed if end >= total else round(end / total * consumed))
             line = top.dropped + len(top) + self._screen.cursor.y
             self._checkpoints.append((self._offset, line))
+        self._offset = base + consumed
+        # When a chunk is entirely an unterminated trailing CSI, consumed == 0 and
+        # _offset holds short of EOF until more bytes complete the sequence — a few
+        # held bytes re-read per poll. We deliberately don't advance past them: a
+        # log that's still streaming self-heals on the next write, and one that
+        # permanently ends mid-escape has nothing renderable there anyway (we'd
+        # only risk eating a legitimately split sequence by forcing it through).
         # drop checkpoints whose lines evicted past the history horizon;
         # their offsets would clamp to line 0 anyway
         while len(self._checkpoints) > 1 and self._checkpoints[1][1] <= top.dropped:
             self._checkpoints.pop(0)
-        return True
+        return consumed > 0
 
     def index(self) -> LogIndex:
         """Snapshot for log_pos -> rendered-line lookups; reflects the most

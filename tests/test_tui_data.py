@@ -364,6 +364,48 @@ def test_log_view_styles(tmp_path):
     assert styled["X"].name == "#ff0000"
 
 
+def test_log_view_strips_private_marker_sgr(tmp_path):
+    # XTMODKEYS `CSI > 4 ; 2 m` (modifyOtherKeys, emitted at session start by
+    # Claude Code et al.) is not an SGR. pyte 0.8.2 ignores the `>` marker and
+    # misreads the `4` as underline-on with no matching off, underlining the whole
+    # log; we strip private-marker sequences before pyte sees them.
+    path = tmp_path / "task.log"
+    path.write_bytes(b"\x1b[>4;2mhello world\r\n")
+    view = data.LogView(path)
+    assert view.read_new() is True
+    line = view.render()
+    assert "hello world" in line.plain
+    assert not any(style.underline for _, _, style in line.spans)
+
+
+def test_log_view_preserves_legitimate_underline(tmp_path):
+    # A real, properly-closed underline still renders — the fix removes only the
+    # misparsed private-marker sequences, not genuine SGR styling.
+    path = tmp_path / "task.log"
+    path.write_bytes(b"\x1b[4mUP\x1b[24m DOWN\r\n")
+    view = data.LogView(path)
+    assert view.read_new() is True
+    line = view.render()
+    underlined = "".join(line.plain[s:e] for s, e, st in line.spans if st.underline)
+    assert "UP" in underlined
+    assert "DOWN" not in underlined
+
+
+def test_log_view_strips_private_marker_sgr_split_across_reads(tmp_path):
+    # The marker sequence straddles two reads; the held-back trailing CSI lets the
+    # filter see it whole on the next read instead of leaking past pyte.
+    path = tmp_path / "task.log"
+    path.write_bytes(b"\x1b[>4")
+    view = data.LogView(path)
+    view.read_new()
+    with path.open("ab") as f:
+        f.write(b";2mhello\r\n")
+    assert view.read_new() is True
+    line = view.render()
+    assert "hello" in line.plain
+    assert not any(style.underline for _, _, style in line.spans)
+
+
 def test_log_view_history_beyond_screen(tmp_path):
     path = tmp_path / "task.log"
     path.write_bytes(b"".join(f"row {i:03d}\r\n".encode() for i in range(1, 81)))

@@ -141,6 +141,12 @@ class StoryTask:
     # resume-time manual-recovery notice describe the real cause; cleared once the
     # rebuild proceeds. Survives the resume serialization round-trip.
     rearmed: bool = False
+    # latched True for the lifetime of a resolved-escalation re-drive (set when
+    # _finish_inflight re-drives a `rearmed` task, cleared once the corrected spec
+    # is committed). While set, every rollback preserves the BMAD artifact folders'
+    # tracked content, so a mid-re-drive retry/defer reset can't silently revert
+    # the human correction. Survives the resume serialization round-trip.
+    resolved_redrive: bool = False
     # sweep bundles only: the deferred-work ids this task closes and the
     # rendered intent file handed to dev sessions
     dw_ids: list[str] = field(default_factory=list)
@@ -176,6 +182,7 @@ class StoryTask:
             "commit_sha": self.commit_sha,
             "defer_reason": self.defer_reason,
             "rearmed": self.rearmed,
+            "resolved_redrive": self.resolved_redrive,
             "dw_ids": self.dw_ids,
             "bundle_file": self.bundle_file,
             "worktree_path": self.worktree_path,
@@ -215,6 +222,7 @@ class StoryTask:
             commit_sha=d.get("commit_sha"),
             defer_reason=d.get("defer_reason"),
             rearmed=bool(d.get("rearmed", False)),
+            resolved_redrive=bool(d.get("resolved_redrive", False)),
             dw_ids=[str(i) for i in d.get("dw_ids", [])],
             bundle_file=d.get("bundle_file"),
             worktree_path=str(d.get("worktree_path", "")),

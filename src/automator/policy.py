@@ -221,7 +221,11 @@ class ScmPolicy:
     # untracked files and the whole _bmad-output/ are preserved) — convenient but
     # it discards the attempt's uncommitted work, so a warning is journalled when
     # it fires. Worktree isolation sidesteps this entirely (failed work stays in
-    # its worktree), so this knob only matters for isolation = "none".
+    # its worktree), so this knob only matters for isolation = "none". This flag
+    # governs unattended/stopped attempts only: a human-initiated escalation
+    # resolve re-drive always auto-recovers regardless — it reverts the failed
+    # attempt's source but preserves the corrected spec under the BMAD artifact
+    # folders, which it treats as orchestrator-owned.
     rollback_on_failure: bool = False
     # failed_diff_max_mb caps the per-file size (MB) of untracked files captured
     # into a kept-failed unit's forensic changes.patch, so a stray build dir or
@@ -715,7 +719,7 @@ target_branch = ""           # "" = the branch checked out at run start
 merge_strategy = "merge"     # ff | merge | squash (worktree mode merges the unit branch into target locally)
 delete_branch = true         # delete the unit branch after a successful merge
 keep_failed = true           # keep a failed unit's worktree+branch for inspection
-rollback_on_failure = false  # in-place (isolation="none") recovery after a failed attempt. false = never touch the tree; pause with manual recovery steps. true = auto-revert the attempt's tracked changes + remove only the untracked files this run created (WARNING: discards the attempt's uncommitted work; never a blanket git clean). Prefer isolation="worktree" to avoid touching your main checkout.
+rollback_on_failure = false  # in-place (isolation="none") recovery after a failed attempt. false = never touch the tree; pause with manual recovery steps. true = auto-revert the attempt's tracked changes + remove only the untracked files this run created (WARNING: discards the attempt's uncommitted work; never a blanket git clean). Governs unattended/stopped attempts only: a resolved escalation's re-drive always auto-recovers regardless (reverts the failed source, keeps the corrected spec). Prefer isolation="worktree" to avoid touching your main checkout.
 failed_diff_max_mb = 5       # per-file size cap (MB) for untracked files in a kept-failed unit's changes.patch; oversized files are skipped with a marker
 failed_diff_unlimited = false # true = capture the failed-unit diff with no size cap (may produce very large patches; warns when active)
 # commit_message_template: when set, the commit message dev sessions use for a

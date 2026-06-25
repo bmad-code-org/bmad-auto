@@ -637,82 +637,99 @@ class Engine:
                 continue
             return story
 
-    def _rollback_or_pause(self, task: StoryTask, *, cause: str = "stopped") -> None:
-        """Recover from an in-place attempt that won't proceed.
-
-        No-op when the tree is already at the attempt's baseline (nothing this
-        attempt touched): neither a reset nor a pause is needed. This is also
-        what lets the manual-recovery instructions terminate — after the operator
-        resets and resumes, the now-clean tree skips straight through instead of
-        re-pausing on the still-set ``baseline_commit``.
-
-        Otherwise, with ``scm.rollback_on_failure`` OFF (default) the orchestrator
-        never touches the working tree: it emits a bold manual-recovery notice and
-        pauses the run (stop-and-wait), so nothing proceeds on a half-finished
-        tree. With it ON, it does the safest possible automatic rollback —
-        revert the attempt's tracked changes to baseline and delete only the
-        untracked files this run created (the whole BMAD output folder and every
-        pre-existing untracked file are preserved; there is no blanket
-        ``git clean``). ``cause`` tunes the manual notice's wording."""
-        if task.baseline_commit and not verify.attempt_dirty(
-            self.workspace.root, task.baseline_commit, task.baseline_untracked
-        ):
-            self.journal.append("rollback-skipped-clean", story_key=task.story_key)
-            return
-        if not self.policy.scm.rollback_on_failure:
-            self._pause_for_manual_recovery(task, task.baseline_commit or "", cause=cause)
-            return  # unreachable: _pause_for_manual_recovery always raises
-        self.journal.append(
-            "rollback-auto",
-            story_key=task.story_key,
-            baseline=task.baseline_commit or "",
-            note="reverting tracked changes + run-created untracked files",
-        )
-        self._safe_reset(task)
-
-    def _safe_reset(self, task: StoryTask) -> None:
-        """Revert tracked changes to the task baseline and remove only the
-        untracked files this run created — never a blanket `git clean`. Used by
-        the gated rollback (when enabled) and by internal ledger recovery (sweep
-        migration), which restores the orchestrator's own state and must not
-        pause."""
-        keep = [".automator"]
+    def _protected_relpaths(self) -> tuple[str, ...]:
+        """Repo-relative posix paths of the BMAD artifact folders. These are
+        orchestrator-owned: never counted as a dev attempt's dirtiness (the
+        resolve workflow corrects the frozen spec here) and preserved through
+        rollback. Folders configured outside the repo are skipped — nothing to
+        protect there."""
+        out: list[str] = []
         for protected in (
             self.workspace.paths.output_folder,
             self.workspace.paths.implementation_artifacts,
             self.workspace.paths.planning_artifacts,
         ):
             try:
-                keep.append(str(protected.relative_to(self.workspace.root)))
+                out.append(protected.relative_to(self.workspace.root).as_posix())
             except ValueError:
                 pass  # configured outside the repo; nothing to protect here
+        return tuple(out)
+
+    def _rollback_or_pause(self, task: StoryTask, *, cause: str = "stopped") -> None:
+        """Recover from an in-place attempt that won't proceed.
+
+        No-op when the tree is already at the attempt's baseline (nothing this
+        attempt touched, ignoring orchestrator-owned artifact folders): neither a
+        reset nor a pause is needed. This is also what lets the manual-recovery
+        instructions terminate — after the operator resets and resumes, the
+        now-clean tree skips straight through instead of re-pausing on the
+        still-set ``baseline_commit``.
+
+        A ``cause="resolved"`` re-drive is human-initiated (the operator ran the
+        resolve workflow and re-armed the story), so it always auto-recovers and
+        never pauses, regardless of ``scm.rollback_on_failure``. For the entire
+        re-drive (``task.resolved_redrive``, latched at resume and cleared once the
+        correction is committed) the BMAD artifact folders are treated as
+        orchestrator-owned: excluded from the dirty check (the corrected spec must
+        not read as a failed attempt) and preserved through every reset — so a
+        later mid-re-drive retry/defer reset can't silently revert the correction.
+
+        Otherwise (a stopped/abandoned attempt) the flag governs: OFF (default)
+        leaves the working tree untouched and emits a bold manual-recovery notice
+        that pauses the run (stop-and-wait); ON does a clean reset to baseline.
+        Either way pre-existing untracked files are preserved; there is no blanket
+        ``git clean``."""
+        resolved = cause == "resolved"
+        # preserve the corrected spec for the whole re-drive, not just the first
+        # reset; the auto-recover (pause-vs-reset) decision below is unaffected.
+        redrive = resolved or task.resolved_redrive
+        protected = self._protected_relpaths() if redrive else ()
+        if task.baseline_commit and not verify.attempt_dirty(
+            self.workspace.root, task.baseline_commit, task.baseline_untracked, exclude=protected
+        ):
+            self.journal.append("rollback-skipped-clean", story_key=task.story_key)
+            return
+        if resolved or self.policy.scm.rollback_on_failure:
+            self.journal.append(
+                "rollback-auto",
+                story_key=task.story_key,
+                baseline=task.baseline_commit or "",
+                note="reverting tracked changes + run-created untracked files",
+            )
+            self._safe_reset(task, preserve=protected)
+            return
+        self._pause_for_manual_recovery(task, task.baseline_commit or "")
+        return  # unreachable: _pause_for_manual_recovery always raises
+
+    def _safe_reset(self, task: StoryTask, *, preserve: tuple[str, ...] = ()) -> None:
+        """Revert tracked changes to the task baseline and remove only the
+        untracked files this run created — never a blanket `git clean`. Used by
+        the gated/resolved rollback and by internal ledger recovery (sweep
+        migration), which restores the orchestrator's own state and must not
+        pause. The BMAD artifact folders are always kept from untracked deletion;
+        ``preserve`` (set only on a resolved re-drive) additionally keeps their
+        *tracked* content alive through the reset, so a just-corrected spec is not
+        reverted. Sweep passes no ``preserve`` — it wants the broken ledger gone."""
         verify.safe_rollback(
             self.workspace.root,
             task.baseline_commit or "",
             baseline_untracked=task.baseline_untracked,
-            keep=tuple(keep),
+            keep=(".automator", *self._protected_relpaths()),
+            preserve=preserve,
         )
 
-    def _pause_for_manual_recovery(
-        self, task: StoryTask, baseline: str, *, cause: str = "stopped"
-    ) -> None:
-        """OFF path: leave the tree untouched, surface bold manual-recovery
-        instructions, and pause the run. Always raises RunPaused. ``cause``
-        selects the wording: ``"resolved"`` for an escalation re-armed into a
-        clean rebuild, anything else for a stopped/abandoned attempt."""
+    def _pause_for_manual_recovery(self, task: StoryTask, baseline: str) -> None:
+        """OFF path for a stopped/abandoned in-place attempt: leave the tree
+        untouched, surface bold manual-recovery instructions, and pause the run.
+        Always raises RunPaused. A *resolved* escalation never reaches here —
+        `_rollback_or_pause` auto-recovers that human-initiated re-drive
+        regardless of `scm.rollback_on_failure`."""
         short = baseline[:12] or "the run's baseline commit"
-        if cause == "resolved":
-            why = (
-                f"Story **{task.story_key}**'s escalation was resolved; re-driving "
-                "it needs a clean baseline, but auto-rollback is OFF, so the "
-                "working tree was left exactly as-is for you to inspect.\n"
-            )
-        else:
-            why = (
-                f"Story **{task.story_key}**'s attempt was stopped and auto-rollback "
-                "is OFF, so the working tree was left exactly as-is for you to "
-                "inspect.\n"
-            )
+        why = (
+            f"Story **{task.story_key}**'s attempt was stopped and auto-rollback "
+            "is OFF, so the working tree was left exactly as-is for you to "
+            "inspect.\n"
+        )
         notice = (
             "**ACTION REQUIRED — manual rollback needed**\n"
             f"{why}"
@@ -767,6 +784,9 @@ class Engine:
                     task.worktree_path = ""
                     task.branch = ""
                 elif task.baseline_commit:
+                    # latch resolved_redrive so the corrected spec stays protected
+                    # through every reset of this re-drive, not just this first one
+                    task.resolved_redrive = task.resolved_redrive or task.rearmed
                     self._rollback_or_pause(task, cause="resolved" if task.rearmed else "stopped")
                 task.rearmed = False  # past rollback (only reached when not paused)
                 task.phase = Phase.PENDING  # deliberate reset, not a normal transition
@@ -1236,6 +1256,9 @@ class Engine:
             # was nothing to finalize (NO_VCS, or the tree already at baseline).
             sha = verify.finalize_commit(self.workspace.root, task.baseline_commit, message)
             task.commit_sha = sha or task.baseline_commit
+            # the corrected spec is now durable in HEAD; later attempts need no
+            # special preservation, so drop the re-drive latch.
+            task.resolved_redrive = False
         except verify.GitError as e:
             self._escalate(task, f"commit failed: {e}")
         advance(task, Phase.DONE)

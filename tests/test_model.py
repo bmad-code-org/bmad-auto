@@ -18,6 +18,17 @@ def test_followup_review_recommended_defaults_false_for_legacy_state():
     assert StoryTask.from_dict(doc).followup_review_recommended is False
 
 
+def test_resolved_redrive_round_trips():
+    task = StoryTask(story_key="1-1-a", epic=1, resolved_redrive=True)
+    assert StoryTask.from_dict(task.to_dict()).resolved_redrive is True
+
+
+def test_resolved_redrive_defaults_false_for_legacy_state():
+    doc = StoryTask(story_key="1-1-a", epic=1).to_dict()
+    del doc["resolved_redrive"]  # state.json from before the field existed
+    assert StoryTask.from_dict(doc).resolved_redrive is False
+
+
 def test_stopped_round_trips():
     state = _state(stopped=True)
     assert RunState.from_dict(state.to_dict()).stopped is True

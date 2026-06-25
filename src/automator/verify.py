@@ -131,19 +131,45 @@ def has_changes_since(repo: Path, baseline: str) -> bool:
     return rc == 0 and out != ""
 
 
-def attempt_dirty(repo: Path, baseline: str, baseline_untracked: list[str] | None) -> bool:
+def attempt_dirty(
+    repo: Path,
+    baseline: str,
+    baseline_untracked: list[str] | None,
+    exclude: tuple[str, ...] = (),
+) -> bool:
     """True if a `safe_rollback` to `baseline` would change anything: tracked
     changes since baseline, or untracked files created since the baseline
     snapshot. `baseline_untracked=None` (a pre-snapshot run) means untracked
     files are never this attempt's to remove, so only tracked diff counts. This
     mirrors `safe_rollback`'s notion of what *this attempt* touched, so callers
-    can skip a no-op reset/pause when the tree is already at baseline."""
-    rc, _ = _git(repo, "diff", "--quiet", baseline, "--")
+    can skip a no-op reset/pause when the tree is already at baseline.
+
+    `exclude` is repo-relative posix dir prefixes (e.g. the BMAD artifact
+    folders) whose changes are orchestrator-owned and never count as a dev
+    attempt's dirtiness — they pair with `safe_rollback`'s `preserve`, so a
+    change confined to those folders reads as clean."""
+    if exclude:
+        rc, _ = _git(repo, "diff", "--quiet", baseline, "--", ".", *_exclude_specs(exclude))
+    else:
+        rc, _ = _git(repo, "diff", "--quiet", baseline, "--")
     if rc != 0:
         return True
     if baseline_untracked is None:
         return False
-    return bool(untracked_files(repo) - set(baseline_untracked))
+    created = untracked_files(repo) - set(baseline_untracked)
+    if exclude:
+        created = {p for p in created if not _path_under_any(p, exclude)}
+    return bool(created)
+
+
+def _exclude_specs(dirs: tuple[str, ...]) -> list[str]:
+    """git pathspec `:(exclude)<dir>` args for each repo-relative dir prefix."""
+    return [f":(exclude){d}" for d in dirs]
+
+
+def _path_under_any(path: str, prefixes: tuple[str, ...]) -> bool:
+    """True if repo-relative posix `path` equals or sits under any `prefixes` dir."""
+    return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
 
 
 def untracked_files(repo: Path) -> set[str]:
@@ -162,6 +188,7 @@ def safe_rollback(
     *,
     baseline_untracked: list[str] | None,
     keep: tuple[str, ...] = (".automator",),
+    preserve: tuple[str, ...] = (),
 ) -> None:
     """Undo a failed attempt WITHOUT a blanket `git clean`.
 
@@ -172,10 +199,33 @@ def safe_rollback(
     therefore never runs `git clean -fd`, so it can't eat a user's pre-existing
     untracked work. `baseline_untracked` is the snapshot taken when the baseline
     was captured; None (a pre-upgrade run with no snapshot) removes nothing.
+
+    `preserve` is repo-relative posix dir prefixes (the BMAD artifact folders)
+    whose *tracked* content must survive the hard reset — e.g. a frozen spec the
+    resolve workflow just corrected. The `git reset --hard` would otherwise
+    revert them (keep only guards untracked deletion). We snapshot the current
+    tree with `git stash create`, reset, then restore those paths from the
+    snapshot. Untracked artifacts need no special handling: the reset leaves them
+    alone and the cleanup below skips `keep` dirs.
     """
+    snapshot = ""
+    if preserve:
+        rc, out = _git(repo, "stash", "create")
+        if rc == 0:
+            snapshot = out.strip()
     rc, out = _git(repo, "reset", "--hard", baseline)
     if rc != 0:
         raise GitError(f"git reset --hard {baseline} failed: {out}")
+    if preserve and snapshot:
+        # Restore each artifact path's pre-reset content from the snapshot tree.
+        # A dir with no tracked files in the snapshot makes `git checkout` exit
+        # non-zero ("pathspec did not match") — that's benign. Any other failure
+        # means the corrected artifact wasn't restored: raise instead of silently
+        # losing it (which would regress the resolved re-drive into a recovery loop).
+        for d in preserve:
+            rc, out = _git(repo, "checkout", snapshot, "--", d)
+            if rc != 0 and "did not match" not in out:
+                raise GitError(f"git checkout {snapshot[:12]} -- {d} failed: {out}")
     if baseline_untracked is None:
         return  # no snapshot to diff against: never delete untracked files
     created = untracked_files(repo) - set(baseline_untracked)
