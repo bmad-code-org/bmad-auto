@@ -31,7 +31,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install tmux (for generic_tmux integration tests)
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: |
+          # `apt-get update` can exit non-zero when an unrelated third-party
+          # repo baked into the runner image (e.g. dl.google.com/chrome) serves
+          # a stale index (Hash Sum mismatch). That must not fail our build —
+          # the Ubuntu archive lists still refresh, so tmux installs cleanly.
+          # `tmux -V` then asserts tmux is actually present, so a genuine
+          # install failure still fails the job loudly.
+          sudo apt-get update -o Acquire::Retries=3 || true
+          sudo apt-get install -y tmux
+          tmux -V
 
       - name: Install the project
         run: uv sync --locked --all-extras
