@@ -328,7 +328,7 @@ class GenericDevAdapter(GenericAdapter):
                     # Bundle dev sessions: the orchestrator exports the bundle's
                     # owned dw ids (the generic skill never authors them). Stamp
                     # them onto the result so verify_dev_bundle's cross-check passes.
-                    raw_dw_ids = spec.env.get("BMAD_AUTO_DW_IDS", "").split(",")
+                    raw_dw_ids = (spec.env.get("BMAD_AUTO_DW_IDS") or "").split(",")
                     dw_ids = [tok for tok in (i.strip() for i in raw_dw_ids) if tok]
                     return devcontract.synthesize_result(
                         spec_path, story_key=story_key, dw_ids=dw_ids or None

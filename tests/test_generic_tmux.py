@@ -257,6 +257,27 @@ def test_generic_dev_bundle_stamps_dw_ids_from_env(tmp_path):
     assert rj["dw_ids"] == ["DW-1", "DW-2"]
 
 
+def test_generic_dev_dw_ids_none_env_does_not_crash(tmp_path):
+    # A misbehaving plugin/hook could set BMAD_AUTO_DW_IDS to None instead of
+    # deleting it; synthesis must not crash (it would false-stall a completed
+    # session), and emits no dw ids.
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: done\nbaseline_revision: abc123\n---\n\n"
+        "## Auto Run Result\n\nStatus: done\nImplemented the thing.\n"
+    )
+    spec = SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto 3-1",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": "3-1", "BMAD_AUTO_DW_IDS": None},
+    )
+    rj = adapter._result_json(_dev_handle(), spec, wait=True)
+    assert rj["status"] == "done"
+    assert "dw_ids" not in rj
+
+
 def test_generic_dev_finds_spec_in_worktree(tmp_path):
     # Under worktree isolation the skill runs with cwd set to the worktree and
     # leaves its terminal spec in the worktree's rebased implementation-artifacts

@@ -275,15 +275,17 @@ def test_verify_dev_bundle_dw_ids_mismatch(project):
     assert not out.ok and "dw_ids" in out.reason
 
 
-def test_verify_dev_bundle_absent_dw_ids_passes(project):
+@pytest.mark.parametrize("claim", [{}, {"dw_ids": []}], ids=["missing-key", "empty-list"])
+def test_verify_dev_bundle_absent_dw_ids_passes(project, claim):
     # Generic bmad-dev-auto path: the primitive authors no dw ids, so result.json
-    # omits them. The orchestrator owns the bundle→dw-id binding, so verify must
-    # pass on an absent claim (regression: this used to always retry → defer).
+    # omits them (missing key) or carries an empty list. The orchestrator owns the
+    # bundle→dw-id binding, so verify must pass on an unclaimed bundle. The empty
+    # list is the literal payload that defered in production ("dw_ids []").
     task = make_bundle_task(project)
     sp = project.implementation_artifacts / "spec-dw-test-bundle.md"
     write_spec(sp, "in-review", task.baseline_commit)
     (project.project / "src.txt").write_text("changed\n")
-    rj = {"workflow": "auto-dev", "spec_file": str(sp)}
+    rj = {"workflow": "auto-dev", "spec_file": str(sp), **claim}
     out = verify.verify_dev_bundle(task, project, rj)
     assert out.ok
     assert task.spec_file == str(sp)
