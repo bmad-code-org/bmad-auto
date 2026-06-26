@@ -325,7 +325,13 @@ class GenericDevAdapter(GenericAdapter):
                 spec_path = devcontract.find_result_artifact(artifacts, since_ns=handle.launched_ns)
                 if spec_path is not None:
                     story_key = spec.env.get("BMAD_AUTO_STORY_KEY") or None
-                    return devcontract.synthesize_result(spec_path, story_key=story_key).result_json
+                    # Bundle dev sessions: the orchestrator exports the bundle's
+                    # owned dw ids (the generic skill never authors them). Stamp
+                    # them onto the result so verify_dev_bundle's cross-check passes.
+                    dw_ids = [i for i in spec.env.get("BMAD_AUTO_DW_IDS", "").split(",") if i]
+                    return devcontract.synthesize_result(
+                        spec_path, story_key=story_key, dw_ids=dw_ids or None
+                    ).result_json
             if not wait or time.monotonic() >= deadline:
                 return None
             time.sleep(RESULT_POLL_S)
