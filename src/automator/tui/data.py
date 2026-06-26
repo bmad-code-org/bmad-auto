@@ -340,6 +340,13 @@ _ALTSCREEN_MARKERS = (
     b"\x1b[?47h",
     b"\x1b[?47l",
 )
+# Cold-open altscreen detection scans the max_bytes-skipped prefix, but caps it so a
+# huge finished log doesn't trigger a near-whole-file read that would defeat
+# max_bytes. 8 MiB comfortably covers a multi-MB classic preamble before a TUI
+# switches to the alternate screen (observed ~3.9 MB); a marker past the cap in an
+# oversized log is missed only on cold open — live-watching reads from offset 0 and
+# still catches it.
+_ALTSCREEN_PREFIX_SCAN_CAP = 8 << 20
 # A trailing, not-yet-terminated CSI at the end of a read: ESC, or ESC[ followed by
 # only param/marker bytes with no final letter. Held back so a marker sequence split
 # across two reads is filtered whole next time (the filter must see it complete).
@@ -468,7 +475,9 @@ class LogView:
     def _scan_prefix_for_altscreen(self, end: int) -> None:
         """One-time scan of bytes [0, end) for an altscreen switch marker, in
         overlapping windows so a marker straddling a window boundary still
-        matches. Sets altscreen_seen; best-effort, never raises."""
+        matches. `end` is the caller-bounded scan ceiling (see
+        _ALTSCREEN_PREFIX_SCAN_CAP), not necessarily the full prefix. Sets
+        altscreen_seen; best-effort, never raises."""
         overlap = max(len(m) for m in _ALTSCREEN_MARKERS) - 1
         window = 1 << 20
         try:
@@ -506,7 +515,7 @@ class LogView:
             # cold-opened fullscreen log is still flagged; the tail is covered by
             # the per-chunk scan below.
             if self._offset > 0 and not self.altscreen_seen:
-                self._scan_prefix_for_altscreen(self._offset)
+                self._scan_prefix_for_altscreen(min(self._offset, _ALTSCREEN_PREFIX_SCAN_CAP))
         elif size < self._offset:
             self._offset = 0
             self._reset_screen()

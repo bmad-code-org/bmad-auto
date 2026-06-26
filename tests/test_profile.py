@@ -60,7 +60,7 @@ def test_builtin_profiles_load():
     # not collapsed to the final frame by the fullscreen alt-screen TUI; other
     # profiles add no such env override
     assert profiles["claude"].env.get("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN") == "1"
-    for name in ("codex", "gemini"):
+    for name in ("codex", "gemini", "copilot"):
         assert "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN" not in profiles[name].env
 
 

@@ -360,6 +360,25 @@ def test_log_view_altscreen_detected_past_tail_seek(tmp_path):
     assert view.altscreen_seen is True
 
 
+def test_log_view_altscreen_prefix_scan_is_capped(tmp_path, monkeypatch):
+    # The cold-open prefix scan is bounded so a huge finished log is not read whole.
+    # A marker beyond the cap (but inside the tail-skipped prefix) is missed on cold
+    # open; one within the cap is still flagged.
+    monkeypatch.setattr(data, "_ALTSCREEN_PREFIX_SCAN_CAP", 100)
+    path = tmp_path / "task.log"
+    # marker at offset 200 (> cap), then enough filler that it stays out of the tail
+    path.write_bytes(b"A" * 200 + b"\x1b[?1049h" + b"filler\r\n" * 4000 + b"END\r\n")
+    view = data.LogView(path, max_bytes=1024)
+    assert view.read_new() is True
+    assert view.altscreen_seen is False  # marker sat past the capped scan window
+
+    # raise the cap above the marker offset: the same cold open now flags it
+    monkeypatch.setattr(data, "_ALTSCREEN_PREFIX_SCAN_CAP", 1 << 20)
+    view2 = data.LogView(path, max_bytes=1024)
+    assert view2.read_new() is True
+    assert view2.altscreen_seen is True
+
+
 def test_log_view_truncation_clears_altscreen(tmp_path):
     path = tmp_path / "task.log"
     path.write_bytes(b"\x1b[?1049hframe\r\n")
