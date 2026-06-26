@@ -470,7 +470,9 @@ def test_safe_rollback_preserves_uncommitted_policy_edit(project):
 
 def test_safe_rollback_restores_policy_deleted_by_reset(project):
     """policy.toml added/committed *after* the baseline would be deleted by a
-    reset to that older baseline; it is still restored from the snapshot."""
+    reset to that older baseline; it is still restored from the pre-reset on-disk
+    capture (the dirty src.txt here keeps the stash snapshot non-empty — the
+    clean-tree, empty-snapshot path is covered by the test below)."""
     repo = project.project
     baseline = verify.rev_parse_head(repo)  # baseline predates policy.toml
     pol = repo / ".automator" / "policy.toml"
