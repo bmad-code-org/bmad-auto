@@ -5,6 +5,19 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.3] — 2026-06-26
+
+### Fixed
+
+- **The Log tab no longer shows only a single page for Claude runs.** Claude Code's new
+  fullscreen TUI (an opt-in research preview) draws on the terminal's alternate screen and repaints
+  in place, so the pane capture the Log tab emulates collapsed to the final frame — while
+  line-oriented CLIs like codex still showed in full. The `claude` profile now forces the classic
+  inline/scrollback renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`), which overrides any `tui`
+  setting and keeps output in native scrollback so the whole session is reconstructable. As a
+  safety net, the log view also detects an alternate-screen switch and flags such a capture as
+  showing only the final frame, pointing at the agent's full JSONL transcript.
+
 ## [0.7.2] — 2026-06-26
 
 ### Fixed
@@ -654,6 +667,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.3
 [0.7.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.2
 [0.7.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.0
 [0.6.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.4
