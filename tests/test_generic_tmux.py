@@ -234,6 +234,48 @@ def test_generic_dev_synthesizes_done_spec(tmp_path):
     assert rj["baseline_commit"] == "abc123"  # mapped from baseline_revision
     assert rj["story_key"] == "3-1"
     assert rj["escalations"] == []
+    assert "dw_ids" not in rj  # a normal story exports no BMAD_AUTO_DW_IDS
+
+
+def test_generic_dev_bundle_stamps_dw_ids_from_env(tmp_path):
+    # The orchestrator exports the bundle's owned dw ids; the generic skill never
+    # authors them. The adapter stamps them onto the synthesized result, tolerant
+    # of whitespace in the env value (e.g. a hand-set or hook-rewritten "DW-1, DW-2").
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-dw-bundle.md").write_text(
+        "---\nstatus: done\nbaseline_revision: abc123\n---\n\n"
+        "## Auto Run Result\n\nStatus: done\nResolved the bundle.\n"
+    )
+    spec = SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto bundle",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": "dw-bundle", "BMAD_AUTO_DW_IDS": "DW-1, DW-2"},
+    )
+    rj = adapter._result_json(_dev_handle(), spec, wait=True)
+    assert rj["dw_ids"] == ["DW-1", "DW-2"]
+
+
+def test_generic_dev_dw_ids_none_env_does_not_crash(tmp_path):
+    # A misbehaving plugin/hook could set BMAD_AUTO_DW_IDS to None instead of
+    # deleting it; synthesis must not crash (it would false-stall a completed
+    # session), and emits no dw ids.
+    adapter, impl = make_dev_adapter(tmp_path)
+    (impl / "spec-3-1-foo.md").write_text(
+        "---\nstatus: done\nbaseline_revision: abc123\n---\n\n"
+        "## Auto Run Result\n\nStatus: done\nImplemented the thing.\n"
+    )
+    spec = SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto 3-1",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": "3-1", "BMAD_AUTO_DW_IDS": None},
+    )
+    rj = adapter._result_json(_dev_handle(), spec, wait=True)
+    assert rj["status"] == "done"
+    assert "dw_ids" not in rj
 
 
 def test_generic_dev_finds_spec_in_worktree(tmp_path):

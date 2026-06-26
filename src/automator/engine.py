@@ -1381,6 +1381,12 @@ class Engine:
             "BMAD_AUTO_TASK_ID": task_id,
             "BMAD_AUTO_STORY_KEY": task.story_key,
         }
+        if task.dw_ids:
+            # Deferred-work bundle: the orchestrator owns the bundle→dw-id binding
+            # (the generic bmad-dev-auto primitive knows nothing of dw ids). Export
+            # them so the generic adapter can stamp them onto the synthesized
+            # result.json, keeping verify_dev_bundle's dw_ids cross-check live.
+            env["BMAD_AUTO_DW_IDS"] = ",".join(task.dw_ids)
         if role == "dev" and not self.policy.review.enabled:
             # signals that the orchestrator will run no follow-up review session.
             # bmad-dev-auto always self-reviews inline (step-03 → step-04) and

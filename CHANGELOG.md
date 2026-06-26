@@ -5,6 +5,19 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.4] — 2026-06-26
+
+### Fixed
+
+- **Deferred-work sweep no longer defers every bundle it just finished.** After the migration to
+  the generic upstream `bmad-dev-auto` primitive, bundle dev sessions completed the work but were
+  rejected by `verify_dev_bundle` with `result.json dw_ids [] do not match the bundle's […]`,
+  retried to budget, deferred, and rolled the work back — so a sweep could never close a bundled
+  entry. The retired dev fork used to echo the dw ids; the generic skill doesn't. The orchestrator
+  already owns the bundle→dw-id binding, so the cross-check now passes when the session claims no
+  ids, and the run exports `BMAD_AUTO_DW_IDS` so the synthesized result still carries them and the
+  check stays live.
+
 ## [0.7.3] — 2026-06-26
 
 ### Fixed
@@ -667,6 +680,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.4
 [0.7.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.3
 [0.7.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.2
 [0.7.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.0

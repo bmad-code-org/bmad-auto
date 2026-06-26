@@ -702,7 +702,11 @@ def verify_dev_bundle(
     review_enabled: bool = True,
 ) -> VerifyOutcome:
     """verify_dev for a deferred-work bundle: bundles have no sprint-status
-    entry, but the session must claim exactly the dw ids the bundle owns."""
+    entry. The orchestrator owns the bundle→dw-id binding (``task.dw_ids``,
+    marked done by ``SweepEngine._post_dev_state_sync``); the generic
+    ``bmad-dev-auto`` primitive never authors dw ids. So the dw_ids cross-check
+    is enforced only when the session actually claims them — an empty/absent
+    claim is the normal generic path and passes."""
     rj = result_json or {}
     spec_file = rj.get("spec_file")
     if not spec_file:
@@ -739,8 +743,8 @@ def verify_dev_bundle(
         except GitError as e:
             return VerifyOutcome.escalate(str(e))
 
-    claimed_ids = {str(i) for i in rj.get("dw_ids", [])}
-    if claimed_ids != set(task.dw_ids):
+    claimed_ids = {str(i) for i in (rj.get("dw_ids") or [])}
+    if claimed_ids and claimed_ids != set(task.dw_ids):
         return VerifyOutcome.retry(
             f"result.json dw_ids {sorted(claimed_ids)} do not match the bundle's "
             f"{sorted(task.dw_ids)}"
