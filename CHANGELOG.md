@@ -5,6 +5,29 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.2] — 2026-06-26
+
+### Fixed
+
+- **Worktree isolation no longer false-stalls a story that actually finished.** Under
+  `scm.isolation = worktree` the `bmad-dev-auto` session runs with its cwd set to the worktree and
+  leaves its terminal spec in the worktree's `_bmad-output/implementation-artifacts`, but the dev
+  adapter searched the main checkout's dir (resolved once at startup). The completed `status: done`
+  spec was never found, so the orchestrator misread the session as stalled, rolled the unit branch
+  back to baseline, and re-ran the same story. The adapter now resolves the spec directory from the
+  live session cwd; in-place runs and artifact dirs configured outside the project tree are
+  unaffected.
+
+- **An uncommitted `policy.toml` edit no longer vanishes on rollback.** `policy.toml` is tracked but
+  lives inside the kept `.automator` dir, so a rollback's `git reset --hard` to baseline silently
+  reverted operator edits — a freshly enabled `scm.rollback_on_failure` could disappear before it ever
+  took effect — and a lone policy edit could register as attempt dirtiness, trapping the
+  manual-recovery loop. Rollback now always snapshots and restores `policy.toml`, and the dirty check
+  always excludes it, regardless of the preserve set.
+
+- **Fixed a decision-toast notification race in the TUI test suite on Python 3.14.** Test-only; no
+  runtime change.
+
 ## [0.7.1] — 2026-06-25
 
 ### Fixed
@@ -629,6 +652,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.2]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.2
 [0.7.0]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.0
 [0.6.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.4
 [0.6.3]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.6.3
