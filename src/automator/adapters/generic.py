@@ -79,6 +79,10 @@ class GenericAdapter(CodingCLIAdapter):
                 else policy.limits.stop_without_result_nudges
             )
         )
+        # Grace for a result-less Stop before declaring a stall. 0 (base default)
+        # keeps the fail-fast behavior; the dev adapter raises it so a session
+        # that ended its turn awaiting a background process isn't mis-stalled.
+        self._stall_grace_s = 0.0
         self.name = f"{profile.name}-tmux"
         self.binary = binary or profile.binary
         self.session_name = f"bmad-auto-{run_dir.name}"
@@ -154,6 +158,10 @@ class GenericAdapter(CodingCLIAdapter):
         session_id: str | None = None
         transcript_path: str | None = None
         nudges_left = self._stop_nudges
+        # set when a result-less Stop opens an idle-grace window (dev adapter
+        # only); a fresh Stop re-arms it, an elapsed window with no terminal
+        # result is a genuine stall. None = no grace pending.
+        stall_deadline: float | None = None
 
         while True:
             remaining = deadline - time.monotonic()
@@ -173,6 +181,19 @@ class GenericAdapter(CodingCLIAdapter):
                 if not self._window_alive(handle):
                     # died without a SessionEnd hook (killed, crashed hard)
                     return self._final(handle, spec, "crashed", session_id, transcript_path)
+                if stall_deadline is not None and time.monotonic() >= stall_deadline:
+                    # the grace window elapsed with no re-invocation; one last
+                    # non-blocking check in case the spec landed without a fresh
+                    # Stop, else it's a real stall.
+                    result_json = self._result_json(handle, spec, wait=False)
+                    if result_json is not None:
+                        return SessionResult(
+                            status="completed",
+                            result_json=result_json,
+                            session_id=session_id,
+                            transcript_path=transcript_path,
+                        )
+                    return self._final(handle, spec, "stalled", session_id, transcript_path)
                 continue
             if (
                 event.event == "Stop"
@@ -204,7 +225,16 @@ class GenericAdapter(CodingCLIAdapter):
                     nudges_left -= 1
                     self.send_text(handle, NUDGE_TEXT)
                     continue
-                return self._final(handle, spec, "stalled", session_id, transcript_path)
+                if self._stall_grace_s <= 0:
+                    return self._final(handle, spec, "stalled", session_id, transcript_path)
+                # A result-less Stop, but the session may have ended its turn to
+                # await a background process (a Unity PlayMode run, a slow test)
+                # and expects to be re-invoked on completion. Open/re-arm an idle-
+                # grace window — a later Stop lands here again and resets it, so
+                # only a genuinely idle gap (handled in the no-event branch above)
+                # is a stall. Bounded overall by spec.timeout_s.
+                stall_deadline = time.monotonic() + self._stall_grace_s
+                continue
             if event.event == "SessionEnd":
                 return self._final(handle, spec, "crashed", session_id, transcript_path)
 
@@ -298,8 +328,11 @@ class GenericDevAdapter(GenericAdapter):
         self.paths = paths
         # The generic skill never writes result.json, so the base "write the
         # result JSON file" nudge is meaningless — and actively misleading — for
-        # it. A Stop without a terminal spec is a genuine stall.
+        # it. A Stop without a terminal spec is a stall *unless* the session
+        # merely ended its turn to await a background process and will be re-
+        # invoked on completion; the idle-grace window distinguishes the two.
         self._stop_nudges = 0
+        self._stall_grace_s = float(self.policy.limits.dev_stall_grace_s)
 
     def _artifact_dirs(self, cwd: Path) -> list[Path]:
         # In worktree isolation the skill runs with cwd set to the worktree and

@@ -70,6 +70,12 @@ kind = "int"
 minimum = 0
 default_ref = "LimitsPolicy.stop_without_result_nudges"
 [[section.field]]
+key = "dev_stall_grace_s"
+kind = "int"
+minimum = 0
+default_ref = "LimitsPolicy.dev_stall_grace_s"
+description = "grace for a dev session that ended its turn awaiting a background process (e.g. a slow PlayMode/test run) before it is called stalled; each re-invocation resets it · 0 = fail fast on the first result-less Stop"
+[[section.field]]
 key = "max_tokens_per_story"
 kind = "int"
 minimum = 1

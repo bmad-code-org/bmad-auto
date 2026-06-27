@@ -421,8 +421,79 @@ def test_wait_for_completion_transcriptless_stop_is_terminal_without_flag(tmp_pa
     treats every Stop as the main turn-end, so a result-less one stalls the dev
     stage (0 nudges) — the filter must not leak to other CLIs."""
     adapter, _ = make_dev_adapter(tmp_path, profile_name="claude")
+    adapter._stall_grace_s = 0  # isolate the gating from the idle-grace path
     assert adapter.profile.subagent_stop_without_transcript is False
     adapter.watcher = _ScriptedWatcher([_stop_event("3-1-dev-1", "sess", None)])
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "stalled"
+
+
+def test_dev_stall_grace_defaults_from_policy(tmp_path):
+    # dev sessions tolerate a result-less Stop (a turn ended awaiting a background
+    # process) for the policy grace; the base/non-dev adapter never does (grace 0).
+    dev, _ = make_dev_adapter(tmp_path)
+    assert dev._stall_grace_s == float(LimitsPolicy().dev_stall_grace_s)
+    base = GenericTmuxAdapter(
+        run_dir=tmp_path / "run",
+        policy=Policy(limits=LimitsPolicy(dev_stall_grace_s=600)),
+        profile=get_profile("claude"),
+    )
+    assert base._stall_grace_s == 0.0
+
+
+def test_dev_result_less_stop_awaits_reinvocation_then_completes(tmp_path, monkeypatch):
+    """A dev session that ends its turn awaiting a background process emits a
+    result-less Stop, then a later Stop once the work lands. With grace > 0 the
+    first Stop must NOT stall; the second (carrying the terminal spec) completes."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)  # don't sit out the per-Stop await
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, impl = make_dev_adapter(tmp_path)
+    assert adapter._stall_grace_s > 0
+
+    def flush_terminal_spec(call_n):
+        # spec only finalizes on the second turn-end, after the background run
+        if call_n == 2:
+            (impl / "spec-3-1-foo.md").write_text(
+                "---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n"
+            )
+
+    adapter.watcher = _ScriptedWatcher(
+        [
+            _stop_event("3-1-dev-1", "sess", "/run/events.jsonl"),  # yielded to await bg run
+            _stop_event("3-1-dev-1", "sess", "/run/events.jsonl"),  # re-invoked, finished
+        ],
+        on_call=flush_terminal_spec,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "completed"
+
+
+def test_dev_stalls_when_grace_elapses_without_reinvocation(tmp_path, monkeypatch):
+    """A result-less Stop with no re-invocation before the grace window elapses is
+    a genuine stall — the grace must not hang until the session timeout."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, _ = make_dev_adapter(tmp_path)
+    adapter._stall_grace_s = 10.0
+    adapter._window_alive = lambda handle: True  # window still up, just idle
+
+    clock = {"t": 1000.0}
+
+    class _Clock:  # scoped shim so we don't mutate the real time module
+        monotonic = staticmethod(lambda: clock["t"])
+        sleep = staticmethod(lambda *_: None)
+        time_ns = staticmethod(lambda: 0)
+
+    monkeypatch.setattr(generic, "time", _Clock)
+
+    def advance_past_grace(call_n):
+        if call_n == 2:  # after the result-less Stop armed the window
+            clock["t"] += 11.0
+
+    adapter.watcher = _ScriptedWatcher(
+        [_stop_event("3-1-dev-1", "sess", "/run/events.jsonl")],  # then None forever
+        on_call=advance_past_grace,
+    )
     result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
     assert result.status == "stalled"
 

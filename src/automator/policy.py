@@ -42,6 +42,13 @@ class LimitsPolicy:
     max_dev_attempts: int = 2
     session_timeout_min: int = 90
     stop_without_result_nudges: int = 1
+    # how long a dev session may sit on a result-less Stop — i.e. it ended its
+    # turn awaiting a long-running background process (a Unity PlayMode run, a
+    # slow test) and expects to be re-invoked on completion — before it is
+    # declared stalled. Each re-invocation (a fresh Stop) resets the window; only
+    # a genuinely idle gap this long with no terminal spec stalls. Bounded by
+    # session_timeout_min. 0 restores the old fail-fast-on-first-Stop behavior.
+    dev_stall_grace_s: int = 600
     max_tokens_per_story: int = 2_000_000
     # weight of cache-read tokens in the budget check (1.0 = count raw)
     cache_read_weight: float = 0.1
@@ -431,6 +438,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         stop_without_result_nudges=int(
             limits_d.get("stop_without_result_nudges", LimitsPolicy.stop_without_result_nudges)
         ),
+        dev_stall_grace_s=int(limits_d.get("dev_stall_grace_s", LimitsPolicy.dev_stall_grace_s)),
         max_tokens_per_story=int(
             limits_d.get("max_tokens_per_story", LimitsPolicy.max_tokens_per_story)
         ),
@@ -442,6 +450,8 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         raise PolicyError(
             f"limits.cache_read_weight must be between 0 and 1: got {limits.cache_read_weight}"
         )
+    if limits.dev_stall_grace_s < 0:
+        raise PolicyError(f"limits.dev_stall_grace_s must be >= 0: got {limits.dev_stall_grace_s}")
 
     verify = VerifyPolicy(commands=tuple(str(c) for c in verify_d.get("commands", ())))
     notify = NotifyPolicy(
@@ -638,6 +648,7 @@ max_review_cycles = 3
 max_dev_attempts = 2
 session_timeout_min = 90
 stop_without_result_nudges = 1
+dev_stall_grace_s = 600      # grace for a dev session that ended its turn awaiting a background process (e.g. a slow PlayMode/test run) before it is called stalled; each re-invocation resets it. 0 = fail fast on the first result-less Stop
 max_tokens_per_story = 2000000
 cache_read_weight = 0.1      # cache reads bill at ~0.1x input on all vendors; 1.0 = count raw
 
