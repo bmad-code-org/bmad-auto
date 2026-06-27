@@ -1,5 +1,7 @@
 """The crown-jewel PII case table for the probe sanitizer."""
 
+import re
+
 import pytest
 
 from automator import sanitize
@@ -124,3 +126,96 @@ def test_scrub_event_payload_is_scrub_json(home):
     payload = {"session_id": "s-1", "cwd": f"{home}/proj", "n": 5}
     out = sanitize.scrub_event_payload(payload)
     assert out == {"session_id": "s-1", "cwd": "<redacted:str>", "n": 5}
+
+
+# --------------------------------------------------------------- looks_like_secret
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ghp_CANARYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx01",  # github token
+        "sk-CANARYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx99",  # openai
+        "sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxx",  # anthropic
+        "AKIAIOSFODNN7EXAMPLE",  # aws access key
+        "xoxb-123456789012-abcdefghijkl",  # slack bot token
+        "glpat-xxxxxxxxxxxxxxxxxxxx",  # gitlab pat
+        "AIzaSyA0000000000000000000000000000000",  # google api key
+        "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",  # 40-char high-entropy hex secret
+    ],
+)
+def test_looks_like_secret_catches_credentials(value):
+    assert sanitize.looks_like_secret(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "claude-opus-4-8",
+        "gpt-5-codex",
+        "session-abc_123",
+        "Stop",
+        "01234567-89ab-cdef-0123-456789abcdef",  # UUID: short runs at hyphens
+        "DW-1",
+        "1.2-add-logging",
+    ],
+)
+def test_looks_like_secret_passes_safe_slugs(value):
+    assert not sanitize.looks_like_secret(value)
+
+
+def test_scrub_json_redacts_identifier_shaped_secrets():
+    obj = {"model": "claude-opus-4-8", "token": "ghp_CANARYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx01"}
+    out = sanitize.scrub_json(obj)
+    assert out["model"] == "claude-opus-4-8"
+    assert out["token"] == "<redacted:secret>"
+
+
+# --------------------------------------------------------------- Pseudonymizer
+
+
+def test_pseudonymizer_is_stable_within_a_dump():
+    p = sanitize.Pseudonymizer()
+    a = p.alias("1.2-secret", ns="story", epic=1)
+    assert a == p.alias("1.2-secret", ns="story", epic=1)  # cached / stable
+    assert re.fullmatch(r"s1-[0-9a-f]{6}", a)
+    assert p.alias(None) is None and p.alias("") == ""
+    # legend reverses locally; original never equals the alias
+    assert p.legend()[a] == "1.2-secret"
+
+
+def test_pseudonymizer_salt_differs_across_instances():
+    a = sanitize.Pseudonymizer().alias("x", ns="branch")
+    b = sanitize.Pseudonymizer().alias("x", ns="branch")
+    assert a != b  # different per-dump salt -> not correlatable across dumps
+
+
+# --------------------------------------------------------------- assert_no_leak
+
+
+def test_assert_no_leak_clean_text():
+    assert sanitize.assert_no_leak("phase=done tokens=42 model=claude-opus-4-8") == []
+
+
+@pytest.mark.parametrize(
+    "text,rule",
+    [
+        ("contact me@example.com", "email"),
+        ("see https://user:pass@host/x", "url-credentials"),
+        ("path /home/alice/x", "absolute-home-path"),
+        ("key ghp_CANARYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx01", "secret"),
+    ],
+)
+def test_assert_no_leak_fires(text, rule):
+    assert rule in sanitize.assert_no_leak(text)
+
+
+def test_assert_no_leak_extra_word_boundary():
+    # short basename does not false-positive inside a longer word...
+    assert "sensitive:proj" not in [
+        r for r in sanitize.assert_no_leak("the project root", extra=["proj"])
+    ]
+    # ...but a standalone occurrence is caught
+    assert any(
+        r.startswith("sensitive:") for r in sanitize.assert_no_leak("dir proj here", extra=["proj"])
+    )

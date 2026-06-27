@@ -329,3 +329,11 @@ class TmuxMultiplexer(TerminalMultiplexer):
 
     def available(self) -> bool:
         return shutil.which("tmux") is not None
+
+    def version(self) -> str | None:
+        if not shutil.which("tmux"):
+            return None
+        try:
+            return self._tmux("-V")
+        except (MultiplexerError, subprocess.SubprocessError, OSError):
+            return None

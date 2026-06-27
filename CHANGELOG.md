@@ -5,6 +5,26 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.5] — 2026-06-27
+
+### Added
+
+- **`bmad-auto diagnose` emits a sanitized diagnostic dump of a run/sweep** so a user can hand
+  maintainers what's needed to debug a run without shipping any code, spec/story content, prompts,
+  transcripts, file paths, or PII. It derives the diagnostic _shape_ — phase/token/session
+  histograms, escalation counts, adapter/model, env, run-dir file sizes — and routes every
+  content-bearing value through the audited `sanitize` chokepoint: identifiers (story keys,
+  branches, SHAs) are pseudonymized to stable per-dump aliases so events still correlate, free text
+  collapses to presence booleans, and the rendered output is re-scanned by a fail-closed leak
+  self-check before writing. Defaults to the latest run; `--all`, `--out`, `--json`, and a
+  local-only `--legend` are supported.
+
+### Changed
+
+- **The `sanitize` chokepoint now redacts credential-shaped strings.** Identifier-shaped secrets
+  (`ghp_`/`sk-`/`AKIA`/`xoxb-`/JWTs and long high-entropy blobs) previously passed the slug gate
+  verbatim; they are now `<redacted:secret>`, closing the same hole for `probe-adapter`.
+
 ## [0.7.4] — 2026-06-26
 
 ### Fixed

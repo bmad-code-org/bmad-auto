@@ -163,6 +163,13 @@ class TerminalMultiplexer(ABC):
         """True iff this backend can run on the current host (e.g. its binary is
         on PATH)."""
 
+    def version(self) -> str | None:
+        """The backend binary's version string, or None when unavailable. Not
+        abstract: backends that can't report one inherit this default. Used by
+        the diagnostic dump; the implementation owns the binary invocation so it
+        stays behind the seam."""
+        return None
+
 
 @functools.lru_cache(maxsize=1)
 def get_multiplexer() -> TerminalMultiplexer:

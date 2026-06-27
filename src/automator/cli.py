@@ -998,6 +998,60 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    from . import diagnostics, sanitize
+
+    project = _project(args)
+    if args.all:
+        run_dirs = runs.list_run_dirs(project)
+    elif args.run_id:
+        try:
+            run_dirs = [runs.resolve_run_dir(project, args.run_id)]
+        except runs.RunRefError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+    else:
+        latest = runs.latest_run_dir(project)
+        run_dirs = [latest] if latest is not None else []
+    if not run_dirs:
+        print("no runs found", file=sys.stderr)
+        return 1
+
+    pseudo = sanitize.Pseudonymizer()
+    diag = diagnostics.collect(run_dirs, pseudo=pseudo, cap=args.max_journal_entries)
+    try:
+        report = diagnostics.render_markdown(diag, pseudo=pseudo)
+        if args.json:
+            report += (
+                "\n\n## JSON\n\n```json\n"
+                + diagnostics.render_json(diag, pseudo=pseudo)
+                + "\n```\n"
+            )
+    except diagnostics.LeakDetected as e:
+        # The output tripped the final self-check — fail closed, write nothing.
+        print(
+            f"FAIL: refusing to emit — leak self-check fired: {', '.join(e.rules)}", file=sys.stderr
+        )
+        return 1
+
+    if args.legend:
+        legend_path = Path(args.legend)
+        legend_path.write_text(json.dumps(pseudo.legend(), indent=2) + "\n", encoding="utf-8")
+        print(
+            f"  ok: alias legend written to {legend_path} — LOCAL ONLY, do NOT share "
+            "(it reverses the pseudonyms); delete after use",
+            file=sys.stderr,
+        )
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.write_text(report, encoding="utf-8")
+        print(f"  ok: sanitized diagnostics for {len(diag.runs)} run(s) written to {out_path}")
+    else:
+        print(report)
+    return 0
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     from .install import install_into
 
@@ -1147,6 +1201,27 @@ def main(argv: list[str] | None = None) -> int:
 
     status_p = add("status", cmd_status, "show run + sprint state")
     status_p.add_argument("run_id", nargs="?")
+
+    diag_p = add(
+        "diagnose",
+        cmd_diagnose,
+        "emit a sanitized diagnostic dump of a run/sweep to hand to maintainers",
+        aliases=["diag"],
+    )
+    diag_p.add_argument("run_id", nargs="?", help="run ref (default: latest)")
+    diag_p.add_argument("--all", action="store_true", help="dump every run in the project")
+    diag_p.add_argument("--out", help="write the report to this file instead of stdout")
+    diag_p.add_argument("--json", action="store_true", help="append a machine-readable JSON block")
+    diag_p.add_argument(
+        "--max-journal-entries",
+        type=int,
+        default=200,
+        metavar="N",
+        help="cap of fully-scrubbed journal entries per run (0 = histogram only; default 200)",
+    )
+    # Hidden: writes the alias->original map locally for the dump's author. Never
+    # shareable — it reverses the pseudonyms.
+    diag_p.add_argument("--legend", help=argparse.SUPPRESS)
 
     attach_p = add("attach", cmd_attach, "tmux attach to a run's session")
     attach_p.add_argument("run_id", nargs="?")

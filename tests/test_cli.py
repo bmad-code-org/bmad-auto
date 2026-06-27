@@ -780,3 +780,45 @@ def test_resume_kills_stale_session_before_running(project, monkeypatch):
 
     assert cli._resume_paused_run(project.project, run_dir) == 0
     assert killed == ["20990101-000000-beef"]
+
+
+def test_diagnose_default_latest_and_out(project, tmp_path, capsys):
+    """diagnose resolves the latest run, writes a clean dump, exits 0."""
+    from test_diagnostics import CANARIES, _seed_run
+
+    _seed_run(project.project)
+    out_file = tmp_path / "diag.md"
+    rc = cli.main(["diagnose", "--project", str(project.project), "--json", "--out", str(out_file)])
+    assert rc == 0
+    report = out_file.read_text()
+    assert "diagnostic dump (sanitized)" in report
+    for canary in CANARIES:
+        assert canary not in report, f"LEAK via CLI: {canary!r}"
+
+
+def test_diagnose_no_runs(tmp_path, capsys):
+    assert cli.main(["diagnose", "--project", str(tmp_path)]) == 1
+    assert "no runs found" in capsys.readouterr().err
+
+
+def test_diagnose_legend_written_locally(project, tmp_path):
+    from test_diagnostics import STORY_KEY, _seed_run
+
+    _seed_run(project.project)
+    legend_file = tmp_path / "legend.json"
+    out_file = tmp_path / "diag.md"
+    rc = cli.main(
+        [
+            "diagnose",
+            "--project",
+            str(project.project),
+            "--out",
+            str(out_file),
+            "--legend",
+            str(legend_file),
+        ]
+    )
+    assert rc == 0
+    legend = json.loads(legend_file.read_text())
+    assert STORY_KEY in legend.values()  # legend reverses pseudonyms locally
+    assert STORY_KEY not in out_file.read_text()  # but the dump never carries it

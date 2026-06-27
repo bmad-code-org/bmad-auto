@@ -1,9 +1,10 @@
-"""PII-scrubbing chokepoint for `bmad-auto probe-adapter`.
+"""PII-scrubbing chokepoint for `bmad-auto probe-adapter` and `bmad-auto diagnose`.
 
 Pure stdlib, no automator imports — the single audited place that decides what
-data from a foreign CLI is safe to show a maintainer. The probe command routes
-every captured payload, every help/version blob, and every discovered path
-through here before rendering; nothing is displayed raw.
+data from a foreign CLI (or a user's own run dir) is safe to show a maintainer.
+Both the probe and the diagnostic-dump commands route every captured payload,
+help/version blob, discovered path, and run-state value through here before
+rendering; nothing is displayed raw.
 
 Guarantees:
 - token *counts* are non-PII, so numbers/bools/null pass through verbatim;
@@ -12,15 +13,31 @@ Guarantees:
   ONLY if it matches a conservative identifier shape (a short slug with no
   spaces / `@` / `/`, e.g. ``claude-opus-4-8`` or ``session-abc_123``);
   anything else (prose, code, paths, emails) becomes ``<redacted:str>``;
+- an identifier-shaped string that looks like a **secret** (a known credential
+  prefix such as ``ghp_``/``sk-``/``AKIA``, a JWT, or a long high-entropy blob)
+  becomes ``<redacted:secret>`` even though it would otherwise pass — the one
+  hole the identifier shape would leave open;
 - list lengths are preserved (the count is structural, the contents aren't);
 - recursion is depth-guarded so a pathological payload can't blow the stack.
+
+It also offers two helpers the dump leans on but the probe does not need:
+:class:`Pseudonymizer` (stable, irreversible per-dump aliases for proprietary
+identifiers — story keys, branches, SHAs — that *are* identifier-shaped and so
+would otherwise survive verbatim) and :func:`assert_no_leak` (a final-output
+self-check the dump runs over its own rendered bytes before writing, so a
+routing bug or a future field can never silently ship a secret/PII/path).
 """
 
 from __future__ import annotations
 
+import getpass
+import hashlib
+import math
 import os
 import re
-from typing import Any
+import secrets
+from collections import Counter
+from typing import Any, Iterable
 
 # A conservative "this is a machine identifier, not prose or PII" shape: starts
 # alphanumeric, then only word-ish chars (letters, digits, ``.`` ``_`` ``-``),
@@ -31,7 +48,30 @@ _IDENTIFIER_MAX = 80
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
+# Known credential token shapes — provider prefixes plus the JWT header. These
+# are exactly the strings that are identifier-shaped (so would pass the slug
+# gate) yet must never be surfaced. Anchored: a value *starting* with one of
+# these is treated as a secret.
+_SECRET_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"sk-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|gss_|"
+    r"xox[baprs]-|AKIA|ASIA|AIza|ya29\.|AGAPP|hf_|npm_|dop_v1_|sk-ant-"
+    r")"
+)
+_JWT_RE = re.compile(r"^eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+")
+# Contiguous alphanumeric runs — a UUID/slug breaks into short runs at its
+# hyphens, but a raw API token / hex secret is one long dense run.
+_ALNUM_RUN_RE = re.compile(r"[A-Za-z0-9]+")
+_SECRET_RUN_MIN = 32  # length of contiguous alnum run that triggers the entropy gate
+_SECRET_ENTROPY_MIN = 3.5  # bits/char; pure hex ~4.0, base64 ~6.0, prose/slug well below
+
+# Token shape used by assert_no_leak to re-scan rendered output for secrets.
+_LEAK_TOKEN_RE = re.compile(r"[A-Za-z0-9._/+-]{6,}")
+_URL_CRED_RE = re.compile(r"https?://[^/\s]*:[^/@\s]+@")
+_ABS_HOME_RE = re.compile(r"/home/|/Users/|/root/|[A-Za-z]:\\Users\\", re.I)
+
 _REDACTED_STR = "<redacted:str>"
+_REDACTED_SECRET = "<redacted:secret>"  # nosec B105 - redaction marker, not a credential
 _REDACTED_EMAIL = "<redacted:email>"
 _REDACTED_DEPTH = "<redacted:depth>"
 
@@ -57,6 +97,29 @@ def redact_home(s: str) -> str:
 def looks_like_identifier(s: str) -> bool:
     """True for a short machine slug safe to surface verbatim (no PII)."""
     return 0 < len(s) <= _IDENTIFIER_MAX and bool(_IDENTIFIER_RE.match(s))
+
+
+def _shannon_entropy(s: str) -> float:
+    """Bits per character — high for random tokens, low for words/slugs."""
+    if not s:
+        return 0.0
+    n = len(s)
+    return -sum((c / n) * math.log2(c / n) for c in Counter(s).values())
+
+
+def looks_like_secret(s: str) -> bool:
+    """True for a credential-shaped string that must never be surfaced.
+
+    Catches values that *are* identifier-shaped (so :func:`looks_like_identifier`
+    would pass them) but are secrets: a known provider prefix (``ghp_``, ``sk-``,
+    ``AKIA``, ``xoxb-`` …), a JWT, or a long high-entropy contiguous run (a raw
+    API token / hex key). A UUID or hyphenated slug breaks into short runs at its
+    separators, so ``claude-opus-4-8`` and ``01234567-89ab-cdef-…`` stay safe."""
+    if _SECRET_PREFIX_RE.match(s) or _JWT_RE.match(s):
+        return True
+    runs = _ALNUM_RUN_RE.findall(s)
+    longest = max(runs, key=len) if runs else ""
+    return len(longest) >= _SECRET_RUN_MIN and _shannon_entropy(longest) >= _SECRET_ENTROPY_MIN
 
 
 def scrub_text(s: str, *, max_lines: int | None = None) -> str:
@@ -85,7 +148,9 @@ def _scrub(obj: Any, depth: int, max_depth: int) -> Any:
         return obj
     if isinstance(obj, str):
         red = redact_home(obj)
-        return red if looks_like_identifier(red) else _REDACTED_STR
+        if not looks_like_identifier(red):
+            return _REDACTED_STR
+        return _REDACTED_SECRET if looks_like_secret(red) else red
     if isinstance(obj, dict):
         return {str(k): _scrub(v, depth + 1, max_depth) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -102,3 +167,77 @@ def scrub_json(obj: Any, *, max_depth: int = 40) -> Any:
 def scrub_event_payload(payload: Any) -> Any:
     """Sanitize one captured hook payload — the probe's per-event chokepoint."""
     return scrub_json(payload)
+
+
+class Pseudonymizer:
+    """Stable, irreversible aliases for proprietary identifiers in a dump.
+
+    Story keys, branch names, spec filenames and SHAs are identifier-shaped, so
+    :func:`scrub_json` would pass them verbatim and leak the customer's feature
+    names. The dump routes each through :meth:`alias` instead: a per-invocation
+    random salt makes the alias unguessable across dumps, while caching makes it
+    *stable within* one dump — so a maintainer can see that the story which
+    escalated is the same one that later deferred, without ever learning its
+    name. The alias is a salted BLAKE2s digest; the salt is never persisted, so
+    no map survives that could reverse it.
+
+    The :meth:`legend` (alias -> original) exists only as a LOCAL convenience for
+    the user who generated the dump; it is never written into the shipped report,
+    and :func:`assert_no_leak` is fed its values to prove none slipped through.
+    """
+
+    def __init__(self, salt: bytes | None = None):
+        self._salt = salt if salt is not None else secrets.token_bytes(16)
+        self._map: dict[tuple[str, str], str] = {}
+
+    def alias(self, value: Any, *, ns: str = "id", epic: int | None = None) -> Any:
+        """Map ``value`` to its stable alias. ``None``/empty pass through; a story
+        alias prefixes the epic for legibility (``s1-3f2a9c``)."""
+        if value is None or value == "":
+            return value
+        value = str(value)
+        key = (ns, value)
+        cached = self._map.get(key)
+        if cached is not None:
+            return cached
+        digest = hashlib.blake2s(self._salt + value.encode("utf-8"), digest_size=3).hexdigest()
+        prefix = f"s{epic}" if (ns == "story" and epic is not None) else ns
+        alias = f"{prefix}-{digest}"
+        self._map[key] = alias
+        return alias
+
+    def legend(self) -> dict[str, str]:
+        """alias -> original, for LOCAL use only. Never write this into a dump."""
+        return {alias: value for (_, value), alias in self._map.items()}
+
+
+def assert_no_leak(text: str, *, extra: Iterable[str] = ()) -> list[str]:
+    """Re-scan already-rendered output for anything that must not ship.
+
+    The defense-in-depth backstop to the per-field routing: even if a handler is
+    wrong or a new field is added, this catches an email, a credential-shaped
+    token (same logic as :func:`looks_like_secret`), URL-embedded creds, an
+    absolute home path, the current username, or any caller-supplied sensitive
+    string (e.g. a project basename, or every :meth:`Pseudonymizer.legend` value)
+    in the final bytes. Returns the list of rule names that fired — empty means
+    clean. Callers fail closed (refuse to write) on a non-empty result.
+    """
+    fired: list[str] = []
+    if _EMAIL_RE.search(text):
+        fired.append("email")
+    if _URL_CRED_RE.search(text):
+        fired.append("url-credentials")
+    if _ABS_HOME_RE.search(text):
+        fired.append("absolute-home-path")
+    if any(looks_like_secret(tok) for tok in _LEAK_TOKEN_RE.findall(text)):
+        fired.append("secret")
+    user = getpass.getuser()
+    if len(user) >= 5 and re.search(rf"\b{re.escape(user)}\b", text):
+        fired.append("username")
+    for item in extra:
+        item = str(item)
+        # word-boundary match so a short basename ("proj") can't false-positive on
+        # a common word that contains it ("project"); still catches it standalone.
+        if len(item) >= 4 and re.search(rf"\b{re.escape(item)}\b", text):
+            fired.append(f"sensitive:{item[:16]}")
+    return fired
