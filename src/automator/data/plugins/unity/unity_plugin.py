@@ -25,6 +25,7 @@ replaces.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -161,7 +162,10 @@ class UnityPlugin(Plugin):
         cwd = ctx.worktree or ctx.repo_root or None
         try:
             proc = subprocess.run(  # nosec B603 - operator-enabled engine plugin script
-                ["python3", str(script)],
+                # Our own interpreter, not a PATH-resolved `python3`: the helper now
+                # imports `automator.process_host`, which must be importable here even
+                # under a pipx-style install where PATH `python3` lacks the package.
+                [sys.executable, str(script)],
                 cwd=cwd,
                 env=env,
                 capture_output=True,

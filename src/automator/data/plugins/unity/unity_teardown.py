@@ -39,23 +39,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# SIGKILL is absent on Windows; fall back to SIGTERM so the attribute access never
-# raises. Linux/macOS/WSL keep today's hard-kill behavior exactly.
-_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)  # portability: SIGKILL absent on Windows
-
-
-def _taskkill() -> str:
-    """Absolute path to the Windows ``taskkill`` binary. Resolving it from
-    ``%SystemRoot%\\System32`` rather than invoking ``taskkill`` by name keeps the
-    Windows process-search order from picking up a same-named executable planted on
-    PATH or in the working directory."""
-    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+from automator.process_host import get_process_host
 
 
 def _psutil():
@@ -73,44 +62,9 @@ def _psutil():
     return psutil
 
 
-def _terminate_pid(pid: int) -> None:
-    """Politely terminate ``pid``. POSIX: ``os.kill(pid, SIGTERM)`` — same OSError
-    family (ProcessLookupError/PermissionError) as before, so the caller's handling
-    is unchanged. Windows: ``taskkill`` is the analogue (not exercised yet)."""
-    if sys.platform == "win32":
-        # portability: no os.kill(SIGTERM) on Windows — taskkill is the analogue.
-        subprocess.run([_taskkill(), "/PID", str(pid)], check=False, capture_output=True)
-        return
-    os.kill(pid, signal.SIGTERM)
-
-
-def _hard_kill_pid(pid: int) -> None:
-    """Force-kill ``pid``. POSIX: ``os.kill(pid, SIGKILL)`` (SIGTERM where SIGKILL is
-    absent). Windows: ``taskkill /F`` (not exercised yet)."""
-    if sys.platform == "win32":
-        # portability: SIGKILL has no Windows analogue — taskkill /F force-kills.
-        subprocess.run([_taskkill(), "/F", "/PID", str(pid)], check=False, capture_output=True)
-        return
-    os.kill(pid, _SIGKILL)
-
-
 def _worktree() -> Path | None:
     wt = os.environ.get("BMAD_AUTO_WORKTREE")
     return Path(wt) if wt else None
-
-
-def _alive(pid: int) -> bool:
-    if sys.platform == "win32":
-        # portability: os.kill(pid, 0) is destructive on Windows (TerminateProcess),
-        # so use psutil for a read-only liveness check.
-        return _psutil().pid_exists(pid)
-    try:
-        os.kill(pid, 0)  # portability: read-only existence probe (POSIX); win32 uses psutil above
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists, just not ours to signal
-    return True
 
 
 # Process basenames we reap when bound to the worktree path: the Unity Editor
@@ -205,20 +159,21 @@ def _force_kill_lingering(worktree: Path) -> int:
         f"running ({pids}); hard-killing",
         file=sys.stderr,
     )
+    host = get_process_host()
     for pid in pids:
         try:
-            _terminate_pid(pid)
+            host.terminate(pid)
         except OSError:
             pass
     # give them a few seconds to exit politely, then hard-kill survivors
     for _ in range(20):
-        if not any(_alive(p) for p in pids):
+        if not any(host.is_alive(p) for p in pids):
             break
         time.sleep(0.5)
     for pid in pids:
-        if _alive(pid):
+        if host.is_alive(pid):
             try:
-                _hard_kill_pid(pid)
+                host.force_kill(pid)
             except OSError:
                 pass
     return len(pids)
@@ -273,8 +228,7 @@ def main() -> int:
         )
     else:
         print(
-            f"unity_teardown: unknown BMAD_AUTO_ENGINE_MCP={mcp!r} "
-            "(expected ivanmurzak|coplaydev)",
+            f"unity_teardown: unknown BMAD_AUTO_ENGINE_MCP={mcp!r} (expected ivanmurzak|coplaydev)",
             file=sys.stderr,
         )
         rc = 2

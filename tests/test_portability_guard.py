@@ -49,10 +49,10 @@ DETACH_ALLOW = {
 # `os.kill(pid, 0)` is a read-only existence probe on POSIX but *destructive* on
 # Windows (it maps to TerminateProcess). Confine it to the platform-guarded
 # liveness helpers, each on a line carrying a `# portability:` ack; everything
-# else routes through the ProcessHost seam (`get_process_host().is_alive`).
+# else routes through the ProcessHost seam (`get_process_host().is_alive`). The
+# Unity teardown no longer probes directly — it delegates to the seam.
 KILL_PROBE_ALLOW = {
     "process_host.py",
-    "data/plugins/unity/unity_teardown.py",
 }
 
 # The two sanctioned `shell=True` spots: operator-authored command strings whose

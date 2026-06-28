@@ -358,6 +358,52 @@ def test_unity_teardown_lingering_scan_no_false_match(tmp_path):
     assert mod._force_kill_lingering(tmp_path) == 0
 
 
+class _RecordingHost:
+    """A fake ProcessHost recording which pids it was asked to terminate/force-kill.
+    ``alive`` drives whether a pid is treated as a survivor past the grace window."""
+
+    def __init__(self, alive):
+        self._alive = alive
+        self.terminated: list[int] = []
+        self.force_killed: list[int] = []
+
+    def terminate(self, pid):
+        self.terminated.append(pid)
+
+    def force_kill(self, pid):
+        self.force_killed.append(pid)
+
+    def is_alive(self, pid):
+        return self._alive
+
+
+def test_unity_teardown_sweep_escalates_to_force_kill(tmp_path, monkeypatch):
+    """After de-dup the sweep routes through get_process_host(): a stubborn survivor
+    (is_alive stays True past the grace window) is SIGTERM'd then force-killed."""
+    mod = _load_unity_teardown()
+    host = _RecordingHost(alive=True)
+    monkeypatch.setattr(mod, "get_process_host", lambda: host)
+    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [4242])
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)  # don't really wait 10s
+
+    assert mod._force_kill_lingering(tmp_path) == 1
+    assert host.terminated == [4242]
+    assert host.force_killed == [4242]
+
+
+def test_unity_teardown_sweep_skips_force_kill_when_terminate_suffices(tmp_path, monkeypatch):
+    """A pid that exits after the polite SIGTERM is never force-killed."""
+    mod = _load_unity_teardown()
+    host = _RecordingHost(alive=False)  # already gone by the first liveness poll
+    monkeypatch.setattr(mod, "get_process_host", lambda: host)
+    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [4242])
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+    assert mod._force_kill_lingering(tmp_path) == 1
+    assert host.terminated == [4242]
+    assert host.force_killed == []
+
+
 def test_unity_ready_grace_explicit_override(monkeypatch):
     mod = _load_unity_ready()
     monkeypatch.setenv("BMAD_AUTO_ENGINE_EDITOR_MODE", "per_worktree")
