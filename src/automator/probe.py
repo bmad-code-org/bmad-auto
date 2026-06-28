@@ -505,9 +505,10 @@ def probe(
         hook_src = resources.files("automator.data").joinpath(PROBE_HOOK_NAME)
         hook_path = tmpdir / PROBE_HOOK_NAME
         hook_path.write_text(hook_src.read_text(encoding="utf-8"), encoding="utf-8")
-        interp = get_process_host().hook_interpreter()
+        host = get_process_host()
+        interp = host.hook_interpreter()
         registrations = {
-            native: f"{interp} {shlex.quote(str(hook_path))} {canonical}"
+            native: f"{interp} {host.shell_quote(str(hook_path))} {canonical}"
             for native, canonical in profile.hooks.events.items()
         }
         config, _ = merge_hooks({}, registrations, profile.hooks.dialect)

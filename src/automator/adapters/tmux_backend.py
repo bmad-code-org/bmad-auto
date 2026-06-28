@@ -18,7 +18,6 @@ from __future__ import annotations
 import shutil  # noqa: F401 — re-exported for callers/tests reaching the spawn seam
 import subprocess  # noqa: F401 — re-exported for callers/tests reaching the spawn seam
 
-from .multiplexer import register_multiplexer
 from .tmux_base import PARKED_RETURN_DETACH  # noqa: F401 — re-exported for back-compat
 from .tmux_base import TMUX_TIMEOUT_S  # noqa: F401 — re-exported for back-compat
 from .tmux_base import TmuxError  # noqa: F401 — re-exported for back-compat
@@ -28,9 +27,9 @@ from .tmux_base import (
 
 
 class TmuxMultiplexer(BaseTmuxBackend):
-    """POSIX tmux backend — inherits the full contract from BaseTmuxBackend."""
+    """POSIX tmux backend — inherits the full contract from BaseTmuxBackend.
 
-
-# tmux is the default everywhere except native Windows (no tmux binary there);
-# get_multiplexer still falls back to tmux when no backend matches.
-register_multiplexer("tmux", lambda platform: platform != "win32", TmuxMultiplexer)
+    Registered by :func:`~.multiplexer._load_builtin_backends` (the bundled loader),
+    not at import time, so the registry can be cleared and re-loaded deterministically
+    in tests — mirroring how ``process_host._load_builtin_hosts`` registers its hosts.
+    """

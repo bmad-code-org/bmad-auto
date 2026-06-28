@@ -192,16 +192,24 @@ def register_multiplexer(
     Bundled backends register from :func:`_load_builtin_backends`; an out-of-tree
     backend calls this at import time — no core edit required."""
     _BACKENDS.append((name, matches, factory))
+    get_multiplexer.cache_clear()  # a later registration must not be shadowed by a cached pick
 
 
 def _load_builtin_backends() -> None:
-    """Import the bundled backends so they self-register. Idempotent and lazy
-    (called from :func:`get_multiplexer`, not at module import) to stay cycle-safe."""
+    """Register the bundled backends. Idempotent and lazy (called from
+    :func:`get_multiplexer`, not at module import) to stay cycle-safe. Registers
+    inline rather than via tmux_backend's import side effect so the registry can be
+    cleared and re-loaded deterministically (a re-import is a no-op once cached) —
+    mirroring ``process_host._load_builtin_hosts``."""
     global _BUILTINS_LOADED
     if _BUILTINS_LOADED:
         return
-    _BUILTINS_LOADED = True
-    from . import tmux_backend  # noqa: F401 — import triggers registration
+    from .tmux_backend import TmuxMultiplexer
+
+    # tmux is the default everywhere except native Windows (no tmux binary there);
+    # get_multiplexer still falls back to tmux when no backend matches.
+    register_multiplexer("tmux", lambda platform: platform != "win32", TmuxMultiplexer)
+    _BUILTINS_LOADED = True  # set only after a successful import so a transient failure retries
 
 
 @functools.lru_cache(maxsize=1)
@@ -217,6 +225,13 @@ def get_multiplexer() -> TerminalMultiplexer:
     for name, matches, factory in _BACKENDS:
         if name == forced or (not forced and matches(sys.platform)):
             return factory()
+    if forced:
+        # An explicit override that matches nothing is a misconfiguration; never
+        # silently fall back to tmux (wrong/unsafe on a non-POSIX host).
+        known = ", ".join(name for name, _, _ in _BACKENDS) or "(none registered)"
+        raise MultiplexerError(
+            f"BMAD_AUTO_MUX_BACKEND={forced!r} matches no registered backend; known: {known}"
+        )
     from .tmux_backend import TmuxMultiplexer  # default fallback
 
     return TmuxMultiplexer()

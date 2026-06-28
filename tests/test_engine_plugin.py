@@ -358,12 +358,22 @@ def test_unity_teardown_lingering_scan_no_false_match(tmp_path):
     assert mod._force_kill_lingering(tmp_path) == 0
 
 
+# A pid guaranteed to differ from the runner's own (the sweep excludes os.getpid(),
+# so a hardcoded constant could silently match the runner and neuter these tests).
+_FAKE_PID = os.getpid() + 1
+
+
 class _RecordingHost:
     """A fake ProcessHost recording which pids it was asked to terminate/force-kill.
-    ``alive`` drives whether a pid is treated as a survivor past the grace window."""
+    ``alive`` drives whether a pid is treated as a survivor past the grace window;
+    ``identity_recheck`` lets a test simulate pid reuse — the value the *second*
+    identity() read of a pid returns, so the snapshot no longer matches."""
 
-    def __init__(self, alive):
+    def __init__(self, alive, identity=1.0, identity_recheck=None):
         self._alive = alive
+        self._identity = identity
+        self._identity_recheck = identity if identity_recheck is None else identity_recheck
+        self._identity_seen: dict[int, int] = {}
         self.terminated: list[int] = []
         self.force_killed: list[int] = []
 
@@ -376,6 +386,11 @@ class _RecordingHost:
     def is_alive(self, pid):
         return self._alive
 
+    def identity(self, pid):
+        seen = self._identity_seen.get(pid, 0)
+        self._identity_seen[pid] = seen + 1
+        return self._identity if seen == 0 else self._identity_recheck
+
 
 def test_unity_teardown_sweep_escalates_to_force_kill(tmp_path, monkeypatch):
     """After de-dup the sweep routes through get_process_host(): a stubborn survivor
@@ -383,12 +398,12 @@ def test_unity_teardown_sweep_escalates_to_force_kill(tmp_path, monkeypatch):
     mod = _load_unity_teardown()
     host = _RecordingHost(alive=True)
     monkeypatch.setattr(mod, "get_process_host", lambda: host)
-    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [4242])
+    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [_FAKE_PID])
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)  # don't really wait 10s
 
     assert mod._force_kill_lingering(tmp_path) == 1
-    assert host.terminated == [4242]
-    assert host.force_killed == [4242]
+    assert host.terminated == [_FAKE_PID]
+    assert host.force_killed == [_FAKE_PID]
 
 
 def test_unity_teardown_sweep_skips_force_kill_when_terminate_suffices(tmp_path, monkeypatch):
@@ -396,12 +411,26 @@ def test_unity_teardown_sweep_skips_force_kill_when_terminate_suffices(tmp_path,
     mod = _load_unity_teardown()
     host = _RecordingHost(alive=False)  # already gone by the first liveness poll
     monkeypatch.setattr(mod, "get_process_host", lambda: host)
-    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [4242])
+    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [_FAKE_PID])
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
 
     assert mod._force_kill_lingering(tmp_path) == 1
-    assert host.terminated == [4242]
+    assert host.terminated == [_FAKE_PID]
     assert host.force_killed == []
+
+
+def test_unity_teardown_sweep_skips_force_kill_on_identity_mismatch(tmp_path, monkeypatch):
+    """A survivor whose identity changed between snapshot and escalation (pid reused)
+    is never force-killed — guarding against SIGKILL landing on an unrelated process."""
+    mod = _load_unity_teardown()
+    host = _RecordingHost(alive=True, identity=1.0, identity_recheck=2.0)
+    monkeypatch.setattr(mod, "get_process_host", lambda: host)
+    monkeypatch.setattr(mod, "_lingering_pids", lambda wt: [_FAKE_PID])
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+    assert mod._force_kill_lingering(tmp_path) == 1
+    assert host.terminated == [_FAKE_PID]
+    assert host.force_killed == []  # identity no longer matches → refused
 
 
 def test_unity_ready_grace_explicit_override(monkeypatch):

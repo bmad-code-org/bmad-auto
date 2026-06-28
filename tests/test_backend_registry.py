@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from automator.adapters import multiplexer as m
+from automator.adapters.multiplexer import MultiplexerError
 from automator.adapters.tmux_backend import TmuxMultiplexer
 
 
@@ -56,12 +57,13 @@ def test_env_override_tmux_returns_tmux(fresh_registry, monkeypatch):
     assert isinstance(fresh_registry.get_multiplexer(), TmuxMultiplexer)
 
 
-def test_unknown_forced_name_falls_back_to_tmux(fresh_registry, monkeypatch):
-    """An unregistered forced name matches nothing in the loop and lands on the
-    safe tmux fallback rather than raising."""
+def test_unknown_forced_name_raises(fresh_registry, monkeypatch):
+    """An explicit but unregistered forced name is a misconfiguration: it must fail
+    loudly rather than silently fall back to tmux (wrong/unsafe on a non-POSIX host)."""
     monkeypatch.setenv("BMAD_AUTO_MUX_BACKEND", "nope")
     fresh_registry.get_multiplexer.cache_clear()
-    assert isinstance(fresh_registry.get_multiplexer(), TmuxMultiplexer)
+    with pytest.raises(MultiplexerError, match="nope"):
+        fresh_registry.get_multiplexer()
 
 
 def test_match_based_selection_wins_by_order(fresh_registry):
@@ -78,3 +80,14 @@ def test_get_multiplexer_is_cached(fresh_registry):
     """One process-wide instance: repeated calls return the same object."""
     fresh_registry.get_multiplexer.cache_clear()
     assert fresh_registry.get_multiplexer() is fresh_registry.get_multiplexer()
+
+
+def test_register_invalidates_cached_selection(fresh_registry):
+    """register_multiplexer() must clear the singleton cache so a backend registered
+    *after* a prior get_multiplexer() call is honored — without the caller manually
+    clearing the cache. Guards the "register at import time, any order" contract."""
+    fresh_registry.get_multiplexer()  # populate the cache
+    assert fresh_registry.get_multiplexer.cache_info().currsize == 1
+    fresh_registry.register_multiplexer("fake", lambda p: False, lambda: object())
+    # no manual cache_clear() here — registration is responsible for invalidating it
+    assert fresh_registry.get_multiplexer.cache_info().currsize == 0

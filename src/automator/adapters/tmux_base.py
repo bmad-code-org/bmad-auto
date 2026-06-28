@@ -166,7 +166,7 @@ class BaseTmuxBackend(TerminalMultiplexer):
         #     `tmux attach` returns and a suspended TUI resumes;
         #   - unset/empty: nobody attached interactively -> park as-is.
         return_trailer = (
-            f"ret=$(tmux show-options -wqv {return_opt} 2>/dev/null); "
+            f"ret=$(tmux show-options -wqv {shlex.quote(return_opt)} 2>/dev/null); "
             f'if [ "$ret" = "{PARKED_RETURN_DETACH}" ]; then tmux detach-client 2>/dev/null; '
             'elif [ -n "$ret" ]; then '
             'tmux switch-client -t "$ret" 2>/dev/null || tmux switch-client -l 2>/dev/null; '

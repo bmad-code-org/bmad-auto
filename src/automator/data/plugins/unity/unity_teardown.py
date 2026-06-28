@@ -160,6 +160,10 @@ def _force_kill_lingering(worktree: Path) -> int:
         file=sys.stderr,
     )
     host = get_process_host()
+    # Snapshot identity before signalling so the force-kill escalation can never land
+    # on a pid the kernel recycled to an unrelated process (mirrors runs.stop_run's
+    # guard; force_kill's own contract requires confirmed identity).
+    ident = {pid: host.identity(pid) for pid in pids}
     for pid in pids:
         try:
             host.terminate(pid)
@@ -171,7 +175,7 @@ def _force_kill_lingering(worktree: Path) -> int:
             break
         time.sleep(0.5)
     for pid in pids:
-        if host.is_alive(pid):
+        if host.is_alive(pid) and ident[pid] is not None and host.identity(pid) == ident[pid]:
             try:
                 host.force_kill(pid)
             except OSError:

@@ -8,7 +8,13 @@ import sys
 import pytest
 
 from automator import process_host
-from automator.process_host import PosixProcessHost, WindowsProcessHost, get_process_host
+from automator.process_host import (
+    PosixProcessHost,
+    ProcessHostError,
+    WindowsProcessHost,
+    get_process_host,
+    register_process_host,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -70,10 +76,11 @@ def test_identity_none_for_non_positive(host):
     assert host.identity(-1) is None
 
 
-def test_default_host_is_posix_on_posix(monkeypatch):
+def test_default_host_matches_platform(monkeypatch):
     monkeypatch.delenv("BMAD_AUTO_PROCESS_HOST", raising=False)
     get_process_host.cache_clear()
-    assert isinstance(get_process_host(), PosixProcessHost)
+    expected = WindowsProcessHost if sys.platform == "win32" else PosixProcessHost
+    assert isinstance(get_process_host(), expected)
 
 
 def test_env_override_selects_by_name(monkeypatch):
@@ -86,6 +93,45 @@ def test_env_override_selects_by_name(monkeypatch):
     monkeypatch.setenv("BMAD_AUTO_PROCESS_HOST", "windows")
     get_process_host.cache_clear()
     assert isinstance(get_process_host(), WindowsProcessHost)
+
+
+def test_unknown_forced_name_raises(monkeypatch):
+    # An explicit but unregistered override is a misconfiguration: fail loudly rather
+    # than silently fall back to POSIX (on win32 os.kill(pid, 0) is destructive).
+    monkeypatch.setenv("BMAD_AUTO_PROCESS_HOST", "bogus")
+    get_process_host.cache_clear()
+    with pytest.raises(ProcessHostError, match="bogus"):
+        get_process_host()
+
+
+def test_register_invalidates_cached_selection(monkeypatch):
+    # register_process_host() must clear the singleton cache so a host registered
+    # after a prior get_process_host() call is honored without a manual cache_clear.
+    monkeypatch.delenv("BMAD_AUTO_PROCESS_HOST", raising=False)
+    saved_hosts = list(process_host._HOSTS)
+    saved_loaded = process_host._BUILTINS_LOADED
+    try:
+        get_process_host()  # populate the cache (and load builtins)
+        assert get_process_host.cache_info().currsize == 1
+        register_process_host("fake", lambda p: False, lambda: PosixProcessHost())
+        # no manual cache_clear() — registration is responsible for invalidating it
+        assert get_process_host.cache_info().currsize == 0
+    finally:
+        process_host._HOSTS[:] = saved_hosts
+        process_host._BUILTINS_LOADED = saved_loaded
+        get_process_host.cache_clear()
+
+
+def test_shell_quote_posix_uses_shlex():
+    # POSIX quoting wraps a path with spaces in single quotes (shlex.quote).
+    assert PosixProcessHost().shell_quote("/a b/c.py") == "'/a b/c.py'"
+
+
+def test_shell_quote_windows_uses_list2cmdline():
+    # Windows quoting double-quotes a path with spaces (subprocess.list2cmdline),
+    # never single-quoting — POSIX single-quotes would mangle a Windows command.
+    quoted = WindowsProcessHost().shell_quote(r"C:\a b\c.py")
+    assert quoted == '"C:\\a b\\c.py"'
 
 
 def test_hook_interpreter_is_python3_on_posix(host):

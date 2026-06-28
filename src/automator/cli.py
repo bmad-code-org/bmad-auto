@@ -29,6 +29,7 @@ from .adapters.base import CodingCLIAdapter
 from .engine import Engine
 from .journal import Journal, load_state, save_state
 from .model import RunState
+from .process_host import ProcessHostError
 from .runs import RUNS_DIR
 from .sweep import SweepEngine
 
@@ -125,14 +126,17 @@ def _platform_preflight() -> tuple[list[str], list[str]]:
 
     backend = get_multiplexer()
     label = type(backend).__name__
-    if backend.available():
-        version = backend.version()
-        notes.append(f"multiplexer {label} available" + (f" ({version})" if version else ""))
-    else:
-        problems.append(
-            f"multiplexer {label} unavailable — its transport binary is not on PATH; "
-            f"see `bmad-auto diagnose`"
-        )
+    try:
+        if backend.available():
+            version = backend.version()
+            notes.append(f"multiplexer {label} available" + (f" ({version})" if version else ""))
+        else:
+            problems.append(
+                f"multiplexer {label} unavailable — its transport binary is not on PATH; "
+                f"see `bmad-auto diagnose`"
+            )
+    except Exception as e:  # noqa: BLE001 — a misbehaving backend must not abort validate
+        problems.append(f"multiplexer {label} readiness check failed: {e}")
 
     notes.append(f"process host: {type(get_process_host()).__name__}")
     return notes, problems
@@ -787,7 +791,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
         print(str(e), file=sys.stderr)
         return 1
     args.run_id = run_dir.name
-    if not runs.stop_run(run_dir):
+    try:
+        stopped = runs.stop_run(run_dir)
+    except (runs.StopRunError, ProcessHostError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    if not stopped:
         print(f"run {args.run_id} already finished", file=sys.stderr)
         return 1
     print(f"run {args.run_id} stopped")
@@ -809,7 +818,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        runs.stop_run(run_dir)
+        try:
+            runs.stop_run(run_dir)
+        except (runs.StopRunError, ProcessHostError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
     runs.delete_run(run_dir)
     print(f"run {args.run_id} deleted")
     return 0
@@ -830,7 +843,11 @@ def cmd_archive(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        runs.stop_run(run_dir)
+        try:
+            runs.stop_run(run_dir)
+        except (runs.StopRunError, ProcessHostError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
     dest = runs.archive_run(project, run_dir)
     print(f"run {args.run_id} archived to {dest}")
     return 0

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -67,6 +68,13 @@ class ProcessHost(ABC):
         (the script path + canonical event are appended by the caller). POSIX runs
         the ``python3`` on PATH; a Windows host overrides it (no ``python3`` there)
         so hook registration never branches on ``sys.platform`` at the call site."""
+
+    def shell_quote(self, arg: str) -> str:
+        """Quote ``arg`` for the shell that runs this host's hook commands, so the
+        argument-quoting axis sits behind the same seam as ``hook_interpreter``. Not
+        abstract: the default is POSIX ``shlex.quote``; a Windows host overrides it
+        (POSIX quoting mangles ``C:\\Program Files\\...`` paths)."""
+        return shlex.quote(arg)
 
 
 class PosixProcessHost(ProcessHost):
@@ -152,6 +160,11 @@ class WindowsProcessHost(ProcessHost):
         # an interpreter without activating a project venv (hooks fire detached).
         return "uv run --no-project python"
 
+    def shell_quote(self, arg: str) -> str:
+        # POSIX single-quoting breaks Windows paths; list2cmdline is the stdlib's
+        # Windows argument quoter (the inverse of how CreateProcess parses argv).
+        return subprocess.list2cmdline([arg])
+
 
 def _proc_starttime(pid: int) -> float | None:
     """The process's start time (clock ticks since boot) from ``/proc/<pid>/stat``
@@ -210,6 +223,7 @@ def register_process_host(
     Bundled hosts register from :func:`_load_builtin_hosts`; an out-of-tree host
     calls this at import time — no core edit required."""
     _HOSTS.append((name, matches, factory))
+    get_process_host.cache_clear()  # a later registration must not be shadowed by a cached pick
 
 
 def _load_builtin_hosts() -> None:
@@ -237,4 +251,11 @@ def get_process_host() -> ProcessHost:
     for name, matches, factory in _HOSTS:
         if name == forced or (not forced and matches(sys.platform)):
             return factory()
+    if forced:
+        # An explicit override that matches nothing is a misconfiguration; never
+        # silently fall back to POSIX (on win32 os.kill(pid, 0) is destructive).
+        known = ", ".join(name for name, _, _ in _HOSTS) or "(none registered)"
+        raise ProcessHostError(
+            f"BMAD_AUTO_PROCESS_HOST={forced!r} matches no registered host; known: {known}"
+        )
     return PosixProcessHost()  # default fallback
