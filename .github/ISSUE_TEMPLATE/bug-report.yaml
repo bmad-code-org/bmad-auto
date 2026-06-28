@@ -119,8 +119,7 @@ body:
     attributes:
       label: Diagnostic dump (bmad-auto diagnose)
       description: |
-        Output of `bmad-auto diagnose --out diag.md` (add `--json` for a machine-readable block, or `--all` to cover every run). This is sanitized — identifiers are pseudonymized and the output is re-scanned by a fail-closed leak check before it's written — but **no scrubber is perfect**. Open the file and verify it contains no PII, secrets, or project-specific content before pasting/attaching. You can drag-and-drop the `diag.md` file here instead of pasting.
-      render: shell
+        Output of `bmad-auto diagnose --out diag.md` (add `--json` for a machine-readable block, or `--all` to cover every run). **Drag-and-drop the `diag.md` file here** (or paste its contents). It's sanitized — identifiers are pseudonymized and the output is re-scanned by a fail-closed leak check before it's written — but **no scrubber is perfect**: open the file and verify it contains no PII, secrets, or project-specific content before attaching.
 
   - type: checkboxes
     id: terms
