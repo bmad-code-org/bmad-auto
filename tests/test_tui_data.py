@@ -11,7 +11,7 @@ from pathlib import Path
 from conftest import install_bmad_config, write_sprint
 
 from automator import deferredwork
-from automator.adapters import tmux_backend
+from automator.adapters import tmux_base
 from automator.journal import Journal, save_state
 from automator.model import RunState
 from automator.runs import RUNS_DIR, write_pid
@@ -144,13 +144,13 @@ def test_finished_beats_stopped(tmp_path):
 def test_discover_runs_legacy_no_pid_is_unknown(tmp_path, monkeypatch):
     make_run(tmp_path, "20260611-100000-aaaa")
     # legacy liveness now flows through the multiplexer backend; patch its seam.
-    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _: None)
+    monkeypatch.setattr(tmux_base.shutil, "which", lambda _: None)
     assert data.discover_runs(tmp_path)[0].status == data.UNKNOWN
 
 
 def test_legacy_run_with_live_tmux_session_is_running(tmp_path, monkeypatch):
     run_dir = make_run(tmp_path, "20260611-100000-aaaa")
-    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux_base.shutil, "which", lambda _: "/usr/bin/tmux")
     calls = []
 
     def fake_run(argv, **kwargs):
@@ -161,7 +161,7 @@ def test_legacy_run_with_live_tmux_session_is_running(tmp_path, monkeypatch):
 
         return Proc()
 
-    monkeypatch.setattr(tmux_backend.subprocess, "run", fake_run)
+    monkeypatch.setattr(tmux_base.subprocess, "run", fake_run)
     assert data.discover_runs(tmp_path)[0].status == data.RUNNING
     assert calls[0][:3] == ["tmux", "has-session", "-t"]
     assert calls[0][3] == f"=bmad-auto-{run_dir.name}"
@@ -172,12 +172,12 @@ def test_legacy_run_liveness_unknown_when_backend_query_fails(tmp_path, monkeypa
     not a raw subprocess error: a dead query proves nothing about a legacy run, so it
     degrades to 'unknown' instead of escaping discover_runs() and crashing the TUI."""
     make_run(tmp_path, "20260611-100000-aaaa")
-    monkeypatch.setattr(tmux_backend.shutil, "which", lambda _: "/usr/bin/tmux")
+    monkeypatch.setattr(tmux_base.shutil, "which", lambda _: "/usr/bin/tmux")
 
     def boom(argv, **kwargs):
-        raise tmux_backend.subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        raise tmux_base.subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
 
-    monkeypatch.setattr(tmux_backend.subprocess, "run", boom)
+    monkeypatch.setattr(tmux_base.subprocess, "run", boom)
     assert data.discover_runs(tmp_path)[0].status == data.UNKNOWN
 
 

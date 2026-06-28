@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from automator.adapters import generic, tmux_backend
+from automator.adapters import generic, tmux_base
 from automator.adapters.base import SessionHandle, SessionResult, SessionSpec
 from automator.adapters.generic import GenericDevAdapter, GenericTmuxAdapter
 from automator.adapters.profile import get_profile
@@ -75,7 +75,7 @@ def test_ensure_session_tags_project(tmp_path, monkeypatch):
         rc = 1 if argv[1] == "has-session" else 0  # session missing -> create it
         return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
 
-    monkeypatch.setattr(tmux_backend.subprocess, "run", fake_run)
+    monkeypatch.setattr(tmux_base.subprocess, "run", fake_run)
     adapter._ensure_session(project)
 
     assert [c for c in calls if c[1] == "set-option"] == [

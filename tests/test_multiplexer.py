@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from automator.adapters import tmux_backend
+from automator.adapters import tmux_base
 from automator.adapters.base import SessionSpec
 from automator.adapters.generic import GenericAdapter
 from automator.adapters.multiplexer import TerminalMultiplexer
@@ -128,7 +128,7 @@ def no_tmux(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("GenericAdapter shelled out to tmux directly")
 
-    monkeypatch.setattr(tmux_backend.subprocess, "run", boom)
+    monkeypatch.setattr(tmux_base.subprocess, "run", boom)
 
 
 def _spec(tmp_path):

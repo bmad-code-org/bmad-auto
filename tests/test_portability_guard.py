@@ -25,10 +25,11 @@ ACK = "portability:"
 
 # ----------------------------------------------------------------- allowlists
 
-# The single file allowed to shell out to ``tmux`` — the whole-file quarantine
-# for tmux/POSIX-shell knowledge. No per-line ack needed: the file *is* the
-# sanctioned spot (its module docstring says so).
-TMUX_BACKEND = "adapters/tmux_backend.py"
+# The files allowed to shell out to ``tmux`` — the whole-file quarantine for
+# tmux/POSIX-shell knowledge, split across the shared base (where the spawn
+# primitive + argv live) and its POSIX leaf. No per-line ack needed: these files
+# *are* the sanctioned spot (their module docstrings say so).
+TMUX_BACKENDS = {"adapters/tmux_base.py", "adapters/tmux_backend.py"}
 
 # Platform-guarded Unity plugin files that may name a bare POSIX path, each on a
 # line carrying a `# portability:` ack (and guarded by a sys.platform branch).
@@ -197,10 +198,10 @@ def _of(kind: str):
 def test_no_tmux_invocation_outside_backend():
     """Only the tmux backend may build a ``["tmux", ...]`` argv — every other call
     site goes through the multiplexer seam."""
-    offenders = [(rel, ln, txt) for _, rel, ln, txt in _of("tmux") if rel != TMUX_BACKEND]
+    offenders = [(rel, ln, txt) for _, rel, ln, txt in _of("tmux") if rel not in TMUX_BACKENDS]
     assert not offenders, (
-        "tmux invoked outside adapters/tmux_backend.py — route it through "
-        "get_multiplexer() instead:\n"
+        "tmux invoked outside the tmux backend (adapters/tmux_base.py, "
+        "adapters/tmux_backend.py) — route it through get_multiplexer() instead:\n"
         + "\n".join(f"  {rel}:{ln}: {txt.strip()}" for rel, ln, txt in offenders)
     )
 
