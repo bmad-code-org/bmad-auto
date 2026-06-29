@@ -5,6 +5,30 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.7] — 2026-06-28
+
+### Fixed
+
+- **Spec-status gates are now case- and whitespace-insensitive.** A hand-edited spec whose
+  frontmatter carried a stray-cased `Done`/`In-Review` silently failed the dev/review gate and the
+  story never advanced; every spec-frontmatter status read now normalizes through a single
+  `verify.status_of` helper. The well-formed lowercase path is unchanged. Also fixes the
+  manual-rollback notice, which rendered an invalid `git reset --hard the run's baseline commit`
+  when no baseline was recorded — it now shows a `<baseline_commit>` placeholder.
+- **Project-relative path guards reject `..` traversal and OS-foreign absolute paths.** A CLI
+  profile or plugin manifest could declare a `config_path`/`skill_tree`/`seed_files`/module path
+  that climbed out of the project with `../` — or, on Windows, a POSIX-absolute `/etc/...` that
+  `Path.is_absolute()` failed to flag — and slip past the "must be project-relative" check. The
+  guards now reject both, on every platform.
+- **Persisted relative paths serialize with forward slashes.** A worktree run's `spec_file` and the
+  resolve context's `resolution_path` were written with the host separator, so a `state.json` or
+  context file produced on Windows read back with backslashes. Both now persist via `as_posix()` for
+  a single cross-OS contract (a no-op on POSIX).
+- **The TUI no longer shows a stale run after a same-size state rewrite.** The dashboard's
+  stat-gated cache keyed on `(mtime_ns, size)`, so an atomic `state.json` rewrite of identical size
+  within one coarse mtime tick (e.g. WSL2 drvfs) could be served stale. The engine rewrites
+  atomically onto a fresh inode, so the cache signature now includes `st_ino`.
+
 ## [0.7.6] — 2026-06-28
 
 ### Changed
@@ -748,6 +772,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.7]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.7
 [0.7.6]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.6
 [0.7.5]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.5
 [0.7.4]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.4
