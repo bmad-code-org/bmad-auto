@@ -73,7 +73,9 @@ def build_context(state: RunState, run_dir: Path, story_key: str) -> Path:
         "baseline_commit": task.baseline_commit if task else None,
         "paused_reason": state.paused_reason,
         "escalations": _gather_escalations(run_dir, state, story_key),
-        "resolution_path": str(resolution_path(run_dir, story_key)),
+        # as_posix so the context contract is the same string on every OS (the
+        # path is consumed by the agent, and Python/tools accept '/' on Windows).
+        "resolution_path": resolution_path(run_dir, story_key).as_posix(),
     }
     path = context_path(run_dir, story_key)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -199,7 +199,9 @@ class StoryTask:
         if not self.spec_file or not self.worktree_path:
             return self.spec_file
         try:
-            return str(Path(self.spec_file).relative_to(self.worktree_path))
+            # as_posix: persist the relative path with forward slashes so state.json
+            # stays portable across OSes (matches the in-worktree spec layout).
+            return Path(self.spec_file).relative_to(self.worktree_path).as_posix()
         except ValueError:
             return self.spec_file  # spec lives outside the worktree; keep absolute
 
