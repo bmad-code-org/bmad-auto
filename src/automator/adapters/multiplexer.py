@@ -223,11 +223,15 @@ def _load_builtin_backends() -> None:
     global _BUILTINS_LOADED
     if _BUILTINS_LOADED:
         return
+    from .psmux_backend import PsmuxMultiplexer
     from .tmux_backend import TmuxMultiplexer
 
     # tmux is the default everywhere except native Windows (no tmux binary there);
     # get_multiplexer still falls back to tmux when no backend matches.
     register_multiplexer("tmux", lambda platform: platform != "win32", TmuxMultiplexer)
+    # psmux is the bundled native-Windows backend (a tmux.exe drop-in); it matches
+    # win32, where tmux's matcher above is false, so the two never collide.
+    register_multiplexer("psmux", lambda platform: platform == "win32", PsmuxMultiplexer)
     _BUILTINS_LOADED = True  # set only after a successful import so a transient failure retries
 
 

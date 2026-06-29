@@ -239,10 +239,10 @@ def test_verify_review_happy_and_commands(project):
     write_spec(sp, "done", task.baseline_commit)
     task.spec_file = str(sp)
 
-    ok_policy = Policy(verify=VerifyPolicy(commands=("true",)))
+    ok_policy = Policy(verify=VerifyPolicy(commands=("exit 0",)))
     assert verify.verify_review(task, project, ok_policy).ok
 
-    fail_policy = Policy(verify=VerifyPolicy(commands=("true", "false")))
+    fail_policy = Policy(verify=VerifyPolicy(commands=("exit 0", "exit 1")))
     out = verify.verify_review(task, project, fail_policy)
     assert not out.ok and "verify command failed" in out.reason
 

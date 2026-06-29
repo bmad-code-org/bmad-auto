@@ -790,7 +790,7 @@ def test_diagnose_default_latest_and_out(project, tmp_path, capsys):
     out_file = tmp_path / "diag.md"
     rc = cli.main(["diagnose", "--project", str(project.project), "--json", "--out", str(out_file)])
     assert rc == 0
-    report = out_file.read_text()
+    report = out_file.read_text(encoding="utf-8")
     assert "diagnostic dump (sanitized)" in report
     for canary in CANARIES:
         assert canary not in report, f"LEAK via CLI: {canary!r}"
@@ -821,7 +821,7 @@ def test_diagnose_legend_written_locally(project, tmp_path):
     assert rc == 0
     legend = json.loads(legend_file.read_text())
     assert STORY_KEY in legend.values()  # legend reverses pseudonyms locally
-    assert STORY_KEY not in out_file.read_text()  # but the dump never carries it
+    assert STORY_KEY not in out_file.read_text(encoding="utf-8")  # but the dump never carries it
 
 
 # ---- validate platform preflight (routes through the multiplexer + host seams) ----

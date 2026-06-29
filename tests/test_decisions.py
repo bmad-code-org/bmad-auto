@@ -123,7 +123,10 @@ def test_apply_pre_answer_build_records_store_and_ledger(project):
     d = Decision(id="DW-1", question="build it?", context="", options=(opt,), recommendation="1")
     decisions.apply_pre_answer(project.project, d, opt, date="2026-06-13")
 
-    entries = {e.id: e for e in deferredwork.parse_ledger(project.deferred_work.read_text())}
+    entries = {
+        e.id: e
+        for e in deferredwork.parse_ledger(project.deferred_work.read_text(encoding="utf-8"))
+    }
     assert "decision: 2026-06-13 Build — widen field" in entries["DW-1"].body
     assert entries["DW-1"].open  # build stays open until a sweep builds it
     assert decisions.load_pre_answers(project.project)["DW-1"]["effect"] == "build"
@@ -139,7 +142,10 @@ def test_apply_pre_answer_close_marks_done_no_store(project):
     d = Decision(id="DW-1", question="close?", context="", options=(opt,), recommendation="1")
     decisions.apply_pre_answer(project.project, d, opt, date="2026-06-13")
 
-    entries = {e.id: e for e in deferredwork.parse_ledger(project.deferred_work.read_text())}
+    entries = {
+        e.id: e
+        for e in deferredwork.parse_ledger(project.deferred_work.read_text(encoding="utf-8"))
+    }
     assert entries["DW-1"].status.startswith("done")
     assert "closed by human decision: superseded" in entries["DW-1"].body
     assert decisions.load_pre_answers(project.project) == {}  # close needs no carry-forward

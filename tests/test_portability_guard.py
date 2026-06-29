@@ -28,8 +28,14 @@ ACK = "portability:"
 # The files allowed to shell out to ``tmux`` — the whole-file quarantine for
 # tmux/POSIX-shell knowledge, split across the shared base (where the spawn
 # primitive + argv live) and its POSIX leaf. No per-line ack needed: these files
-# *are* the sanctioned spot (their module docstrings say so).
-TMUX_BACKENDS = {"adapters/tmux_base.py", "adapters/tmux_backend.py"}
+# *are* the sanctioned spot (their module docstrings say so). ``psmux_backend.py``
+# drives the same ``tmux.exe`` drop-in on native Windows, so it carries tmux argv
+# too (its ``_run`` override prepends ``"tmux"`` exactly as the base does).
+TMUX_BACKENDS = {
+    "adapters/tmux_base.py",
+    "adapters/tmux_backend.py",
+    "adapters/psmux_backend.py",
+}
 
 # Platform-guarded files that may name a bare POSIX path, each on a line carrying
 # a `# portability:` ack (and guarded by a sys.platform branch). process_host.py's
@@ -206,6 +212,21 @@ def test_no_tmux_invocation_outside_backend():
         "adapters/tmux_backend.py) — route it through get_multiplexer() instead:\n"
         + "\n".join(f"  {rel}:{ln}: {txt.strip()}" for rel, ln, txt in offenders)
     )
+
+
+def test_tmux_allowlist_is_psmux_inclusive_and_fails_closed():
+    """The psmux backend is allowlisted to carry tmux argv, but a ``["tmux", …]``
+    literal in any *other* file is still an offender — proving the guard fails
+    closed rather than waving everything through."""
+    assert "adapters/psmux_backend.py" in TMUX_BACKENDS
+    # The exact predicate test_no_tmux_invocation_outside_backend applies, against
+    # planted findings: the allowlisted psmux file passes, a non-allowlisted module leaks.
+    planted = [
+        ("tmux", "adapters/psmux_backend.py", 1, '["tmux", "kill-session"]'),
+        ("tmux", "engine.py", 1, '["tmux", "kill-session"]'),  # planted leak
+    ]
+    offenders = [rel for _, rel, _, _ in planted if rel not in TMUX_BACKENDS]
+    assert offenders == ["engine.py"]
 
 
 def test_no_hardcoded_posix_paths():

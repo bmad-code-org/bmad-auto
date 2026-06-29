@@ -30,8 +30,22 @@ def host():
     return PosixProcessHost()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="PosixProcessHost.is_alive uses os.kill(pid, 0); on Windows signal 0 is "
+    "CTRL_C_EVENT, so the probe sends a real Ctrl+C to this process's console and "
+    "aborts the run. Windows self-liveness is covered by the WindowsProcessHost test below.",
+)
 def test_is_alive_true_for_self(host):
     assert host.is_alive(os.getpid()) is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="WindowsProcessHost is the win32 host")
+def test_is_alive_true_for_self_windows():
+    # The Windows host probes liveness via psutil (no os.kill), so checking self is
+    # safe here — unlike the POSIX host's os.kill(pid, 0), which is CTRL_C on Windows.
+    pytest.importorskip("psutil")
+    assert WindowsProcessHost().is_alive(os.getpid()) is True
 
 
 def test_is_alive_rejects_non_positive(host, monkeypatch):

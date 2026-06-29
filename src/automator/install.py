@@ -180,6 +180,9 @@ def _worktree_local_exclude(worktree: Path, patterns: Sequence[str]) -> None:
     git's standard local-only exclude (never committed or pushed); it does not
     affect already-tracked files. Best-effort — skipped if git can't be queried.
     """
+    # git's exclude patterns are POSIX-slash on every platform; a Windows-derived
+    # relative path carries os.sep ("\\") and would anchor nothing. Normalize.
+    patterns = [p.replace("\\", "/") for p in patterns]
     try:
         common = subprocess.run(
             ["git", "-C", str(worktree), "rev-parse", "--git-common-dir"],

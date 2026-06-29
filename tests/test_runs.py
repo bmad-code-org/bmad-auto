@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -36,7 +37,9 @@ def _make_state_run(project, run_id, **state_kwargs):
 
 
 def _dead_pid() -> int:
-    proc = subprocess.Popen(["true"])
+    # A process that exits immediately, cross-platform (POSIX `true` isn't on
+    # Windows). The interpreter is always present and on every host.
+    proc = subprocess.Popen([sys.executable, "-c", ""])
     proc.wait()
     return proc.pid
 
@@ -205,7 +208,8 @@ def test_stop_run_dead_pid_falls_back(tmp_path, monkeypatch):
 def test_stop_run_signals_live_process(tmp_path, monkeypatch):
     monkeypatch.setattr(runs, "kill_session", lambda _rid: None)
     run_dir = _make_state_run(tmp_path, "r1")
-    proc = subprocess.Popen(["sleep", "30"])
+    # A long-lived process, cross-platform (POSIX `sleep` isn't on Windows).
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     (run_dir / "engine.pid").write_text(str(proc.pid))
     assert runs.stop_run(run_dir) is True
     # the process received SIGTERM and is gone

@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from automator.adapters import tmux_base
+from automator.adapters.multiplexer import get_multiplexer
 from automator.tui import launch
 
 
@@ -38,11 +39,18 @@ class FakeRun:
 
 
 @pytest.fixture
-def fake_run(monkeypatch) -> FakeRun:
+def fake_run(monkeypatch):
     fake = FakeRun()
     monkeypatch.setattr(tmux_base.subprocess, "run", fake)
     monkeypatch.setattr(tmux_base.shutil, "which", lambda name: f"/usr/bin/{name}")
-    return fake
+    # These assert the POSIX tmux launch argv (the `sh -c` parked trailer, the plain
+    # CLI string). On a native-Windows host the default backend is psmux (pwsh /
+    # EncodedCommand, and its spawn seam isn't the patched `tmux_base.subprocess`),
+    # so force the tmux backend by name and reset its cached selection.
+    monkeypatch.setenv("BMAD_AUTO_MUX_BACKEND", "tmux")
+    get_multiplexer.cache_clear()
+    yield fake
+    get_multiplexer.cache_clear()
 
 
 def expected_cli(*tail: str) -> str:

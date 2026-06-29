@@ -4,6 +4,7 @@ that simulate the side effects skill sessions would have on disk."""
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,31 @@ import yaml
 from automator.adapters.base import SessionResult, SessionSpec
 from automator.bmadconfig import ProjectPaths
 from automator.verify import rev_parse_head
+
+
+def write_script_launcher(directory: Path, name: str, body: str) -> Path:
+    """Write ``body`` (python source) to a sidecar ``<name>.py`` and return a
+    launcher the host can exec and ``shutil.which`` can find. Single-sources the
+    body across platforms: on Windows a ``.cmd`` shim (an extension PATHEXT/which
+    recognize, runnable via list-exec or a shell) — a bare extensionless file would
+    pop Windows' "select an app" dialog and hang the launch; on POSIX a chmod+x
+    shebang wrapper. Both forward argv to the sidecar under the running interpreter,
+    so a fake CLI works the same whether the code under test calls it directly or
+    through a shell."""
+    directory = Path(directory)
+    sidecar = directory / f"{name}.py"
+    sidecar.write_text(body, encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = directory / f"{name}.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{sidecar}" %*\r\n', encoding="utf-8")
+    else:
+        launcher = directory / name
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{sidecar}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    return launcher
+
 
 SPRINT_TEMPLATE = {
     "generated": "01-06-2026 10:00",

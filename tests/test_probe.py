@@ -228,7 +228,7 @@ def test_cli_out_writes_file(tmp_path):
     )
     assert rc == 0
     assert out_file.is_file()
-    assert "Profile finalize report" in out_file.read_text()
+    assert "Profile finalize report" in out_file.read_text(encoding="utf-8")
 
 
 def test_cli_json_block_appended(tmp_path, capsys):

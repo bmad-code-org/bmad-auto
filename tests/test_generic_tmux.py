@@ -9,6 +9,7 @@ propagation / hook-signal waiting / kill end-to-end for any profile.
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -24,7 +25,11 @@ from automator.model import TokenUsage
 from automator.policy import LimitsPolicy, Policy
 from automator.signals import HookEvent
 
-HAVE_TMUX = shutil.which("tmux") is not None
+# These integration tests drive a REAL POSIX tmux with a `#!/bin/bash` fake CLI.
+# On native Windows the live transport is psmux (covered by test_psmux_live), and
+# psmux's `tmux.exe` alias would make `which("tmux")` true yet run the bash script
+# through ConPTY — a POSIX-only path that must not execute here. Gate on non-win32.
+HAVE_TMUX = sys.platform != "win32" and shutil.which("tmux") is not None
 
 FAKE_CLI = """#!/bin/bash
 # fake CLI: last positional arg is the prompt; env comes from tmux -e

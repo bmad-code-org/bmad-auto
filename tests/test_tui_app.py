@@ -776,6 +776,7 @@ async def test_dirty_worktree_blocks_launch(project, monkeypatch):
         assert not calls
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=1)
 async def test_live_run_asks_for_confirmation(project, monkeypatch):
     calls = []
     monkeypatch.setattr(launch, "tmux_available", lambda: True)
@@ -785,13 +786,20 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
     async with app.run_test() as pilot:
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
-        await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        # Wait for the modal AND its #ok to mount before clicking: under heavy suite
+        # load app.screen flips to the modal a beat before its button composes, and
+        # pilot.click queries #ok immediately (else NoMatches). The 1s-poll worker
+        # racing the modal stack is handled by the flaky rerun above (see `until`).
+        await until(
+            pilot, lambda: isinstance(app.screen, StartRunModal) and app.screen.query("#ok")
+        )
         await pilot.click("#ok")
         await until(
             pilot,
             lambda: (
                 isinstance(app.screen, ConfirmModal)
                 and not isinstance(app.screen, ConfirmResumeModal)
+                and app.screen.query("#ok")
             ),
         )
         await pilot.click("#ok")

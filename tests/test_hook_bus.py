@@ -15,6 +15,8 @@ Two layers:
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from conftest import dev_effect, review_effect, write_sprint
 
@@ -237,7 +239,10 @@ def test_declarative_error_fail_open_vs_closed():
 
 
 def test_real_subprocess_runner_reports_exit_code(tmp_path):
-    rc, out = _run_subprocess("printf hi; exit 7", cwd=str(tmp_path), env={}, timeout=10)
+    # _run_subprocess runs via the host shell (cmd on Windows, sh on POSIX); use a
+    # command that prints "hi" and exits 7 on each.
+    cmd = "echo hi& exit 7" if sys.platform == "win32" else "printf hi; exit 7"
+    rc, out = _run_subprocess(cmd, cwd=str(tmp_path), env={}, timeout=10)
     assert rc == 7 and "hi" in out
 
 

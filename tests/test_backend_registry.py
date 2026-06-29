@@ -34,9 +34,14 @@ def fresh_registry(monkeypatch):
     m.get_multiplexer.cache_clear()
 
 
-def test_default_is_tmux(fresh_registry):
+def test_default_is_tmux(fresh_registry, monkeypatch):
     """No override, POSIX host → tmux, selected via the loop's platform match (the
-    builtin registers ``matches=p != 'win32'``), not just the bottom fallback."""
+    builtin registers ``matches=p != 'win32'``), not just the bottom fallback. Pin a
+    POSIX platform so the assertion holds when the suite runs on a native-Windows
+    host too (there the default is psmux, exercised in test_backend_registry's
+    win32 cases and test_psmux_backend)."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    fresh_registry.get_multiplexer.cache_clear()
     assert isinstance(fresh_registry.get_multiplexer(), TmuxMultiplexer)
 
 
