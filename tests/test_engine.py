@@ -433,19 +433,14 @@ def test_generic_reconcile_does_not_bypass_no_change_gate(project):
     session that finalizes in prose (Status: done) but produced NO real code change
     is reconciled to done on disk yet still DEFERS — has_changes_since backstops it,
     so empty work cannot ride the prose marker to PROCEED."""
-    from conftest import git
-
     from automator.adapters.base import SessionResult
     from automator.policy import DevPolicy, LimitsPolicy, ReviewPolicy
     from automator.verify import rev_parse_head
 
-    # match real projects (#2522): the spec dir is gitignored, so the spec file
-    # itself is not a "change" — only real code edits count toward the diff gate.
-    gi = project.project / ".gitignore"
-    gi.write_text(gi.read_text() + "_bmad-output/\n")
-    git(project.project, "add", "-A")
-    git(project.project, "commit", "-q", "-m", "ignore artifacts")
-
+    # Real projects do NOT gitignore the BMAD output tree (`bmad-auto init` only
+    # ignores .automator/runs|cache), so the spec file the skill writes is tracked.
+    # The proof-of-work gate excludes the orchestrator-owned artifact folders, so a
+    # spec-only edit — including the reconcile rewrite — still reads as "no changes".
     write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
 
     def effect(spec):

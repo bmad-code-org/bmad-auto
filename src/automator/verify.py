@@ -122,13 +122,21 @@ def same_commit(a: str, b: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
-def has_changes_since(repo: Path, baseline: str) -> bool:
-    """True if tracked changes since baseline OR untracked files exist."""
-    rc, _ = _git(repo, "diff", "--quiet", baseline, "--")
+def has_changes_since(repo: Path, baseline: str, exclude: tuple[str, ...] = ()) -> bool:
+    """True if tracked changes since baseline OR untracked files exist.
+
+    `exclude` is repo-relative posix dir prefixes whose changes don't count —
+    used by the dev/bundle proof-of-work gate to ignore the orchestrator-owned
+    BMAD artifact folders (see `artifact_relpaths`), so a session that only
+    rewrites its own spec (e.g. the frontmatter-status reconcile) under those
+    folders doesn't register as real implementation work. Mirrors
+    `attempt_dirty`'s exclusion. Default `()` keeps the unscoped behavior."""
+    rc, _ = _git(repo, "diff", "--quiet", baseline, "--", ".", *_exclude_specs(exclude))
     if rc != 0:
         return True
-    rc, out = _git(repo, "ls-files", "--others", "--exclude-standard")
-    return rc == 0 and out != ""
+    created = untracked_files(repo)
+    created = {p for p in created if not _path_under_any(p, exclude)}
+    return bool(created)
 
 
 def attempt_dirty(
@@ -634,6 +642,26 @@ def set_frontmatter_status(path: Path, status: str) -> bool:
     return True
 
 
+def artifact_relpaths(paths: ProjectPaths) -> tuple[str, ...]:
+    """Repo-relative posix prefixes of the orchestrator-owned BMAD artifact
+    folders (the output root and the implementation/planning artifact dirs),
+    relative to ``paths.project``. Folders configured outside the project tree
+    are skipped — nothing to exclude there. The same set as
+    ``Engine._protected_relpaths``; the dev/bundle proof-of-work gate passes
+    these to ``has_changes_since`` so spec-only edits never count as real work."""
+    out: list[str] = []
+    for folder in (
+        paths.output_folder,
+        paths.implementation_artifacts,
+        paths.planning_artifacts,
+    ):
+        try:
+            out.append(folder.relative_to(paths.project).as_posix())
+        except ValueError:
+            pass  # configured outside the project tree; nothing to exclude here
+    return tuple(out)
+
+
 def resolve_spec_path(spec_file: str, paths: ProjectPaths) -> Path:
     p = Path(spec_file)
     if p.is_absolute():
@@ -691,7 +719,9 @@ def verify_dev(
 
     if task.baseline_commit:
         try:
-            if not has_changes_since(paths.project, task.baseline_commit):
+            if not has_changes_since(
+                paths.project, task.baseline_commit, exclude=artifact_relpaths(paths)
+            ):
                 return VerifyOutcome.retry("no changes in worktree since baseline commit")
         except GitError as e:
             return VerifyOutcome.escalate(str(e))
@@ -750,7 +780,9 @@ def verify_dev_bundle(
 
     if task.baseline_commit:
         try:
-            if not has_changes_since(paths.project, task.baseline_commit):
+            if not has_changes_since(
+                paths.project, task.baseline_commit, exclude=artifact_relpaths(paths)
+            ):
                 return VerifyOutcome.retry("no changes in worktree since baseline commit")
         except GitError as e:
             return VerifyOutcome.escalate(str(e))

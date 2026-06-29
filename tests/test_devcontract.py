@@ -246,10 +246,34 @@ def test_reconcilable_from_excludes_terminal_and_deliberate_statuses():
 @pytest.mark.parametrize("frm", ["draft", "ready-for-dev", "in-progress"])
 def test_reset_status_from_each_reconcilable_value_to_done(tmp_path, frm):
     """reset_spec_status advances every line-valued reconcilable frontmatter status
-    to done, rewriting only the frontmatter line. (The "" allowlist member has no
-    status token to rewrite, so it is covered by the engine-helper guard, not here.)"""
+    to done, rewriting only the frontmatter line."""
     sp = _spec(tmp_path / "spec.md", status=frm, auto_run="done")
     assert devcontract.reset_spec_status(sp, "done") is True
     text = sp.read_text()
     assert "status: 'done'\n" in text  # frontmatter advanced
     assert "- Status: done\n" in text  # prose untouched
+
+
+def test_reset_status_fills_empty_value(tmp_path):
+    """The "" allowlist member: a present-but-empty `status:` is filled in place,
+    leaving the prose Status line untouched."""
+    sp = _spec(tmp_path / "spec.md", status="", auto_run="done")
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: 'done'\n" in text  # empty value filled
+    assert "- Status: done\n" in text  # prose untouched
+
+
+def test_reset_status_inserts_missing_line(tmp_path):
+    """A frontmatter block with NO `status:` line gets one inserted before the
+    closing fence; existing keys survive and the prose body is untouched."""
+    sp = tmp_path / "spec.md"
+    sp.write_text(
+        "---\ntitle: 'x'\nbaseline_revision: 'abc'\n---\n\n## Intent\n\nbody\n",
+        encoding="utf-8",
+    )
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: done\n" in text  # inserted
+    assert "title: 'x'\n" in text and "baseline_revision: 'abc'\n" in text  # kept
+    assert "## Intent\n\nbody\n" in text  # body untouched
