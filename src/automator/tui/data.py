@@ -7,7 +7,7 @@ textual — it is plain stdlib + core modules + pyte/rich, fully unit-testable,
 and the screens own the poll cadence.
 
 All readers are stat-gated: parse results are cached while the file's
-(mtime_ns, size) is unchanged. Liveness is the exception — a dying engine
+(mtime_ns, size, inode) is unchanged. Liveness is the exception — a dying engine
 changes no file, so the pid is re-checked on every call.
 """
 
@@ -41,7 +41,7 @@ STOPPED = "stopped"
 INTERRUPTED = "interrupted"
 UNKNOWN = "unknown"
 
-_StatSig = tuple[int, int]
+_StatSig = tuple[int, int, int]
 
 
 def _stat_sig(path: Path) -> _StatSig | None:
@@ -49,7 +49,12 @@ def _stat_sig(path: Path) -> _StatSig | None:
         st = path.stat()
     except OSError:
         return None
-    return (st.st_mtime_ns, st.st_size)
+    # st_ino joins (mtime_ns, size): the engine rewrites state.json atomically
+    # (temp + os.replace), so every write lands on a fresh inode. That catches a
+    # same-size rewrite within one coarse mtime tick (e.g. WSL2 drvfs, or any fast
+    # rewrite on a low-resolution mtime) that (mtime_ns, size) alone would miss and
+    # serve stale from cache.
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
 
 
 # ------------------------------------------------------------------ liveness
