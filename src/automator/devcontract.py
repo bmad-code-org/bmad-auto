@@ -233,7 +233,12 @@ def reset_spec_status(spec_path: Path, new_status: str) -> bool:
         if m.group("val") == new_status:
             return m.group(0)
         changed = True
-        return f"{m.group('pre')}{m.group('q')}{new_status}{m.group('q')}{m.group('rest')}"
+        # Guarantee `key: value` spacing: a bare `status:` (no trailing space)
+        # would otherwise fill to `status:done` — invalid YAML, the key is lost.
+        pre = m.group("pre")
+        if not pre.endswith((" ", "\t")):
+            pre += " "
+        return f"{pre}{m.group('q')}{new_status}{m.group('q')}{m.group('rest')}"
 
     if _FM_STATUS_RE.search(body):
         new_body = _FM_STATUS_RE.sub(_repl, body, count=1)

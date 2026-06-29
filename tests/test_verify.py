@@ -701,3 +701,44 @@ def test_read_frontmatter_tolerates_garbage(project):
     assert verify.read_frontmatter(p) == {}
     p.write_text("---\n: : :\nbroken yaml [\n---\nbody")
     assert verify.read_frontmatter(p) == {}
+
+
+def test_artifact_relpaths_returns_in_repo_folders(project):
+    """The orchestrator-owned artifact folders, repo-relative posix."""
+    rels = verify.artifact_relpaths(project)
+    assert "_bmad-output/implementation-artifacts" in rels
+    assert "_bmad-output/planning-artifacts" in rels
+    assert all(r and r != "." for r in rels)
+
+
+def test_artifact_relpaths_drops_dot_when_folder_is_project_root(project):
+    """A folder configured == project root yields "."; it must be dropped so it
+    can't become a whole-tree exclude that disables the proof-of-work gate."""
+    import dataclasses
+
+    paths = dataclasses.replace(project, output_folder=project.project)
+    rels = verify.artifact_relpaths(paths)
+    assert "." not in rels and "" not in rels
+    # the real sub-dirs are still excluded; only the root-collapsing "." is dropped
+    assert "_bmad-output/implementation-artifacts" in rels
+
+
+def test_has_changes_since_excludes_artifact_only_edit(project):
+    """A change confined to the artifact folders is not proof of dev work."""
+    baseline = verify.rev_parse_head(project.project)
+    (project.implementation_artifacts / "spec-x.md").write_text("bookkeeping\n")
+    assert verify.has_changes_since(project.project, baseline) is True  # unscoped
+    assert (
+        verify.has_changes_since(
+            project.project, baseline, exclude=verify.artifact_relpaths(project)
+        )
+        is False
+    )
+    # a real source edit still counts
+    (project.project / "src.txt").write_text("real\n")
+    assert (
+        verify.has_changes_since(
+            project.project, baseline, exclude=verify.artifact_relpaths(project)
+        )
+        is True
+    )

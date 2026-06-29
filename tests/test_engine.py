@@ -375,6 +375,57 @@ def test_generic_reconcile_advances_stale_frontmatter_done(project):
     assert recon[0]["frm"] == "draft" and recon[0]["to"] == "done"
 
 
+def test_generic_reconcile_advances_bare_null_frontmatter_status(project):
+    """The skill left a bare `status:` (YAML null) but finalized in prose with real
+    code. status_of would read that as "none"; the reconcile normalizes null to ""
+    so it still advances to done — and the filled line is valid YAML."""
+    from automator.adapters.base import SessionResult
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+    from automator.verify import read_frontmatter, rev_parse_head, status_of
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+
+    def effect(spec):
+        baseline = rev_parse_head(project.project)
+        # a real source change so the proof-of-work gate passes
+        src = project.project / "src.txt"
+        src.write_text(src.read_text() + "real work\n")
+        # spec finalized in prose, but frontmatter left at a bare YAML-null status
+        sp = spec_path(project, "1-1-a")
+        sp.write_text(
+            f"---\ntitle: 'x'\nstatus:\nbaseline_revision: '{baseline}'\n---\n\n"
+            "## Intent\n\nx\n\n## Auto Run Result\n\n- Status: done\n",
+            encoding="utf-8",
+        )
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "escalations": [],
+            },
+        )
+
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(project, [effect], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    assert story_status(project.sprint_status, "1-1-a") == "done"
+    assert status_of(read_frontmatter(spec_path(project, "1-1-a"))) == "done"
+    recon = [e for e in engine.journal.entries() if e["kind"] == "spec-status-reconciled"]
+    assert len(recon) == 1 and recon[0]["frm"] == "" and recon[0]["to"] == "done"
+
+
 def test_generic_reconcile_idempotent_when_already_done(project):
     """When the skill DID advance the frontmatter to done, reconcile is a no-op:
     no second write, no `spec-status-reconciled` journal entry."""

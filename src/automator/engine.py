@@ -650,9 +650,13 @@ class Engine:
             self.workspace.paths.planning_artifacts,
         ):
             try:
-                out.append(protected.relative_to(self.workspace.root).as_posix())
+                rel = protected.relative_to(self.workspace.root).as_posix()
             except ValueError:
-                pass  # configured outside the repo; nothing to protect here
+                continue  # configured outside the repo; nothing to protect here
+            # "." (folder == repo root) as an exclude/keep prefix would cover the
+            # whole tree — drop it so a misconfig can't disable the dirty check.
+            if rel and rel != ".":
+                out.append(rel)
         return tuple(out)
 
     def _rollback_or_pause(self, task: StoryTask, *, cause: str = "stopped") -> None:
@@ -1327,7 +1331,13 @@ class Engine:
         if not spec_path.is_file():
             return
         success_status = "in-review" if self._dev_review_enabled() else "done"
-        fm_status = verify.status_of(verify.read_frontmatter(spec_path))
+        # A YAML-null status (bare `status:` / `status: null`) reads as the string
+        # "none" through verify.status_of (str(None)), which would dodge the
+        # RECONCILABLE_FROM allowlist; normalize it (and a missing key) to "" so the
+        # blank-status case reconciles. A literal `status: none` stays "none".
+        fm = verify.read_frontmatter(spec_path)
+        raw_status = fm.get("status")
+        fm_status = "" if raw_status is None else str(raw_status).strip().lower()
         if fm_status == success_status:
             return  # already finalized — idempotent
         if fm_status not in devcontract.RECONCILABLE_FROM:

@@ -656,9 +656,13 @@ def artifact_relpaths(paths: ProjectPaths) -> tuple[str, ...]:
         paths.planning_artifacts,
     ):
         try:
-            out.append(folder.relative_to(paths.project).as_posix())
+            rel = folder.relative_to(paths.project).as_posix()
         except ValueError:
-            pass  # configured outside the project tree; nothing to exclude here
+            continue  # configured outside the project tree; nothing to exclude here
+        # A folder == project root yields ".", which as an exclude prefix would
+        # disable change detection for the whole tree — drop it.
+        if rel and rel != ".":
+            out.append(rel)
     return tuple(out)
 
 

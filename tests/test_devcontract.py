@@ -264,6 +264,25 @@ def test_reset_status_fills_empty_value(tmp_path):
     assert "- Status: done\n" in text  # prose untouched
 
 
+def test_reset_status_fills_bare_yaml_null(tmp_path):
+    """A bare `status:` (YAML null, no trailing space) is filled to a VALID
+    `status: done` line — never `status:done`, which would drop the key on
+    re-parse. Re-reading the frontmatter must yield the new status."""
+    from automator import verify
+
+    sp = tmp_path / "spec.md"
+    sp.write_text(
+        "---\ntitle: 'x'\nstatus:\n---\n\n## Auto Run Result\n\n- Status: done\n",
+        encoding="utf-8",
+    )
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: done\n" in text  # space preserved -> valid YAML
+    assert "status:done" not in text  # the corruption form is never written
+    assert verify.status_of(verify.read_frontmatter(sp)) == "done"  # re-parses cleanly
+    assert "- Status: done\n" in text  # prose untouched
+
+
 def test_reset_status_inserts_missing_line(tmp_path):
     """A frontmatter block with NO `status:` line gets one inserted before the
     closing fence; existing keys survive and the prose body is untouched."""
