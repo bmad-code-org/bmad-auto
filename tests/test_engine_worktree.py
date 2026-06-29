@@ -747,3 +747,15 @@ def test_spec_file_serialized_relative_to_worktree():
     task.worktree_path = ""
     task.spec_file = "/repo/_out/spec.md"
     assert task.to_dict()["spec_file"] == "/repo/_out/spec.md"
+
+
+def test_spec_file_serialized_with_posix_separators():
+    """The relative spec_file is persisted with forward slashes (as_posix) so a
+    state.json written under one OS reads back identically under another — no
+    backslashes leak into the cross-OS state contract."""
+    task = StoryTask(story_key="1-1-a", epic=1, phase=Phase.DEFERRED)
+    task.worktree_path = "/repo/wt"
+    task.spec_file = "/repo/wt/_out/sub/spec.md"
+    serialized = task.to_dict()["spec_file"]
+    assert serialized == "_out/sub/spec.md"
+    assert "\\" not in serialized

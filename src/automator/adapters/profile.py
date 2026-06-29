@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 
+from ..platform_util import has_parent_ref, is_absolute_path
+
 USAGE_PARSERS = {"claude-jsonl", "codex-rollout", "gemini-chat", "copilot-events", "none"}
 HOOK_DIALECTS = {
     "claude-settings-json",
@@ -111,7 +113,7 @@ def _parse_profile(doc: dict, source: str) -> CLIProfile:
     if dialect not in HOOK_DIALECTS:
         raise fail(f"hooks.dialect must be one of {sorted(HOOK_DIALECTS)}: got {dialect!r}")
     config_path = str(hooks_d.get("config_path", ""))
-    if not config_path or Path(config_path).is_absolute():
+    if not config_path or is_absolute_path(config_path) or has_parent_ref(config_path):
         raise fail("hooks.config_path must be a project-relative path")
     events_d = hooks_d.get("events")
     if not isinstance(events_d, dict) or not events_d:
@@ -135,12 +137,12 @@ def _parse_profile(doc: dict, source: str) -> CLIProfile:
         raise fail(f"stop_without_result_nudges must be >= 0: got {stop_nudges}")
 
     skill_tree = str(doc.get("skill_tree", ".claude/skills"))
-    if not skill_tree or Path(skill_tree).is_absolute():
+    if not skill_tree or is_absolute_path(skill_tree) or has_parent_ref(skill_tree):
         raise fail("skill_tree must be a project-relative path")
 
     seed_files = tuple(str(s) for s in doc.get("seed_files", ()))
     for seed in seed_files:
-        if not seed or Path(seed).is_absolute():
+        if not seed or is_absolute_path(seed) or has_parent_ref(seed):
             raise fail(f"seed_files entries must be project-relative paths: got {seed!r}")
 
     return CLIProfile(

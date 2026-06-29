@@ -587,6 +587,18 @@ def read_frontmatter(path: Path) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+def status_of(fm: dict[str, Any]) -> str:
+    """Normalized spec status from a frontmatter dict: stripped + lowercased.
+
+    The single point all spec-frontmatter status gates read through, so casing
+    never decides a gate — the spec template and sprint-status tokens are
+    lowercase, so a stray ``Done``/``In-Review`` from a hand-edited spec still
+    matches. (``devcontract`` keeps its own lowercasing; it parses skill-written
+    prose where casing genuinely varies.)
+    """
+    return str(fm.get("status", "")).strip().lower()
+
+
 def set_frontmatter_status(path: Path, status: str) -> bool:
     """Rewrite the `status:` field in a spec's `---`…`---` frontmatter block.
 
@@ -665,7 +677,7 @@ def verify_dev(
     # finalizes straight to done; otherwise it hands off at in-review.
     expected = "in-review" if review_enabled else "done"
     fm = read_frontmatter(spec_path)
-    status = str(fm.get("status", "")).strip()
+    status = status_of(fm)
     if status != expected:
         return VerifyOutcome.retry(f"spec status is {status!r}, expected {expected!r}: {spec_path}")
 
@@ -724,7 +736,7 @@ def verify_dev_bundle(
     # With review disabled, the dev session finalizes the bundle straight to done.
     expected = "in-review" if review_enabled else "done"
     fm = read_frontmatter(spec_path)
-    status = str(fm.get("status", "")).strip()
+    status = status_of(fm)
     if status != expected:
         return VerifyOutcome.retry(f"spec status is {status!r}, expected {expected!r}: {spec_path}")
 
@@ -799,7 +811,7 @@ def verify_review(task: StoryTask, paths: ProjectPaths, policy: Policy) -> Verif
     if not task.spec_file:
         return VerifyOutcome.retry("no spec file recorded for task")
     fm = read_frontmatter(Path(task.spec_file))
-    status = str(fm.get("status", "")).strip()
+    status = status_of(fm)
     if status != "done":
         return VerifyOutcome.retry(f"spec status is {status!r}, expected 'done'")
 
@@ -821,7 +833,7 @@ def verify_review_bundle(task: StoryTask, paths: ProjectPaths, policy: Policy) -
     if not task.spec_file:
         return VerifyOutcome.retry("no spec file recorded for task")
     fm = read_frontmatter(Path(task.spec_file))
-    status = str(fm.get("status", "")).strip()
+    status = status_of(fm)
     if status != "done":
         return VerifyOutcome.retry(f"spec status is {status!r}, expected 'done'")
 

@@ -45,10 +45,23 @@ class LimitsPolicy:
     # how long a dev session may sit on a result-less Stop — i.e. it ended its
     # turn awaiting a long-running background process (a Unity PlayMode run, a
     # slow test) and expects to be re-invoked on completion — before it is
-    # declared stalled. Each re-invocation (a fresh Stop) resets the window; only
-    # a genuinely idle gap this long with no terminal spec stalls. Bounded by
-    # session_timeout_min. 0 restores the old fail-fast-on-first-Stop behavior.
+    # declared stalled. The window measures genuine inactivity: any output to the
+    # session's pane log (a long productive turn, a streaming subagent) re-arms
+    # it, as does a fresh Stop, so only a truly idle gap this long with no
+    # terminal spec stalls. Bounded by session_timeout_min. 0 restores the old
+    # fail-fast-on-first-Stop behavior.
     dev_stall_grace_s: int = 600
+    # how many times an idle dev session is woken with a nudge when the
+    # dev_stall_grace_s window elapses with no output — bmad-auto has no
+    # background-completion re-invocation, so a session that ended its turn to
+    # await a background process is nudged back to life before being called
+    # stalled. Fresh pane output re-arms the grace window (an actively streaming
+    # session never reaches grace expiry, so never spends a nudge); a fresh Stop
+    # additionally restores any spent budget. Either way a cooperative-but-slow
+    # session waits up to session_timeout_min; only one that stays silent through
+    # the full grace, nudge after nudge, drains the budget and stalls. 0 = stall
+    # on grace expiry.
+    dev_stall_nudges: int = 2
     max_tokens_per_story: int = 2_000_000
     # weight of cache-read tokens in the budget check (1.0 = count raw)
     cache_read_weight: float = 0.1
@@ -439,6 +452,7 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
             limits_d.get("stop_without_result_nudges", LimitsPolicy.stop_without_result_nudges)
         ),
         dev_stall_grace_s=int(limits_d.get("dev_stall_grace_s", LimitsPolicy.dev_stall_grace_s)),
+        dev_stall_nudges=int(limits_d.get("dev_stall_nudges", LimitsPolicy.dev_stall_nudges)),
         max_tokens_per_story=int(
             limits_d.get("max_tokens_per_story", LimitsPolicy.max_tokens_per_story)
         ),
@@ -452,6 +466,8 @@ def loads(text: str, plugin_schemas: dict[str, Any] | None = None) -> Policy:
         )
     if limits.dev_stall_grace_s < 0:
         raise PolicyError(f"limits.dev_stall_grace_s must be >= 0: got {limits.dev_stall_grace_s}")
+    if limits.dev_stall_nudges < 0:
+        raise PolicyError(f"limits.dev_stall_nudges must be >= 0: got {limits.dev_stall_nudges}")
 
     verify = VerifyPolicy(commands=tuple(str(c) for c in verify_d.get("commands", ())))
     notify = NotifyPolicy(
@@ -649,6 +665,7 @@ max_dev_attempts = 2
 session_timeout_min = 90
 stop_without_result_nudges = 1
 dev_stall_grace_s = 600      # grace for a dev session that ended its turn awaiting a background process (e.g. a slow PlayMode/test run) before it is called stalled; each re-invocation resets it. 0 = fail fast on the first result-less Stop
+dev_stall_nudges = 2         # times an idle dev session is nudged awake on grace expiry before it is called stalled (bmad-auto has no background-completion re-invocation); pane output re-arms the grace window and a fresh Stop restores the budget. 0 = stall on grace expiry
 max_tokens_per_story = 2000000
 cache_read_weight = 0.1      # cache reads bill at ~0.1x input on all vendors; 1.0 = count raw
 

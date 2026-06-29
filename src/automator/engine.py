@@ -724,7 +724,7 @@ class Engine:
         Always raises RunPaused. A *resolved* escalation never reaches here —
         `_rollback_or_pause` auto-recovers that human-initiated re-drive
         regardless of `scm.rollback_on_failure`."""
-        short = baseline[:12] or "the run's baseline commit"
+        short = baseline[:12] or "<baseline_commit>"
         why = (
             f"Story **{task.story_key}**'s attempt was stopped and auto-rollback "
             "is OFF, so the working tree was left exactly as-is for you to "
@@ -1317,7 +1317,7 @@ class Engine:
             return
         review_enabled = self._dev_review_enabled()  # always False for the generic path
         success_status = "in-review" if review_enabled else "done"
-        status = str(verify.read_frontmatter(spec_path).get("status", "")).strip()
+        status = verify.status_of(verify.read_frontmatter(spec_path))
         if status != success_status:
             return
         target = "review" if review_enabled else "done"

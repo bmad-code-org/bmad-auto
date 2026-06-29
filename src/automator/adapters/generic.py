@@ -3,8 +3,10 @@
 Each pipeline step gets a fresh tmux window running the full interactive CLI
 with the skill invocation as the initial prompt. Completion is detected
 exclusively through hook-written event files (Stop/SessionEnd) plus the
-presence of the skill-written result.json — the pane is piped to a log file
-for human debugging but NEVER parsed for control flow.
+presence of the skill-written result.json — the pane log's *contents* are
+never parsed for control flow (only tee'd for human debugging), though its
+*growth* (mtime/size, never the bytes — see ``_log_activity_key``) is read as
+a liveness signal to re-arm the dev-stall grace window.
 
 Everything CLI-specific (binary, prompt rendering, bypass flags, usage
 parser) comes from a declarative CLIProfile; each CLI's hook config registers
@@ -42,6 +44,17 @@ NUDGE_TEXT = (
     "You are running in bmad-auto automation mode. Finish the workflow now: "
     "complete any remaining steps and write the result JSON file to "
     "$BMAD_AUTO_RUN_DIR/tasks/$BMAD_AUTO_TASK_ID/result.json, then end your turn."
+)
+# Wake an idle dev session whose grace window elapsed with no output. bmad-auto
+# has no background-completion re-invocation, so a turn ended to await a slow
+# background process (a Unity PlayMode run, a long test) would otherwise wait
+# forever; this nudge IS that re-invocation. Skill-agnostic: it must not assume a
+# result.json (the bmad-dev-auto skill writes none — see GenericDevAdapter).
+STALL_NUDGE_TEXT = (
+    "You appear idle in bmad-auto automation mode, which cannot re-invoke you when "
+    "a background process finishes. If you are waiting on one (e.g. a Unity PlayMode "
+    "run or a long test), check its status now and continue the workflow; if it is "
+    "done, finalize the work and end your turn. If you are stuck, say so and stop."
 )
 
 
@@ -83,6 +96,10 @@ class GenericAdapter(CodingCLIAdapter):
         # keeps the fail-fast behavior; the dev adapter raises it so a session
         # that ended its turn awaiting a background process isn't mis-stalled.
         self._stall_grace_s = 0.0
+        # Wake-nudges to spend on grace expiry before stalling. 0 here is moot for
+        # the base adapter (grace 0 never opens the window); the dev adapter sets
+        # it from policy so an idle wait is re-invoked rather than killed outright.
+        self._stall_nudges = 0
         self.name = f"{profile.name}-tmux"
         self.binary = binary or profile.binary
         self.session_name = f"bmad-auto-{run_dir.name}"
@@ -162,6 +179,16 @@ class GenericAdapter(CodingCLIAdapter):
         # only); a fresh Stop re-arms it, an elapsed window with no terminal
         # result is a genuine stall. None = no grace pending.
         stall_deadline: float | None = None
+        # pane-log activity signature captured when the grace window is armed; a
+        # session streaming output (a long productive turn, a streaming subagent)
+        # advances it and re-arms the window, so only genuine silence stalls.
+        last_activity: tuple[int, int] | None = None
+        # wake-nudges left to spend when the grace window elapses in silence: the
+        # session likely ended its turn awaiting a background process, so we prod
+        # it (bmad-auto has no background re-invocation) instead of stalling. A
+        # fresh Stop — proof it woke and acted — restores the budget; only an
+        # unresponsive session burns through it. Bounded overall by spec.timeout_s.
+        stall_nudges_left = self._stall_nudges
 
         while True:
             remaining = deadline - time.monotonic()
@@ -193,10 +220,20 @@ class GenericAdapter(CodingCLIAdapter):
                             session_id=session_id,
                             transcript_path=transcript_path,
                         )
+                    # The grace window measures inactivity, not time-since-Stop:
+                    # a session still streaming to the tee'd pane log (a long
+                    # productive turn building a diff, a streaming subagent) is
+                    # working, not stalled. Re-arm on any pane growth so only
+                    # genuine silence for the full grace trips the stall below.
+                    key = self._log_activity_key(handle.task_id)
+                    if key is not None and key != last_activity:
+                        last_activity = key
+                        stall_deadline = time.monotonic() + self._stall_grace_s
+                        continue
                 if stall_deadline is not None and time.monotonic() >= stall_deadline:
                     # the grace window elapsed with no re-invocation; one last
                     # non-blocking check in case the spec landed without a fresh
-                    # Stop, else it's a real stall.
+                    # Stop.
                     result_json = self._result_json(handle, spec, wait=False)
                     if result_json is not None:
                         return SessionResult(
@@ -205,6 +242,17 @@ class GenericAdapter(CodingCLIAdapter):
                             session_id=session_id,
                             transcript_path=transcript_path,
                         )
+                    if stall_nudges_left > 0:
+                        # The wake nudge IS the re-invocation bmad-auto otherwise
+                        # lacks: prod the idle session and re-arm. Budget is
+                        # restored only by a fresh Stop (a real turn-end), so the
+                        # nudge's own echoed keystrokes can't be mistaken for the
+                        # agent waking; an unresponsive session keeps draining it.
+                        stall_nudges_left -= 1
+                        self.send_text(handle, STALL_NUDGE_TEXT)
+                        stall_deadline = time.monotonic() + self._stall_grace_s
+                        last_activity = self._log_activity_key(handle.task_id)
+                        continue
                     return self._final(handle, spec, "stalled", session_id, transcript_path)
                 continue
             if (
@@ -246,9 +294,25 @@ class GenericAdapter(CodingCLIAdapter):
                 # only a genuinely idle gap (handled in the no-event branch above)
                 # is a stall. Bounded overall by spec.timeout_s.
                 stall_deadline = time.monotonic() + self._stall_grace_s
+                last_activity = self._log_activity_key(handle.task_id)
+                # a real turn-end proves the session is responsive: restore the
+                # wake-nudge budget so a slow-but-cooperative session can keep
+                # waiting (up to spec.timeout_s), unlike a truly unresponsive one.
+                stall_nudges_left = self._stall_nudges
                 continue
             if event.event == "SessionEnd":
                 return self._final(handle, spec, "crashed", session_id, transcript_path)
+
+    def _log_activity_key(self, task_id: str) -> tuple[int, int] | None:
+        """Activity signature of the tee'd pane log: (mtime_ns, size), or None if
+        it does not yet exist. The pane is piped via append to a stable inode, so
+        a growing size (and advancing mtime) is a reliable signal the session is
+        still producing output even when no hook event fires."""
+        try:
+            st = (self.logs_dir / f"{task_id}.log").stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _result_json(self, handle: SessionHandle, spec: SessionSpec, *, wait: bool) -> dict | None:
         """Acquire this session's result dict. Base behavior: read the
@@ -345,6 +409,7 @@ class GenericDevAdapter(GenericAdapter):
         # invoked on completion; the idle-grace window distinguishes the two.
         self._stop_nudges = 0
         self._stall_grace_s = float(self.policy.limits.dev_stall_grace_s)
+        self._stall_nudges = int(self.policy.limits.dev_stall_nudges)
 
     def _artifact_dirs(self, cwd: Path) -> list[Path]:
         # In worktree isolation the skill runs with cwd set to the worktree and

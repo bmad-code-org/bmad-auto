@@ -475,6 +475,7 @@ def test_dev_stalls_when_grace_elapses_without_reinvocation(tmp_path, monkeypatc
     monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
     adapter, _ = make_dev_adapter(tmp_path)
     adapter._stall_grace_s = 10.0
+    adapter._stall_nudges = 0  # isolate the grace-expiry stall from the wake-nudge path
     adapter._window_alive = lambda handle: True  # window still up, just idle
 
     clock = {"t": 1000.0}
@@ -496,6 +497,129 @@ def test_dev_stalls_when_grace_elapses_without_reinvocation(tmp_path, monkeypatc
     )
     result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
     assert result.status == "stalled"
+
+
+def test_dev_log_activity_keeps_grace_window_alive(tmp_path, monkeypatch):
+    """A session still streaming to the tee'd pane log is working, not stalled:
+    pane growth must re-arm the grace window even with no fresh Stop, so only
+    genuine silence for the full grace trips a stall (the Mode-2 regression — a
+    long productive turn building a diff / launching review subagents)."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, _ = make_dev_adapter(tmp_path)
+    adapter._stall_grace_s = 10.0
+    adapter._stall_nudges = 0  # isolate the activity re-arm from the wake-nudge path
+    adapter._window_alive = lambda handle: True
+
+    log_path = adapter.logs_dir / "3-1-dev-1.log"
+    log_path.write_bytes(b"start\n")  # baseline captured when the window arms
+
+    clock = {"t": 1000.0}
+
+    class _Clock:
+        monotonic = staticmethod(lambda: clock["t"])
+        sleep = staticmethod(lambda *_: None)
+        time_ns = staticmethod(lambda: 0)
+
+    monkeypatch.setattr(generic, "time", _Clock)
+
+    def tick(call_n):
+        # call 1 yields the result-less Stop that arms the window. Each later idle
+        # tick advances the clock past the grace; calls 2-3 ALSO grow the pane log
+        # (active -> must not stall), call 4+ stays silent (-> stall).
+        if call_n >= 2:
+            clock["t"] += 11.0
+        if 2 <= call_n <= 3:
+            with log_path.open("ab") as f:
+                f.write(b"working\n")
+
+    adapter.watcher = _ScriptedWatcher(
+        [_stop_event("3-1-dev-1", "sess", "/run/events.jsonl")],  # then None forever
+        on_call=tick,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    # Pre-fix this stalls at call 2; the activity re-arm carries it to the first
+    # silent tick (call 4) before the genuine stall.
+    assert result.status == "stalled"
+    assert adapter.watcher.calls == 4
+
+
+def test_dev_grace_expiry_nudges_awake_before_stalling(tmp_path, monkeypatch):
+    """bmad-auto can't re-invoke a turn ended to await a background process, so an
+    idle dev session is woken with up to dev_stall_nudges wake nudges on grace
+    expiry before it is declared stalled (the Mode-1 fix)."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, _ = make_dev_adapter(tmp_path)
+    adapter._stall_grace_s = 10.0
+    adapter._stall_nudges = 2
+    adapter._window_alive = lambda handle: True
+    sent: list[str] = []
+    adapter.send_text = lambda handle, text: sent.append(text)
+
+    clock = {"t": 1000.0}
+
+    class _Clock:
+        monotonic = staticmethod(lambda: clock["t"])
+        sleep = staticmethod(lambda *_: None)
+        time_ns = staticmethod(lambda: 0)
+
+    monkeypatch.setattr(generic, "time", _Clock)
+
+    def advance(call_n):
+        if call_n >= 2:  # every idle tick after the result-less Stop armed the window
+            clock["t"] += 11.0
+
+    adapter.watcher = _ScriptedWatcher(
+        [_stop_event("3-1-dev-1", "sess", "/run/events.jsonl")],  # then None forever
+        on_call=advance,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "stalled"
+    # two wake nudges spent (silent through both grace windows), then the stall
+    assert sent == [generic.STALL_NUDGE_TEXT, generic.STALL_NUDGE_TEXT]
+
+
+def test_dev_stall_nudge_wakes_session_that_then_completes(tmp_path, monkeypatch):
+    """A wake nudge that the session answers (a fresh Stop carrying the terminal
+    spec) completes the session — the nudge served as the missing re-invocation."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, impl = make_dev_adapter(tmp_path)
+    adapter._stall_grace_s = 10.0
+    adapter._stall_nudges = 2
+    adapter._window_alive = lambda handle: True
+    sent: list[str] = []
+    adapter.send_text = lambda handle, text: sent.append(text)
+
+    clock = {"t": 1000.0}
+
+    class _Clock:
+        monotonic = staticmethod(lambda: clock["t"])
+        sleep = staticmethod(lambda *_: None)
+        time_ns = staticmethod(lambda: 0)
+
+    monkeypatch.setattr(generic, "time", _Clock)
+
+    def script(call_n):
+        if call_n == 2:  # idle tick: push past the grace so the nudge fires
+            clock["t"] += 11.0
+        if call_n == 3:  # the session answered the nudge and landed its spec
+            (impl / "spec-3-1-foo.md").write_text(
+                "---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n"
+            )
+
+    adapter.watcher = _ScriptedWatcher(
+        [
+            _stop_event("3-1-dev-1", "sess", "/run/events.jsonl"),  # ended turn to await bg run
+            None,  # idle gap -> grace expires -> wake nudge
+            _stop_event("3-1-dev-1", "sess", "/run/events.jsonl"),  # woke, finished
+        ],
+        on_call=script,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "completed"
+    assert sent == [generic.STALL_NUDGE_TEXT]  # one nudge was enough to wake it
 
 
 def _usage_adapter(tmp_path, profile_name, **kw) -> GenericTmuxAdapter:

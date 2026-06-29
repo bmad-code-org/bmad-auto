@@ -76,6 +76,12 @@ minimum = 0
 default_ref = "LimitsPolicy.dev_stall_grace_s"
 description = "grace for a dev session that ended its turn awaiting a background process (e.g. a slow PlayMode/test run) before it is called stalled; each re-invocation resets it · 0 = fail fast on the first result-less Stop"
 [[section.field]]
+key = "dev_stall_nudges"
+kind = "int"
+minimum = 0
+default_ref = "LimitsPolicy.dev_stall_nudges"
+description = "times an idle dev session is nudged awake on grace expiry before it is called stalled (bmad-auto has no background-completion re-invocation); pane output re-arms the grace window and a fresh Stop restores the budget · 0 = stall on grace expiry"
+[[section.field]]
 key = "max_tokens_per_story"
 kind = "int"
 minimum = 1

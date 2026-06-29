@@ -217,6 +217,15 @@ The canonical example lives at `src/automator/data/plugins/unity/`:
   pin, and Editor launch.
 - `unity_teardown.py` — Editor quit + MCP-server reap + symlink-Library cleanup.
 
+> **Tuning long PlayMode dev sessions.** The readiness knobs above
+> (`ready_timeout_sec` / `ready_grace_sec`) gate Editor _startup_, not dev-session
+> _completion_. A story whose dev session waits on a long PlayMode run or a slow
+> test is kept alive instead by the core limits `limits.dev_stall_grace_s` (idle
+> grace before an awaiting session is nudged/stalled) and `limits.dev_stall_nudges`
+> (wake-nudges spent on grace expiry before it is called stalled). The grace window
+> measures genuine inactivity — pane output re-arms it — so raise these (not the
+> readiness knobs) if networked/PlayMode-heavy stories are being mis-stalled.
+
 Each script's module docstring documents every env knob it reads — the
 authoritative source if a default ever changes. The [Game Engine MCP guide](game-engine-mcp-guide.md)
 distills those into a single reference table and explains the IvanMurzak vs

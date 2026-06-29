@@ -14,9 +14,9 @@ parses is well-formed, not necessarily loadable.
 from __future__ import annotations
 
 import tomllib
-from pathlib import Path
 from typing import Any
 
+from ..platform_util import has_parent_ref, is_absolute_path
 from .model import (
     SETTING_TYPES,
     WORKFLOW_ROLES,
@@ -32,7 +32,7 @@ from .model import (
 
 def _check_relative_paths(values: tuple[str, ...], label: str, fail) -> None:
     for value in values:
-        if not value or Path(value).is_absolute():
+        if not value or is_absolute_path(value) or has_parent_ref(value):
             raise fail(f"{label} entries must be project-relative paths: got {value!r}")
 
 
@@ -147,7 +147,7 @@ def _parse_python(python_d: Any, fail) -> PythonSpec | None:
     module = str(python_d.get("module", "")).strip()
     if not module:
         raise fail("[python] requires a 'module'")
-    if Path(module).is_absolute():
+    if is_absolute_path(module) or has_parent_ref(module):
         raise fail(f"[python] module must be a plugin-relative path: got {module!r}")
     return PythonSpec(module=module, cls=str(python_d.get("class", "Plugin")) or "Plugin")
 

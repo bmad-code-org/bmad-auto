@@ -1014,7 +1014,7 @@ class SweepEngine(Engine):
         if not spec_path.is_file():
             return
         success_status = "in-review" if self._dev_review_enabled() else "done"
-        if str(verify.read_frontmatter(spec_path).get("status", "")).strip() != success_status:
+        if verify.status_of(verify.read_frontmatter(spec_path)) != success_status:
             return
         ledger = self.workspace.paths.deferred_work
         note = f"resolved by sweep bundle {task.story_key}"

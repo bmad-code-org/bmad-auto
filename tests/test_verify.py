@@ -84,6 +84,21 @@ def test_attempt_dirty_excludes_tracked_artifact(project):
     assert verify.attempt_dirty(repo, baseline, [], exclude=(artifact_rel,)) is True
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("in-review", "in-review"),
+        ("  in-review  ", "in-review"),
+        ("In-Review", "in-review"),
+        ("DONE", "done"),
+        (None, ""),
+        (123, "123"),
+    ],
+)
+def test_status_of_normalizes(raw, expected):
+    assert verify.status_of({"status": raw} if raw is not None else {}) == expected
+
+
 def test_verify_dev_happy(project):
     write_sprint(project, {"1-1-a": "review"})
     task = make_task(project)
@@ -94,6 +109,19 @@ def test_verify_dev_happy(project):
     out = verify.verify_dev(task, project, dev_result(sp))
     assert out.ok
     assert task.spec_file == str(sp)
+
+
+def test_verify_dev_status_is_case_insensitive(project):
+    # A hand-edited spec with a stray-cased status must still pass the gate —
+    # the spec template emits lowercase, but casing must never decide it.
+    write_sprint(project, {"1-1-a": "review"})
+    task = make_task(project)
+    sp = spec_path(project, "1-1-a")
+    write_spec(sp, "In-Review", task.baseline_commit)
+    (project.project / "src.txt").write_text("changed\n")
+
+    out = verify.verify_dev(task, project, dev_result(sp))
+    assert out.ok
 
 
 def test_verify_dev_missing_spec_file_claim(project):

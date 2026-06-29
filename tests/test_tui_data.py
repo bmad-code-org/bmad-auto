@@ -764,3 +764,46 @@ def test_deferred_entries_mixed_ledger_in_file_order(project):
     assert [(i.id, i.legacy) for i in items] == [("L1", True), ("DW-1", False)]
     assert items[1].option_key is None  # canonical rows key on the DW id
     assert items[1].severity == "high"
+
+
+def test_stat_sig_includes_inode_for_same_size_rewrite(tmp_path):
+    # The engine rewrites state.json atomically (temp + os.replace), landing a
+    # fresh inode. A same-size rewrite with an identical (forced) mtime must still
+    # change the signature — otherwise a coarse-mtime filesystem (WSL2 drvfs) would
+    # serve a stale parse from cache. st_ino is what catches it.
+    target = tmp_path / "state.json"
+    target.write_text("AAAA", encoding="utf-8")
+    before = data._stat_sig(target)
+    original = target.stat()
+
+    replacement = tmp_path / "state.json.tmp"
+    replacement.write_text("BBBB", encoding="utf-8")  # same size, different content
+    os.replace(replacement, target)
+    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))  # pin mtime
+
+    after = data._stat_sig(target)
+    same_size = before[1] == after[1]
+    same_mtime = before[0] == after[0]
+    assert same_size and same_mtime  # (mtime_ns, size) alone could not tell these apart
+    assert before != after  # ...but the inode did
+
+
+def test_run_watcher_state_refreshes_on_same_size_rewrite(tmp_path):
+    # A same-content atomic rewrite keeps size and (forced) mtime identical but
+    # lands a fresh inode. The watcher must re-parse — detected here by object
+    # identity: a cache hit would return the very same RunState instance.
+    run_dir = make_run(tmp_path, "r1")
+    watcher = data.RunWatcher(run_dir)
+    first = watcher.state()
+    assert first is not None
+
+    state_file = run_dir / "state.json"
+    pinned = state_file.stat()
+    save_state(
+        run_dir, RunState(run_id="r1", project=str(tmp_path), started_at="2026-06-11T10:00:00")
+    )
+    os.utime(state_file, ns=(pinned.st_atime_ns, pinned.st_mtime_ns))  # pin mtime back
+    after = state_file.stat()
+    assert after.st_size == pinned.st_size and after.st_mtime_ns == pinned.st_mtime_ns
+
+    assert watcher.state() is not first  # re-parsed because the inode changed

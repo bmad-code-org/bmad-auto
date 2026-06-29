@@ -115,6 +115,9 @@ def test_build_context_gathers_critical_escalations(tmp_path):
     assert "names not unique" in details
     assert "ignore me" not in details  # PREFERENCE dropped
     assert ctx["resolution_path"].endswith("resolve/6-4-cli-list-command/resolution.json")
+    # serialized via as_posix(): forward slashes only, so the context contract is
+    # identical across OSes (no backslashes leak in on Windows).
+    assert "\\" not in ctx["resolution_path"]
 
 
 def test_build_context_no_session_files(tmp_path):
