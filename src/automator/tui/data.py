@@ -38,6 +38,7 @@ RUNNING = "running"
 PAUSED = "paused"
 FINISHED = "finished"
 STOPPED = "stopped"
+CRASHED = "crashed"
 INTERRUPTED = "interrupted"
 UNKNOWN = "unknown"
 
@@ -95,7 +96,7 @@ def _session_liveness(run_id: str) -> str:
         return "unknown"
 
 
-def _classify(finished: bool, paused: bool, stopped: bool, run_dir: Path) -> str:
+def _classify(finished: bool, paused: bool, stopped: bool, crashed: bool, run_dir: Path) -> str:
     if finished:
         return FINISHED
     if paused:
@@ -104,6 +105,10 @@ def _classify(finished: bool, paused: bool, stopped: bool, run_dir: Path) -> str
     # not read as INTERRUPTED (a crash).
     if stopped:
         return STOPPED
+    # a recorded crash leaves a dead pid too — surface it as a distinct CRASHED
+    # before liveness, where it would otherwise read as a generic INTERRUPTED.
+    if crashed:
+        return CRASHED
     live = liveness(run_dir)
     if live == "alive":
         return RUNNING
@@ -124,8 +129,8 @@ class RunInfo:
     status: str
 
 
-# state.json path -> (stat sig, (run_type, started_at, finished, paused, stopped))
-_header_cache: dict[Path, tuple[_StatSig, tuple[str, str, bool, bool, bool]]] = {}
+# state.json path -> (stat sig, (run_type, started_at, finished, paused, stopped, crashed))
+_header_cache: dict[Path, tuple[_StatSig, tuple[str, str, bool, bool, bool, bool]]] = {}
 
 
 def discover_runs(project: Path) -> list[RunInfo]:
@@ -141,7 +146,7 @@ def discover_runs(project: Path) -> list[RunInfo]:
         sig = _stat_sig(state_path)
         cached = _header_cache.get(state_path)
         if sig is not None and cached is not None and cached[0] == sig:
-            run_type, started_at, finished, paused, stopped = cached[1]
+            run_type, started_at, finished, paused, stopped, crashed = cached[1]
         else:
             try:
                 doc = json.loads(state_path.read_text(encoding="utf-8"))
@@ -150,15 +155,16 @@ def discover_runs(project: Path) -> list[RunInfo]:
                 finished = bool(doc.get("finished", False))
                 paused = doc.get("paused_reason") is not None
                 stopped = bool(doc.get("stopped", False))
+                crashed = bool(doc.get("crashed", False))
             except (OSError, json.JSONDecodeError):
                 out.append(RunInfo(run_dir.name, run_dir, "?", "", UNKNOWN))
                 continue
             if sig is not None:
                 _header_cache[state_path] = (
                     sig,
-                    (run_type, started_at, finished, paused, stopped),
+                    (run_type, started_at, finished, paused, stopped, crashed),
                 )
-        status = _classify(finished, paused, stopped, run_dir)
+        status = _classify(finished, paused, stopped, crashed, run_dir)
         out.append(RunInfo(run_dir.name, run_dir, run_type, started_at, status))
     return out
 
@@ -195,7 +201,7 @@ class RunWatcher:
         state = self.state()
         if state is None:
             return UNKNOWN
-        return _classify(state.finished, state.paused, state.stopped, self.run_dir)
+        return _classify(state.finished, state.paused, state.stopped, state.crashed, self.run_dir)
 
     def attention(self) -> str:
         path = self.run_dir / ATTENTION_FILE

@@ -224,6 +224,40 @@ def test_watcher_status_interrupted(tmp_path):
     assert watcher.liveness() == "dead"
 
 
+def test_classify_crashed(tmp_path):
+    # a recorded crash classifies as CRASHED (distinct from a generic INTERRUPTED),
+    # checked before liveness so the dead pid does not override it.
+    assert (
+        data._classify(
+            finished=False,
+            paused=False,
+            stopped=False,
+            crashed=True,
+            run_dir=tmp_path,
+        )
+        == data.CRASHED
+    )
+    # a state.json carrying crashed=True surfaces through the watcher
+    run_dir = make_run(tmp_path, "20260611-100000-aaaa", crashed=True)
+    (run_dir / "engine.pid").write_text(str(dead_pid()))
+    assert data.RunWatcher(run_dir).status() == data.CRASHED
+    assert data.discover_runs(tmp_path)[0].status == data.CRASHED
+
+
+def test_classify_legacy_crash_stays_interrupted(tmp_path):
+    # a pre-feature run has no crashed flag; a dead pid reads as INTERRUPTED, not
+    # CRASHED — backward compatible.
+    run_dir = make_run(tmp_path, "20260611-100000-aaaa")
+    import json
+
+    doc = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    doc.pop("crashed", None)
+    (run_dir / "state.json").write_text(json.dumps(doc), encoding="utf-8")
+    (run_dir / "engine.pid").write_text(str(dead_pid()))
+    assert data.RunWatcher(run_dir).status() == data.INTERRUPTED
+    assert data.discover_runs(tmp_path)[0].status == data.INTERRUPTED
+
+
 def test_watcher_attention(tmp_path):
     run_dir = make_run(tmp_path, "20260611-100000-aaaa")
     watcher = data.RunWatcher(run_dir)
