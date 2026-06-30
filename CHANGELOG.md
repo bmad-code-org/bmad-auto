@@ -5,6 +5,19 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.11] — 2026-06-30
+
+### Fixed
+
+- **A finalized story the review just won't stop recommending a follow-up for is now committed, not
+  rolled back, when the review budget runs out.** Exhausting `limits.max_review_cycles` previously
+  always deferred + reverted — discarding completed, review-passing work (frontmatter `status: done`,
+  verify green) whose only "failure" was a never-clearing `followup_review_recommended`. The
+  orchestrator now commits that work and re-files the lingering recommendation as a fresh open
+  deferred-work entry; a story that itself came from such an entry is committed without re-filing, so
+  a second non-convergence reaches a human instead of looping across sweeps. Worktree-isolation runs
+  were unaffected — a deferred unit already keeps its worktree.
+
 ## [0.7.10] — 2026-06-29
 
 ### Fixed
@@ -824,6 +837,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.11]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.11
 [0.7.9]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.9
 [0.7.7]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.7
 [0.7.6]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.6

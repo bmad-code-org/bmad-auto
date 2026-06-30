@@ -858,12 +858,50 @@ def test_review_loop_converges_within_budget(project):
     assert engine.state.tasks["1-1-a"].review_cycle == 2
 
 
-def test_plateau_defer_when_review_never_clean(project):
+def test_budget_exhausted_finalized_work_commits(project):
+    """A finalized story (status: done, sprint done, verify green) whose review
+    pass keeps recommending an independent follow-up is COMMITTED when the review
+    budget is exhausted — not rolled back. The lingering recommendation is
+    re-filed as a fresh open deferred-work entry, and the run records the event."""
+    from automator import deferredwork
+
     write_sprint(project, {"1-1-a": "ready-for-dev"})
-    engine, adapter = make_engine(
+    engine, _ = make_engine(
         project,
         [dev_effect(project, "1-1-a")]
         + [review_effect(project, "1-1-a", clean=False, patched=1) for _ in range(3)],
+    )
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert task.phase == Phase.DONE
+    assert task.review_cycle == 3
+    assert task.commit_sha and task.commit_sha != task.baseline_commit
+    # the finalized work is committed, not reverted
+    assert "change for 1-1-a" in (project.project / "src.txt").read_text()
+    kinds = [e["kind"] for e in engine.journal.entries()]
+    assert "review-budget-committed" in kinds and "story-deferred" not in kinds
+    # the lingering follow-up is preserved as a new open deferred-work entry
+    open_entries = [
+        e for e in deferredwork.parse_ledger(project.deferred_work.read_text()) if e.open
+    ]
+    assert any("origin: review-budget-followup" in e.body for e in open_entries)
+
+
+def test_budget_exhausted_unfinalized_defers(project):
+    """Genuine non-convergence: the review never finalizes the spec (status stays
+    in-progress, so the post-budget verify gate fails). Budget exhaustion defers
+    and rolls the tree back, exactly as before the commit-instead-of-rollback
+    safeguard."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    engine, _ = make_engine(
+        project,
+        [dev_effect(project, "1-1-a")]
+        + [
+            review_effect(project, "1-1-a", clean=False, patched=1, finalized=False)
+            for _ in range(3)
+        ],
     )
     summary = engine.run()
 
@@ -874,12 +912,44 @@ def test_plateau_defer_when_review_never_clean(project):
     # repo rolled back for the next story
     assert (project.project / "src.txt").read_text() == "original\n"
     assert rev_parse_head(project.project) == task.baseline_commit
-    # the dev-finalized spec is stashed into the run dir, not left in artifacts
+    # the in-review spec is stashed out of artifacts into the run dir so a
+    # leftover can't confuse the next attempt — the work is kept for the human
     from conftest import spec_path
 
     assert not spec_path(project, "1-1-a").exists()
     stashed = engine.run_dir / "deferred" / "1-1-a" / "spec-1-1-a.md"
-    assert stashed.is_file() and "status: 'done'" in stashed.read_text()
+    assert stashed.is_file() and "status: 'in-progress'" in stashed.read_text()
+
+
+def test_budget_exhausted_failed_review_sessions_defer_not_commit(project):
+    """A *failed* final review session must never trigger the commit-instead-of-
+    rollback rescue. Dev finalizes the story (status: done, recommends a follow-up),
+    but every review session crashes/stalls. On the last cycle the budget is spent,
+    so decide_review_session returns DEFER (not RETRY) and the loop rolls the tree
+    back — it does not reach (or fire) the budget-exhaustion rescue commit. Locks in
+    the invariant that makes a 'final-iteration RETRY commits un-reviewed work' path
+    unreachable."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    engine, _ = make_engine(
+        project,
+        [
+            dev_effect(project, "1-1-a"),  # finalizes spec to done, recommends follow-up
+            SessionResult(status="crashed"),
+            SessionResult(status="stalled"),
+            SessionResult(status="crashed"),  # final cycle: budget spent -> DEFER
+        ],
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 1 and summary.done == 0 and not summary.paused
+    task = engine.state.tasks["1-1-a"]
+    assert task.phase == Phase.DEFERRED
+    assert "review session" in task.defer_reason  # decide_review_session's DEFER reason
+    # rolled back, not committed — and the rescue commit never ran
+    assert (project.project / "src.txt").read_text() == "original\n"
+    assert rev_parse_head(project.project) == task.baseline_commit
+    kinds = [e["kind"] for e in engine.journal.entries()]
+    assert "story-deferred" in kinds and "review-budget-committed" not in kinds
 
 
 def test_defer_preserves_deferred_work_additions(project):
@@ -896,7 +966,7 @@ def test_defer_preserves_deferred_work_additions(project):
     def reviewing_with_defer(spec):
         with project.deferred_work.open("a") as f:
             f.write("\n### DW-1: pre-existing flaky retry\n\nstatus: open\n")
-        return make_review(project, "1-1-a", clean=False, patched=1)(spec)
+        return make_review(project, "1-1-a", clean=False, patched=1, finalized=False)(spec)
 
     engine, _ = make_engine(
         project,
@@ -920,7 +990,10 @@ def test_rollback_off_pauses_with_manual_notice(project):
     engine, _ = make_engine(
         project,
         [dev_effect(project, "1-1-a")]
-        + [review_effect(project, "1-1-a", clean=False, patched=1) for _ in range(3)],
+        + [
+            review_effect(project, "1-1-a", clean=False, patched=1, finalized=False)
+            for _ in range(3)
+        ],
         policy=policy,
     )
     precious = project.project / "keep-me.txt"
@@ -952,7 +1025,10 @@ def test_rollback_on_preserves_preexisting_untracked(project):
     engine, _ = make_engine(
         project,
         [dev_effect(project, "1-1-a")]
-        + [review_effect(project, "1-1-a", clean=False, patched=1) for _ in range(3)],
+        + [
+            review_effect(project, "1-1-a", clean=False, patched=1, finalized=False)
+            for _ in range(3)
+        ],
         policy=policy,
     )
     precious = project.project / "user-notes.txt"

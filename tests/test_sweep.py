@@ -1496,3 +1496,69 @@ def test_mixed_ledger_migration_preserves_canonical_open_set(project):
     assert engine.state.tasks["sweep-migrate"].phase == Phase.DONE
     assert engine.state.tasks["sweep-triage"].phase == Phase.DONE
     assert ledger_entries(project)["DW-1"].open  # skipped, untouched
+
+
+# ------------------------------------------ review-budget commit-instead-of-rollback
+
+
+def test_sweep_bundle_budget_exhausted_commits_and_refiles(project):
+    """A bundle whose review keeps recommending a follow-up but is finalized
+    (spec done, owned dw ids closed, verify green) is COMMITTED when the review
+    budget is exhausted — not rolled back. The lingering follow-up is re-filed as
+    a fresh open deferred-work entry."""
+    write_ledger(project, {"DW-1": "open"})
+    plan = triage_result(
+        ["DW-1"],
+        bundles=[{"name": "fix-it", "dw_ids": ["DW-1"], "intent": "fix it"}],
+    )
+    engine, _ = make_sweep(
+        project,
+        [triage_effect(plan), bundle_dev_effect(project, "fix-it", ["DW-1"])]
+        + [bundle_review_effect(project, "fix-it", clean=False) for _ in range(3)],
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["dw-fix-it"].phase == Phase.DONE
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")  # the worked item closed
+    refiled = [e for e in entries.values() if e.open and "origin: review-budget-followup" in e.body]
+    assert len(refiled) == 1
+    kinds = {e["kind"] for e in engine.journal.entries()}
+    assert "review-budget-committed" in kinds and "story-deferred" not in kinds
+
+
+def test_sweep_bundle_budget_followup_not_refiled_twice(project):
+    """Re-review cap: when a bundle itself closes a `review-budget-followup` entry
+    and still won't converge, the work is committed but NOT re-filed again — a
+    second non-convergence should reach a human, not loop across sweeps."""
+    ledger = (
+        "# Deferred Work\n\n"
+        "### DW-1: follow-up still recommended for dw-prior\n"
+        "origin: review-budget-followup\nsource_spec: `spec-dw-fix-it.md`\n"
+        "severity: low\nreason: a prior budget exhaustion.\nstatus: open\n"
+    )
+    project.deferred_work.write_text(ledger, encoding="utf-8")
+    git(project.project, "add", "-A")
+    git(project.project, "commit", "-q", "-m", "ledger")
+    plan = triage_result(
+        ["DW-1"],
+        bundles=[{"name": "fix-it", "dw_ids": ["DW-1"], "intent": "fix it"}],
+    )
+    engine, _ = make_sweep(
+        project,
+        [triage_effect(plan), bundle_dev_effect(project, "fix-it", ["DW-1"])]
+        + [bundle_review_effect(project, "fix-it", clean=False) for _ in range(3)],
+    )
+    summary = engine.run()
+
+    assert summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["dw-fix-it"].phase == Phase.DONE
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")  # the worked entry still closes
+    open_followups = [
+        e for e in entries.values() if e.open and "origin: review-budget-followup" in e.body
+    ]
+    assert open_followups == []  # no second follow-up entry created
+    capped = [e for e in engine.journal.entries() if e["kind"] == "review-budget-committed"]
+    assert len(capped) == 1 and capped[0]["re_review_capped"] is True

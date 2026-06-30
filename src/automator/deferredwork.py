@@ -117,6 +117,70 @@ def append_decision(path: Path, dw_id: str, date: str, label: str, detail: str) 
     return True
 
 
+DW_ID_RE = re.compile(r"\bDW-(\d+)\b")
+
+
+def next_seq(text: str) -> int:
+    """The next free DW sequence number — one past the highest DW-<n> anywhere
+    in the ledger (malformed entries included, so a number is never reused and
+    the sweep numbering check stays satisfied)."""
+    nums = [int(m.group(1)) for m in DW_ID_RE.finditer(text)]
+    return (max(nums) + 1) if nums else 1
+
+
+def field_line_present(body: str, field: str, value: str) -> bool:
+    """True when `body` has a `field:` line whose value is exactly `value`,
+    matching the shapes append_entry writes (plain, or backtick-wrapped as for
+    `source_spec:`). Anchored per-line so an incidental substring elsewhere in
+    the body (e.g. inside `reason:`) never counts as a match."""
+    v = re.escape(value)
+    return re.search(rf"(?m)^{re.escape(field)}:[ \t]*`?{v}`?[ \t]*$", body) is not None
+
+
+def append_entry(
+    path: Path,
+    *,
+    title: str,
+    origin: str,
+    source_spec: str,
+    reason: str,
+    status: str = "open",
+    severity: str | None = None,
+) -> str | None:
+    """Append a new canonical `### DW-<seq>` entry numbered past the highest
+    existing DW id, returning the new id (e.g. "DW-42").
+
+    Idempotent: returns None without writing when an open entry already carries
+    the same `origin:` marker and `source_spec:` — so re-running the same defer
+    (e.g. a second sweep of the same story) never duplicates the entry. Creates
+    the ledger (and parent dir) if it does not yet exist."""
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    for entry in parse_ledger(text):
+        if (
+            entry.open
+            and field_line_present(entry.body, "origin", origin)
+            and field_line_present(entry.body, "source_spec", source_spec)
+        ):
+            return None
+    dw_id = f"DW-{next_seq(text)}"
+    lines = [f"### {dw_id}: {title}", f"origin: {origin}", f"source_spec: `{source_spec}`"]
+    if severity:
+        lines.append(f"severity: {severity}")
+    lines.append(f"reason: {reason}")
+    lines.append(f"status: {status}")
+    block = "\n".join(lines) + "\n"
+    # exactly one blank line between the previous content and the new entry
+    if text == "" or text.endswith("\n\n"):
+        sep = ""
+    elif text.endswith("\n"):
+        sep = "\n"
+    else:
+        sep = "\n\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text + sep + block, encoding="utf-8")
+    return dw_id
+
+
 # ------------------------------------------------------------------- legacy
 #
 # Ledgers written before the DW format (older BMAD-method projects) are

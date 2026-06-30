@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import devcontract, gates, verify
+from . import deferredwork, devcontract, gates, verify
 from .adapters.base import CodingCLIAdapter, SessionResult, SessionSpec
 from .bmadconfig import ProjectPaths
 from .escalation import (
@@ -1204,8 +1204,13 @@ class Engine:
         if self._vetoed(self._emit("pre_review_phase", task), task):
             return
         clean = False
+        # Tracks whether the last *completed* review pass left the story finalized
+        # (status: done) while still recommending an independent follow-up — the
+        # only state the budget-exhaustion rescue below is allowed to commit.
+        refileable_followup = False
         while task.review_cycle < self.policy.limits.max_review_cycles:
             task.review_cycle += 1
+            refileable_followup = False  # only a completed pass this cycle can set it
             advance(task, Phase.REVIEW_RUNNING)
             self._save()
             result = self._run_session(
@@ -1247,6 +1252,7 @@ class Engine:
             status = str(rj.get("status", "")).strip()
             followup = bool(rj.get("followup_review_recommended", False))
             task.followup_review_recommended = followup  # latest pass wins
+            refileable_followup = status == "done" and followup
             self.journal.append(
                 "review-result",
                 story_key=task.story_key,
@@ -1279,6 +1285,30 @@ class Engine:
             # fresh review pass on the newly-patched tree, bounded by max_review_cycles
 
         if not clean:
+            # Budget exhausted. Before discarding work, distinguish two modes:
+            #   (a) the last *completed* pass left the story finalized + verify-green
+            #       (status: done) but kept recommending an independent follow-up
+            #       (`refileable_followup`, `clean` stays False). That work is
+            #       committable — commit it and re-file the lingering follow-up as a
+            #       fresh deferred-work entry instead of rolling everything back (the
+            #       failure mode that silently threw away review-passing work).
+            #   (b) anything else (non-terminal status, no outstanding follow-up,
+            #       verify failing): a genuine failure → defer + roll back as before.
+            # A failed *final* review session never reaches here at all: with the
+            # budget spent, decide_review_session returns DEFER (not RETRY), so the
+            # loop above already deferred — a RETRY only ever loops again. The
+            # rescue therefore requires both `refileable_followup` (the last
+            # completed pass's own signal) AND _verify_review — the same authoritative
+            # gate the converged path uses (frontmatter status==done AND sprint==done
+            # AND verify commands pass) — so it can never ship uncompleted work, nor
+            # re-file a follow-up the last pass did not actually recommend. Only for
+            # the non-isolated path: in worktree isolation a defer already keeps the
+            # unit's worktree + patch (no work is lost), so there is nothing to
+            # rescue and committing into the main repo would be wrong.
+            if refileable_followup and not self._isolated and self._verify_review(task).ok:
+                self._record_review_budget_followup(task)
+                self._commit(task)
+                return
             self._defer(
                 task, "review did not converge within budget (still recommending a follow-up pass)"
             )
@@ -1671,6 +1701,72 @@ class Engine:
             if ok:
                 return True
         return False
+
+    def _record_review_budget_followup(self, task: StoryTask) -> None:
+        """The review loop exhausted its budget on a *finalized, verify-green*
+        story that the pass kept recommending a follow-up for. The work is being
+        committed (not rolled back); preserve the lingering recommendation as a
+        new open deferred-work entry so a later, deliberate review can pick it up,
+        and notify the human. Called immediately before ``_commit`` so the ledger
+        edit is squashed into the same commit.
+
+        Re-review cap: if this story itself *originated* from such an entry (a
+        sweep bundle closing a ``review-budget-followup`` id), don't re-file again
+        — commit + notify only, so a second non-convergence reaches a human
+        instead of slowly looping across sweeps."""
+        cycles = self.policy.limits.max_review_cycles
+        spec = Path(task.spec_file).name if task.spec_file else task.story_key
+        ledger = self.workspace.paths.deferred_work
+        reason = (
+            f"Review budget ({cycles} cycles) was exhausted with the story finalized "
+            f"(status: done, verify green) while the review pass kept recommending an "
+            f"independent follow-up. The work was committed by bmad-auto run "
+            f"{self.state.run_id}; this entry preserves the lingering follow-up "
+            f"recommendation for a deliberate later review."
+        )
+        re_review = False
+        if task.dw_ids and ledger.is_file():
+            entries = {
+                e.id: e for e in deferredwork.parse_ledger(ledger.read_text(encoding="utf-8"))
+            }
+            re_review = any(
+                i in entries
+                and deferredwork.field_line_present(
+                    entries[i].body, "origin", "review-budget-followup"
+                )
+                for i in task.dw_ids
+            )
+        refiled: str | None = None
+        if not re_review:
+            refiled = deferredwork.append_entry(
+                ledger,
+                title=f"Follow-up review still recommended for {task.story_key} "
+                f"after the review budget was exhausted",
+                origin="review-budget-followup",
+                source_spec=spec,
+                reason=reason,
+                severity="low",
+            )
+        self.journal.append(
+            "review-budget-committed",
+            story_key=task.story_key,
+            cycles=cycles,
+            refiled=refiled,
+            re_review_capped=re_review,
+        )
+        note = reason
+        if re_review:
+            note = (
+                f"{reason} This story already came from a review-budget follow-up and "
+                f"still won't converge — a human should review whether the recommended "
+                f"follow-up is real before sweeping it again."
+            )
+        gates.notify(
+            self.policy,
+            self.run_dir,
+            f"review budget reached, work committed: {task.story_key}",
+            note,
+        )
 
     def _defer(self, task: StoryTask, reason: str) -> None:
         task.defer_reason = reason
