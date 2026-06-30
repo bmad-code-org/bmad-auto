@@ -5,6 +5,20 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.10] — 2026-06-29
+
+### Fixed
+
+- **Completed work left at the transient `in-review` frontmatter is no longer falsely deferred and
+  rolled back.** A `bmad-dev-auto` session that dies in its step-04 Finalize tail can leave the spec
+  frontmatter at the transient `in-review` marker while the `## Auto Run Result` prose already says
+  `Status: done` — the same stale-frontmatter gate bug as 0.7.8 with a different value. The 0.7.8
+  reconcile skipped `in-review` to protect the legacy `bmad-auto-dev` review-handoff, but that fork
+  is retired and `in-review` is now only ever a transient marker, so it is reconciled to `done`
+  before the gates run. Every deterministic gate still runs afterward, and a `followup_review_recommended: true`
+  spec still triggers the follow-up review pass. Closes a re-sweep loop that re-ran and discarded the
+  same completed bundles (~47M tokens/cycle).
+
 ## [0.7.9] — 2026-06-29
 
 ### Fixed

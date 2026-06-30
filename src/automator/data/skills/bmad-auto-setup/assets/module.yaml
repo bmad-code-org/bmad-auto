@@ -1,7 +1,7 @@
 code: bauto
 name: BMAD Auto Skills
 description: "Automation-mode skills driven by the bmad-auto orchestrator: interactive escalation resolution (bmad-auto-resolve) and deferred-work sweep triage (bmad-auto-sweep) — the inner dev primitive (which self-reviews and commits) is the upstream bmad-dev-auto skill"
-module_version: 0.7.9
+module_version: 0.7.10
 default_selected: false
 module_greeting: >
   BMAD Auto installed — both the automation skills and the

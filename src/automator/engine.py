@@ -1371,9 +1371,11 @@ class Engine:
 
         When (and only when) the prose terminal Status is ``done`` AND the
         frontmatter sits at a reconcilable non-terminal status, advance the
-        frontmatter to the success status the skill should have set. Never
+        frontmatter to the success status the skill should have set. This includes
+        the transient ``in-review`` marker, which on the generic path is never a
+        deliberate terminal (the legacy review-handoff fork is retired). Never
         reconciles ``blocked`` (it must still route to PAUSE) and never overrides
-        an already-terminal or unknown frontmatter status. Idempotent and
+        an already-``done`` or unknown frontmatter status. Idempotent and
         never-regress: every deterministic verify gate still runs afterward against
         real on-disk/git state, so this repairs bookkeeping only — it cannot pass
         uncompleted work. Runs ahead of ``_post_dev_state_sync`` so both the story
@@ -1406,7 +1408,7 @@ class Engine:
         if fm_status == success_status:
             return  # already finalized — idempotent
         if fm_status not in devcontract.RECONCILABLE_FROM:
-            return  # blocked / in-review / unknown: never override a deliberate status
+            return  # blocked / unknown custom status: never override a deliberate one
         arr = devcontract.parse_auto_run_result(spec_path.read_text(encoding="utf-8"))
         if not arr.present or arr.status != devcontract.DONE:
             return  # no terminal prose, or a blocked outcome: leave for the escalation path

@@ -45,11 +45,15 @@ BLOCKED = "blocked"
 
 # Frontmatter statuses a half-finalized generic spec may be reconciled FROM when
 # its prose terminal `## Auto Run Result` Status is `done`. Deliberately an
-# allowlist: anything else (already-terminal done/in-review, blocked, or an
-# unknown custom token) is left untouched, so reconciliation can never override a
-# status the skill set on purpose. `""` covers a blank or missing frontmatter
-# `status:` — `reset_spec_status` fills/inserts the line in that case.
-RECONCILABLE_FROM = frozenset({"", "draft", "ready-for-dev", "in-progress"})
+# allowlist: anything else (already-`done`, `blocked`, or an unknown custom token)
+# is left untouched, so reconciliation can never override a status the skill set on
+# purpose. `""` covers a blank or missing frontmatter `status:` — `reset_spec_status`
+# fills/inserts the line in that case. `in-review` is included because on the sole
+# (generic `bmad-dev-auto`) path it is only ever the transient marker step-04 sets at
+# its start; the skill self-finalizes to `done`. The legacy `bmad-auto-dev` fork that
+# used `in-review` as a deliberate review-handoff terminal is retired, so nothing
+# leaves `in-review` on purpose anymore.
+RECONCILABLE_FROM = frozenset({"", "draft", "ready-for-dev", "in-progress", "in-review"})
 
 # The leading `---\n …frontmatter… \n---` block, captured in three parts so the
 # body can be rewritten while the fences stay byte-identical.

@@ -518,6 +518,57 @@ def test_generic_bundle_reconcile_closes_ledger_on_stale_frontmatter(project):
     assert "sweep-bundle-closed" in {e["kind"] for e in engine.journal.entries()}
 
 
+def test_generic_bundle_reconcile_closes_ledger_on_in_review_frontmatter(project):
+    """The Lights-Out DW-153 symptom on the bundle path: the session finalized in
+    prose (## Auto Run Result: Status done) but left the bundle spec frontmatter at
+    the transient `in-review` marker. in-review is never a deliberate terminal on
+    the generic path (the legacy review-handoff fork is retired), so the
+    orchestrator reconciles it to done before the ledger sync — the bundle CLOSES
+    instead of false-deferring + rolling back into an endless re-sweep loop."""
+    from automator.policy import DevPolicy
+
+    write_ledger(project, {"DW-1": "open", "DW-2": "open"})
+    plan = triage_result(
+        ["DW-1", "DW-2"],
+        bundles=[{"name": "fix-things", "dw_ids": ["DW-1", "DW-2"], "intent": "fix both"}],
+    )
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_sweep(
+        project,
+        [
+            triage_effect(plan),
+            # the skill leaves frontmatter at the transient in-review marker but
+            # writes prose Status: done
+            bundle_dev_effect(
+                project,
+                "fix-things",
+                ["DW-1", "DW-2"],
+                mark_ledger=False,
+                final_status="in-review",
+                prose_status="done",
+            ),
+        ],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert not summary.paused
+    assert engine.state.tasks["dw-fix-things"].phase == Phase.DONE
+    entries = ledger_entries(project)
+    assert entries["DW-1"].status.startswith("done")
+    assert entries["DW-2"].status.startswith("done")
+    recon = [e for e in engine.journal.entries() if e["kind"] == "spec-status-reconciled"]
+    assert len(recon) == 1
+    assert recon[0]["frm"] == "in-review" and recon[0]["to"] == "done"
+    assert "sweep-bundle-closed" in {e["kind"] for e in engine.journal.entries()}
+
+
 def test_triage_validation_failure_retries_with_feedback_then_escalates(project):
     write_ledger(project, {"DW-1": "open"})
     bad = triage_result(["DW-1"])  # DW-1 not triaged anywhere

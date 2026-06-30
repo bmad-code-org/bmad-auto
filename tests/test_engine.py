@@ -375,6 +375,151 @@ def test_generic_reconcile_advances_stale_frontmatter_done(project):
     assert recon[0]["frm"] == "draft" and recon[0]["to"] == "done"
 
 
+def test_generic_reconcile_advances_in_review_frontmatter_done(project):
+    """A session that dies in its step-04 Finalize tail leaves the frontmatter at
+    the transient `in-review` marker while the prose `## Auto Run Result` already
+    says done (the Lights-Out DW-153 symptom). On the sole generic path in-review is
+    never a deliberate terminal — the legacy review-handoff fork is retired — so the
+    orchestrator reconciles it to done before the gates, closing the false-defer +
+    rollback re-sweep loop instead of discarding completed, tested work."""
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.sprintstatus import story_status
+    from automator.verify import read_frontmatter, status_of
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=False),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(
+        project,
+        [generic_dev_effect(project, "1-1-a", final_status="in-review", prose_status="done")],
+        policy=pol,
+    )
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["1-1-a"].phase == Phase.DONE
+    assert story_status(project.sprint_status, "1-1-a") == "done"
+    assert status_of(read_frontmatter(spec_path(project, "1-1-a"))) == "done"
+    recon = [e for e in engine.journal.entries() if e["kind"] == "spec-status-reconciled"]
+    assert len(recon) == 1
+    assert recon[0]["frm"] == "in-review" and recon[0]["to"] == "done"
+
+
+def test_generic_reconcile_in_review_preserves_followup_review_true(project):
+    """The follow-up review pass MUST still run when a reconciled-from-in-review
+    spec carries `followup_review_recommended: true` in its frontmatter. synth drops
+    the flag for a non-done spec, so the frontmatter is the only source — reconcile
+    re-reads it when advancing to done, so the recommended-trigger gate still sees it
+    and re-invokes bmad-dev-auto on the done spec."""
+    from automator.adapters.base import SessionResult
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.verify import rev_parse_head
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+
+    def dev(spec):
+        baseline = rev_parse_head(project.project)
+        src = project.project / "src.txt"
+        src.write_text(src.read_text() + "real work\n")
+        sp = spec_path(project, "1-1-a")
+        # Finalize tail died: frontmatter stuck at the transient in-review marker,
+        # but the skill wrote the followup flag + terminal prose done first.
+        sp.write_text(
+            f"---\ntitle: 'x'\nstatus: 'in-review'\n"
+            f"followup_review_recommended: true\nbaseline_commit: '{baseline}'\n---\n\n"
+            "## Intent\n\nx\n\n## Auto Run Result\n\n- Status: done\n",
+            encoding="utf-8",
+        )
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "escalations": [],
+            },
+        )
+
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=True, trigger="recommended"),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, adapter = make_engine(
+        project, [dev, review_effect(project, "1-1-a", clean=True)], policy=pol
+    )
+    summary = engine.run()
+
+    assert summary.done == 1 and not summary.paused
+    # reconcile advanced in-review → done AND re-attached the frontmatter flag, so
+    # the follow-up review pass ran (dev then review session)
+    assert [s.role for s in adapter.sessions] == ["dev", "review"]
+    kinds = {e["kind"] for e in engine.journal.entries()}
+    assert "review-not-recommended" not in kinds
+    recon = [e for e in engine.journal.entries() if e["kind"] == "spec-status-reconciled"]
+    assert len(recon) == 1 and recon[0]["frm"] == "in-review" and recon[0]["to"] == "done"
+
+
+def test_generic_reconcile_in_review_followup_false_skips_review(project):
+    """The mirror case (DW-153's actual shape): a reconciled-from-in-review spec
+    with `followup_review_recommended: false` in frontmatter skips the follow-up
+    review and commits with the dev session only."""
+    from automator.adapters.base import SessionResult
+    from automator.policy import DevPolicy, ReviewPolicy
+    from automator.verify import rev_parse_head
+
+    write_sprint(project, {"epic-1": "backlog", "1-1-a": "ready-for-dev"})
+
+    def dev(spec):
+        baseline = rev_parse_head(project.project)
+        src = project.project / "src.txt"
+        src.write_text(src.read_text() + "real work\n")
+        sp = spec_path(project, "1-1-a")
+        sp.write_text(
+            f"---\ntitle: 'x'\nstatus: 'in-review'\n"
+            f"followup_review_recommended: false\nbaseline_commit: '{baseline}'\n---\n\n"
+            "## Intent\n\nx\n\n## Auto Run Result\n\n- Status: done\n",
+            encoding="utf-8",
+        )
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": "1-1-a",
+                "spec_file": str(sp),
+                "baseline_commit": baseline,
+                "escalations": [],
+            },
+        )
+
+    pol = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        review=ReviewPolicy(enabled=True, trigger="recommended"),
+        dev=DevPolicy(skill="bmad-dev-auto"),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    # No review_effect scripted: the recommended-trigger gate must skip the review.
+    engine, adapter = make_engine(project, [dev], policy=pol)
+    summary = engine.run()
+
+    assert summary.done == 1 and summary.deferred == 0 and not summary.paused
+    assert engine.state.tasks["1-1-a"].followup_review_recommended is False
+    assert [s.role for s in adapter.sessions] == ["dev"]
+    kinds = {e["kind"] for e in engine.journal.entries()}
+    assert "review-not-recommended" in kinds
+    recon = [e for e in engine.journal.entries() if e["kind"] == "spec-status-reconciled"]
+    assert len(recon) == 1 and recon[0]["frm"] == "in-review" and recon[0]["to"] == "done"
+
+
 def test_generic_reconcile_advances_bare_null_frontmatter_status(project):
     """The skill left a bare `status:` (YAML null) but finalized in prose with real
     code. status_of would read that as "none"; the reconcile normalizes null to ""

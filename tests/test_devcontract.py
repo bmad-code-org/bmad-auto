@@ -235,15 +235,20 @@ def test_reset_status_no_frontmatter(tmp_path):
 # ----------------------------------------------------------- RECONCILABLE_FROM
 
 
-def test_reconcilable_from_excludes_terminal_and_deliberate_statuses():
-    """The allowlist must contain only non-terminal statuses a half-finalized spec
-    can be reconciled FROM — never a status the skill set on purpose."""
-    assert devcontract.RECONCILABLE_FROM == frozenset({"", "draft", "ready-for-dev", "in-progress"})
-    for deliberate in ("done", "in-review", "blocked"):
+def test_reconcilable_from_includes_in_review_excludes_terminal_statuses():
+    """The allowlist contains only statuses a half-finalized generic spec can be
+    reconciled FROM. `in-review` is included: on the sole generic `bmad-dev-auto`
+    path it is the transient marker step-04 sets at its start, not a deliberate
+    terminal (the legacy `bmad-auto-dev` review-handoff fork is retired). `done`
+    and `blocked` are never reconciled (idempotent / must route to PAUSE)."""
+    assert devcontract.RECONCILABLE_FROM == frozenset(
+        {"", "draft", "ready-for-dev", "in-progress", "in-review"}
+    )
+    for deliberate in ("done", "blocked"):
         assert deliberate not in devcontract.RECONCILABLE_FROM
 
 
-@pytest.mark.parametrize("frm", ["draft", "ready-for-dev", "in-progress"])
+@pytest.mark.parametrize("frm", ["draft", "ready-for-dev", "in-progress", "in-review"])
 def test_reset_status_from_each_reconcilable_value_to_done(tmp_path, frm):
     """reset_spec_status advances every line-valued reconcilable frontmatter status
     to done, rewriting only the frontmatter line."""
