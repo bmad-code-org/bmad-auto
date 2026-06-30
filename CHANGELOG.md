@@ -5,7 +5,7 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
-## [Unreleased]
+## [0.7.9] — 2026-06-29
 
 ### Fixed
 
@@ -810,6 +810,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.9]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.9
 [0.7.7]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.7
 [0.7.6]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.6
 [0.7.5]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.5
