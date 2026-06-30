@@ -551,7 +551,12 @@ def probe(
             )
             if event is not None:
                 break
-            alive = launcher.window_alive(window_id)
+            try:
+                alive = launcher.window_alive(window_id)
+            except MultiplexerError:
+                # transient transport hang is not proof the window died; retry
+                # on the next tick rather than mis-reporting a dead CLI window.
+                continue
             captured_any = any(capture_dir.glob("*.payload.json"))
             if not alive:
                 if not captured_any:

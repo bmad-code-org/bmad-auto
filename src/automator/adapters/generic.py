@@ -31,7 +31,7 @@ from ..policy import Policy
 from ..signals import SignalWatcher
 from ..tokens import read_usage as tally_usage
 from .base import CodingCLIAdapter, SessionHandle, SessionResult, SessionSpec
-from .multiplexer import TerminalMultiplexer, get_multiplexer
+from .multiplexer import MultiplexerError, TerminalMultiplexer, get_multiplexer
 from .profile import CLIProfile
 
 # Pane geometry for agent windows; mirrored in tui.data for log emulation.
@@ -189,6 +189,12 @@ class GenericAdapter(CodingCLIAdapter):
         # fresh Stop — proof it woke and acted — restores the budget; only an
         # unresponsive session burns through it. Bounded overall by spec.timeout_s.
         stall_nudges_left = self._stall_nudges
+        # internal observability counter: counts ticks where the liveness probe
+        # raised a transport error (e.g. a 30s tmux hang). It deliberately does
+        # NOT escalate to "crashed" — a transient transport hiccup is not proof
+        # of death; spec.timeout_s already bounds a persistent failure to a
+        # timeout.
+        probe_failures = 0
 
         while True:
             remaining = deadline - time.monotonic()
@@ -205,7 +211,18 @@ class GenericAdapter(CodingCLIAdapter):
                 since_ns=handle.launched_ns,
             )
             if event is None:
-                if not self._window_alive(handle):
+                try:
+                    alive = self._window_alive(handle)
+                except MultiplexerError:
+                    # transport hiccup (e.g. a 30s tmux hang), not proof of
+                    # death: never roll back a possibly-working session. Skip the
+                    # crash check this tick; hook events still complete it, and
+                    # spec.timeout_s bounds a persistent transport failure to an
+                    # honest "timeout".
+                    probe_failures += 1
+                    continue
+                probe_failures = 0
+                if not alive:
                     # died without a SessionEnd hook (killed, crashed hard)
                     return self._final(handle, spec, "crashed", session_id, transcript_path)
                 if stall_deadline is not None:
