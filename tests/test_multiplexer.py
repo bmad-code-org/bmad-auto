@@ -8,14 +8,16 @@ role for the transport axis.
 """
 
 import json
+import subprocess
 
 import pytest
 
 from automator.adapters import tmux_base
 from automator.adapters.base import SessionSpec
 from automator.adapters.generic import GenericAdapter
-from automator.adapters.multiplexer import TerminalMultiplexer
+from automator.adapters.multiplexer import MultiplexerError, TerminalMultiplexer
 from automator.adapters.profile import get_profile
+from automator.adapters.tmux_backend import TmuxMultiplexer
 from automator.policy import LimitsPolicy, Policy
 
 
@@ -184,3 +186,86 @@ def test_generic_adapter_drives_only_the_mux(tmp_path, no_tmux):
 
     adapter.kill(handle)
     assert "kill_window" in stub.calls
+
+
+# --------------------------------------------------------------- seam honesty
+#
+# Phase 1: no tmux contract method may leak a raw subprocess.TimeoutExpired /
+# OSError. The one place a subprocess is spawned (_run) deliberately propagates
+# those raw; the guarantee is enforced one level up, in the inherited contract
+# methods, so it holds even for a psmux that overrides only _run.
+
+
+@pytest.fixture(params=[subprocess.TimeoutExpired(["tmux"], 30), FileNotFoundError("tmux")])
+def boom_run(request, monkeypatch):
+    """tmux 'present' on PATH, but the single subprocess spawn always raises a raw
+    transport error (parametrized over a timeout and a missing binary)."""
+    monkeypatch.setattr(tmux_base.shutil, "which", lambda _name: "/usr/bin/tmux")
+
+    def boom(*_a, **_k):
+        raise request.param
+
+    monkeypatch.setattr(tmux_base.subprocess, "run", boom)
+
+
+def test_seam_methods_never_leak_raw_subprocess_error(boom_run, tmp_path):
+    mux = TmuxMultiplexer()
+
+    # Raisers: liveness / mutating ops re-raise as the seam type. A raw timeout
+    # would escape the MultiplexerError contract; a sentinel would mis-read as a
+    # real (empty/absent) answer — so these MUST raise, and as MultiplexerError.
+    raisers = [
+        lambda: mux.list_window_ids("s"),
+        lambda: mux.window_alive("s", "@1"),
+        lambda: mux.new_session("s", tmp_path),
+        lambda: mux.new_window("s", "n", tmp_path, {}, "cmd"),
+        lambda: mux.set_session_option("s", "opt", "val"),
+        lambda: mux.new_parked_window("s", "n", tmp_path, ["echo", "hi"], ""),
+        lambda: mux.send_text("@1", "hi"),
+        lambda: mux.has_session("s"),  # already-correct raiser — lock it in
+    ]
+    for call in raisers:
+        with pytest.raises(MultiplexerError) as excinfo:
+            call()
+        # the seam type, never a raw subprocess / OS error leaking through
+        assert not isinstance(excinfo.value, subprocess.SubprocessError)
+        assert not isinstance(excinfo.value, OSError)
+
+    # Sentinel returners: a transport failure degrades to the documented value
+    # (never a raise, never a mis-typed answer).
+    assert mux.list_windows("s", ["window_id"]) == []
+    assert mux.show_window_option("@1", "opt") == ""
+    assert mux.switch_client("s") is False
+    assert mux.switch_client("s", last_fallback=True) is False
+    assert mux.kill_window("@1") is None
+    assert mux.select_window("@1") is None
+    assert mux.set_window_option("@1", "opt", "val") is None
+    assert mux.unset_window_option("@1", "opt") is None
+    assert mux.detach_client() is None
+    assert mux.pipe_pane("@1", tmp_path / "log") is None
+
+    # Already-correct swallowers stay swallowing (lock-in).
+    assert mux.kill_session("s") is None
+    assert mux.list_sessions() == []
+    assert mux.session_options("opt") == {}
+    assert mux.version() is None
+    assert mux.current_pane_id() is None
+
+
+def test_seam_honesty_holds_for_psmux_style_run_override(monkeypatch):
+    """The guarantee lives ABOVE _run, so a backend (like the eventual psmux) that
+    overrides only _run and lets a raw TimeoutExpired escape it still gets seam
+    honesty from the inherited contract methods."""
+    monkeypatch.setattr(tmux_base.shutil, "which", lambda _name: "/usr/bin/tmux")
+
+    class PsmuxStyle(TmuxMultiplexer):
+        def _run(self, argv, *, check=True):
+            raise subprocess.TimeoutExpired(["tmux", *argv], 30)
+
+    mux = PsmuxStyle()
+    with pytest.raises(MultiplexerError):
+        mux.list_window_ids("s")
+    with pytest.raises(MultiplexerError):
+        mux.window_alive("s", "@1")
+    # sentinel methods still degrade rather than leak the raw timeout
+    assert mux.list_windows("s", ["window_id"]) == []

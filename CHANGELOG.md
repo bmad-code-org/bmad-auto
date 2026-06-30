@@ -5,6 +5,21 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.9] — 2026-06-29
+
+### Fixed
+
+- **The multiplexer seam no longer leaks raw subprocess timeouts.** Every contract method now raises
+  `MultiplexerError`/`TmuxError` or returns its documented sentinel instead of letting a 30 s tmux
+  hang escape as a raw `subprocess.TimeoutExpired`.
+- **A transient tmux hang no longer crashes a run or mis-reads a working session as dead.** The
+  wait-loop tolerates an unknowable liveness probe — a persistent hang degrades to an honest
+  `timeout`, never a false `crashed`.
+- **An unexpected engine exception is now recorded instead of being lost to the parked control
+  window.** The orchestrator writes a `run-crash` journal line + a `crash.txt` traceback, sets a
+  `CRASHED` run status, and tears down the orphaned agent session — rather than dying with a
+  traceback printed only to the pruned control pane.
+
 ## [0.7.8] — 2026-06-29
 
 ### Fixed
@@ -795,6 +810,7 @@ enforced in CI.
   implementation phase, driven by a Python control loop with hook-based session transport and
   resumable on-disk run state.
 
+[0.7.9]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.9
 [0.7.7]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.7
 [0.7.6]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.6
 [0.7.5]: https://github.com/bmad-code-org/bmad-auto/releases/tag/v0.7.5

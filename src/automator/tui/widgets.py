@@ -26,6 +26,7 @@ STATUS_GLYPHS = {
     data.PAUSED: "⏸",
     data.FINISHED: "✔",
     data.STOPPED: "⏹",
+    data.CRASHED: "✖",
     data.INTERRUPTED: "✖",
     data.UNKNOWN: "?",
 }
@@ -35,6 +36,7 @@ STATUS_STYLES = {
     data.PAUSED: "yellow",
     data.FINISHED: "dim",
     data.STOPPED: "bold yellow",
+    data.CRASHED: "bold red",
     data.INTERRUPTED: "bold red",
     data.UNKNOWN: "dim",
 }
@@ -114,12 +116,23 @@ class RunHeader(Static):
             if state.paused_reason:
                 text.append(f" — {state.paused_reason}", style="yellow")
             text.append("  · press e to resume", style="dim")
+        elif status == data.CRASHED:
+            text.append(
+                "\n✖ engine crashed — see crash.txt · press e to resume",
+                style="bold red",
+            )
+            if state.crash_error:
+                text.append(f"\n  {state.crash_error}", style="red")
         elif status == data.INTERRUPTED:
             text.append(
                 "\n✖ engine gone — run was interrupted · press e to resume",
                 style="bold red",
             )
-        if decision is not None and status not in (data.FINISHED, data.INTERRUPTED):
+        if decision is not None and status not in (
+            data.FINISHED,
+            data.INTERRUPTED,
+            data.CRASHED,
+        ):
             dw_id, question = decision
             text.append(f"\n⚑ decision needed: {dw_id}", style="bold yellow")
             if question:

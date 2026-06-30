@@ -52,6 +52,8 @@ def make_run(
     tasks: dict[str, StoryTask] | None = None,
     paused_stage: str | None = None,
     paused_reason: str | None = None,
+    crashed: bool = False,
+    crash_error: str | None = None,
 ) -> Path:
     run_dir = root / RUNS_DIR / run_id
     state = RunState(
@@ -63,6 +65,8 @@ def make_run(
         tasks=tasks or {},
         paused_stage=paused_stage,
         paused_reason=paused_reason,
+        crashed=crashed,
+        crash_error=crash_error,
     )
     save_state(run_dir, state)
     if alive:
@@ -937,6 +941,28 @@ async def test_decision_banner_shows_and_clears(project):
         await until(pilot, lambda: screen.decision_pending is None)
         header = str(screen.query_one("#runheader", RunHeader).content)
         assert "decision needed" not in header
+
+
+async def test_decision_footer_suppressed_for_crashed(project):
+    # a crashed run tore its tmux session down, so the "press a to attach and
+    # answer" hint would point at a dead session — suppress it even when a
+    # decision is pending.
+    run_dir = make_run(
+        project.project,
+        "20260611-100000-aaaa",
+        crashed=True,
+        crash_error="RuntimeError: boom",
+    )
+    journal = Journal(run_dir)
+    journal.append("decision-pending", dw_id="DW-7", question="reopen the cache work?")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        screen = dashboard(app)
+        await until(pilot, lambda: screen.decision_pending is not None)
+        header = str(screen.query_one("#runheader", RunHeader).content)
+        assert "engine crashed" in header
+        assert "press a to attach and answer" not in header
 
 
 def _patch_attach_exec(monkeypatch) -> tuple[list[list[str]], list[tuple[str, str]]]:

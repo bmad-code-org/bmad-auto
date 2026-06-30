@@ -93,37 +93,54 @@ class TerminalMultiplexer(ABC):
 
     @abstractmethod
     def list_window_ids(self, session: str) -> list[str]:
-        """Native ids of every window in ``session`` (empty if it is gone)."""
+        """Native ids of every window in ``session`` (empty if it is gone).
+
+        Raises :class:`MultiplexerError` if the transport itself fails (timeout /
+        missing binary): an empty list means "no windows" and must not be
+        conflated with "couldn't ask" — this op backs the engine's liveness
+        probe (:meth:`window_alive`)."""
 
     @abstractmethod
     def list_windows(self, session: str, fields: list[str]) -> list[tuple[str, ...]]:
         """One tuple per window in ``session``, each holding the requested
-        backend fields in order."""
+        backend fields in order. Best-effort: returns ``[]`` on a transport
+        failure (unlike :meth:`list_window_ids`, this is metadata, not a liveness
+        probe, so a sentinel is safe)."""
 
     @abstractmethod
     def window_alive(self, session: str, window_id: str) -> bool:
-        """True iff ``window_id`` is still a window of ``session``."""
+        """True iff ``window_id`` is still a window of ``session``.
+
+        May raise :class:`MultiplexerError` when liveness is unknowable (a
+        transport timeout / missing binary) — callers must treat that as "don't
+        know", not "dead", and must not tear down a possibly-working session on
+        it."""
 
     @abstractmethod
     def kill_window(self, target: str) -> None:
-        """Kill the targeted window (tolerant of it already being gone)."""
+        """Kill the targeted window (tolerant of it already being gone, and a
+        no-op on a transport failure)."""
 
     @abstractmethod
     def select_window(self, target: str) -> None:
-        """Make ``target`` the current window of its session."""
+        """Make ``target`` the current window of its session (best-effort: a no-op
+        on a transport failure)."""
 
     @abstractmethod
     def set_window_option(self, target: str, option: str, value: str) -> None:
-        """Set a user option on the targeted window."""
+        """Set a user option on the targeted window (best-effort: a no-op on a
+        transport failure)."""
 
     @abstractmethod
     def unset_window_option(self, target: str, option: str) -> None:
         """Remove a user option from the targeted window (so a later read sees it
-        as unset, not as an empty value)."""
+        as unset, not as an empty value). Best-effort: a no-op on a transport
+        failure."""
 
     @abstractmethod
     def show_window_option(self, target: str, option: str) -> str:
-        """Value of a user option on the targeted window ('' if unset)."""
+        """Value of a user option on the targeted window ('' if unset, and '' on a
+        transport failure)."""
 
     @abstractmethod
     def pipe_pane(self, window_id: str, log_file: Path) -> None:
@@ -157,12 +174,14 @@ class TerminalMultiplexer(ABC):
 
     @abstractmethod
     def detach_client(self) -> None:
-        """Detach the client viewing the current session."""
+        """Detach the client viewing the current session (best-effort: a no-op on
+        a transport failure)."""
 
     @abstractmethod
     def switch_client(self, target: str, last_fallback: bool = False) -> bool:
         """Switch the current client to ``target`` (optionally falling back to
-        the last client on failure). Returns True iff a switch happened."""
+        the last client on failure). Returns True iff a switch happened — so a
+        transport failure returns False."""
 
     @abstractmethod
     def available(self) -> bool:

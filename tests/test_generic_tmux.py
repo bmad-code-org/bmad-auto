@@ -17,6 +17,7 @@ import pytest
 from automator.adapters import generic, tmux_base
 from automator.adapters.base import SessionHandle, SessionResult, SessionSpec
 from automator.adapters.generic import GenericDevAdapter, GenericTmuxAdapter
+from automator.adapters.multiplexer import MultiplexerError
 from automator.adapters.profile import get_profile
 from automator.bmadconfig import ProjectPaths
 from automator.model import TokenUsage
@@ -620,6 +621,93 @@ def test_dev_stall_nudge_wakes_session_that_then_completes(tmp_path, monkeypatch
     result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
     assert result.status == "completed"
     assert sent == [generic.STALL_NUDGE_TEXT]  # one nudge was enough to wake it
+
+
+def test_wait_for_completion_tolerates_transient_liveness_probe_failure(tmp_path, monkeypatch):
+    """A transient transport hang (the liveness probe raising MultiplexerError, e.g.
+    a 30s tmux hang) must never be read as a dead window -> crash. The tick is
+    skipped; once the probe recovers and the session's turn-end lands, the run
+    completes normally (the 0.7.7 stall-hardening rule: don't roll back a
+    possibly-working session)."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, impl = make_dev_adapter(tmp_path)
+
+    probe_calls = {"n": 0}
+
+    def flaky_alive(handle):
+        probe_calls["n"] += 1
+        if probe_calls["n"] == 1:
+            raise MultiplexerError("transient tmux hang")  # transport hiccup, not death
+        return True  # recovered
+
+    adapter._window_alive = flaky_alive
+
+    def flush_terminal_spec(call_n):
+        if call_n == 3:  # the session's real turn-end lands its spec
+            (impl / "spec-3-1-foo.md").write_text(
+                "---\nstatus: done\n---\n\n## Auto Run Result\n\nStatus: done\n"
+            )
+
+    adapter.watcher = _ScriptedWatcher(
+        [None, None, _stop_event("3-1-dev-1", "sess", "/run/events.jsonl")],
+        on_call=flush_terminal_spec,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "completed"  # never "crashed"
+    assert probe_calls["n"] == 2  # probe failed once, then recovered
+
+
+def test_wait_for_completion_persistent_probe_failure_times_out_not_crashes(tmp_path, monkeypatch):
+    """A persistent transport failure (the probe always raising MultiplexerError)
+    must degrade to an honest 'timeout' when it outlasts spec.timeout_s — never a
+    spurious 'crashed' (death was never actually observed)."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, _ = make_dev_adapter(tmp_path)
+
+    def always_hangs(handle):
+        raise MultiplexerError("tmux server wedged")
+
+    adapter._window_alive = always_hangs
+
+    clock = {"t": 1000.0}
+
+    class _Clock:
+        monotonic = staticmethod(lambda: clock["t"])
+        sleep = staticmethod(lambda *_: None)
+        time_ns = staticmethod(lambda: 0)
+
+    monkeypatch.setattr(generic, "time", _Clock)
+
+    def advance(call_n):
+        clock["t"] += 11.0  # each idle tick crawls toward spec.timeout_s
+
+    adapter.watcher = _ScriptedWatcher([], on_call=advance)  # None forever
+    spec = SessionSpec(
+        task_id="3-1-dev-1",
+        role="dev",
+        prompt="/bmad-dev-auto 3-1",
+        cwd=tmp_path,
+        env={"BMAD_AUTO_STORY_KEY": "3-1"},
+        timeout_s=30.0,
+    )
+    result = adapter.wait_for_completion(_dev_handle(), spec)
+    assert result.status == "timeout"  # bounded by spec.timeout_s, not crashed
+
+
+def test_wait_for_completion_genuine_window_death_still_crashes(tmp_path, monkeypatch):
+    """The transient-tolerance must not disable real crash detection: a probe that
+    cleanly returns False (dead window -> list_window_ids returned [], no exception)
+    is still a crash."""
+    monkeypatch.setattr(generic, "RESULT_GRACE_S", 0.0)
+    monkeypatch.setattr(generic, "RESULT_POLL_S", 0.0)
+    adapter, _ = make_dev_adapter(tmp_path)
+    adapter._window_alive = lambda handle: False  # genuinely dead
+
+    adapter.watcher = _ScriptedWatcher([])  # None on the first idle tick
+    result = adapter.wait_for_completion(_dev_handle(), _dev_spec(tmp_path))
+    assert result.status == "crashed"
 
 
 def _usage_adapter(tmp_path, profile_name, **kw) -> GenericTmuxAdapter:

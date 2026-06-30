@@ -248,6 +248,12 @@ class RunState:
     # deliberately stopped (bmad-auto stop / engine SIGTERM); distinct from a
     # crash. Resume clears it via clear_pause(), so a stopped run is resumable.
     stopped: bool = False
+    # an unexpected exception escaped Engine.run() and was recorded (crash.txt +
+    # run-crash journal). Distinct from `stopped`; resume clears it via
+    # clear_pause() so a crashed run re-arms like a stopped one. crash_error is a
+    # short "Type: message" for display; the full traceback lives in crash.txt.
+    crashed: bool = False
+    crash_error: str | None = None
     run_type: str = "story"  # "story" | "sweep" — resume/status dispatch on it
     # sweep runs only: the triage->bundles cycle in progress; 1 maps to the
     # legacy (unsuffixed) artifact names so old paused runs resume unchanged
@@ -278,6 +284,8 @@ class RunState:
         self.paused_stage = None
         self.paused_story_key = None
         self.stopped = False
+        self.crashed = False
+        self.crash_error = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -291,6 +299,8 @@ class RunState:
             "paused_story_key": self.paused_story_key,
             "finished": self.finished,
             "stopped": self.stopped,
+            "crashed": self.crashed,
+            "crash_error": self.crash_error,
             "run_type": self.run_type,
             "sweep_cycle": self.sweep_cycle,
             "sweeps_triggered": self.sweeps_triggered,
@@ -312,6 +322,8 @@ class RunState:
             paused_story_key=d.get("paused_story_key"),
             finished=bool(d.get("finished", False)),
             stopped=bool(d.get("stopped", False)),
+            crashed=bool(d.get("crashed", False)),
+            crash_error=d.get("crash_error"),
             run_type=str(d.get("run_type", "story")),
             sweep_cycle=int(d.get("sweep_cycle", 1)),
             sweeps_triggered=[str(s) for s in d.get("sweeps_triggered", [])],

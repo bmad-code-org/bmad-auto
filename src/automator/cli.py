@@ -1359,6 +1359,12 @@ def main(argv: list[str] | None = None) -> int:
     ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except Exception as e:
+        # backstop for the residual surface outside engine.run() (config load,
+        # engine construction, render/notify): never let an unexpected exception
+        # die to the parked control pane with a bare traceback.
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

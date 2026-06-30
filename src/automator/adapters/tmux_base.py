@@ -57,7 +57,15 @@ class BaseTmuxBackend(TerminalMultiplexer):
         return proc
 
     def _tmux(self, *args: str) -> str:
-        return self._run(list(args), check=True).stdout.strip()
+        # The strict form: a non-zero exit already raises TmuxError inside _run.
+        # A timeout / missing binary escapes _run raw, so trap it here once and
+        # re-raise as the seam type — this covers every _tmux caller (new_session,
+        # set_session_option, new_window, new_parked_window, send_text) and, via
+        # its own `except TmuxError`, pipe_pane too.
+        try:
+            return self._run(list(args), check=True).stdout.strip()
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise TmuxError(f"tmux {args[0] if args else ''} failed: {exc}") from exc
 
     # ----------------------------------------------------------- sessions
 
@@ -197,7 +205,18 @@ class BaseTmuxBackend(TerminalMultiplexer):
     def list_window_ids(self, session: str) -> list[str]:
         # display-message -t <dead-window> exits 0 with empty output, so list the
         # session's window ids and check membership instead.
-        probe = self._run(["list-windows", "-t", f"={session}", "-F", "#{window_id}"], check=False)
+        #
+        # A transport failure (timeout / missing binary) must RAISE, not return [].
+        # window_alive() is the engine's liveness probe; a sentinel [] would falsely
+        # read as "window dead -> session crashed" on a mere tmux hang. The honest
+        # answer to "is it alive?" is "unknowable" -> MultiplexerError. A real dead
+        # window still returns [] via the returncode != 0 path below (no exception).
+        try:
+            probe = self._run(
+                ["list-windows", "-t", f"={session}", "-F", "#{window_id}"], check=False
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise TmuxError(f"tmux list-windows failed: {exc}") from exc
         if probe.returncode != 0:
             return []
         return probe.stdout.split()
@@ -217,11 +236,19 @@ class BaseTmuxBackend(TerminalMultiplexer):
         self._tmux("send-keys", "-t", window_id, "Enter")
 
     def kill_window(self, target: str) -> None:
-        self._run(["kill-window", "-t", target], check=False)
+        # Best-effort teardown: a hang / missing binary is no worse than the window
+        # already being gone, so swallow to the documented no-op sentinel.
+        try:
+            self._run(["kill-window", "-t", target], check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def list_windows(self, session: str, fields: list[str]) -> list[tuple[str, ...]]:
         fmt = "\t".join(f"#{{{field}}}" for field in fields)
-        probe = self._run(["list-windows", "-t", f"={session}", "-F", fmt], check=False)
+        try:
+            probe = self._run(["list-windows", "-t", f"={session}", "-F", fmt], check=False)
+        except (subprocess.SubprocessError, OSError):
+            return []
         if probe.returncode != 0:
             return []
         rows: list[tuple[str, ...]] = []
@@ -235,16 +262,30 @@ class BaseTmuxBackend(TerminalMultiplexer):
         return window_id in self.list_window_ids(session)
 
     def select_window(self, target: str) -> None:
-        self._run(["select-window", "-t", target], check=False)
+        # Best-effort focus change: swallow a transport failure to the no-op sentinel.
+        try:
+            self._run(["select-window", "-t", target], check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def set_window_option(self, target: str, option: str, value: str) -> None:
-        self._run(["set-option", "-w", "-t", target, option, value], check=False)
+        try:
+            self._run(["set-option", "-w", "-t", target, option, value], check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def unset_window_option(self, target: str, option: str) -> None:
-        self._run(["set-option", "-wu", "-t", target, option], check=False)
+        try:
+            self._run(["set-option", "-wu", "-t", target, option], check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def show_window_option(self, target: str, option: str) -> str:
-        proc = self._run(["show-options", "-wqv", "-t", target, option], check=False)
+        # "" reads as "option unset" — fine as the failure sentinel for a hang too.
+        try:
+            proc = self._run(["show-options", "-wqv", "-t", target, option], check=False)
+        except (subprocess.SubprocessError, OSError):
+            return ""
         return proc.stdout.strip() if proc.returncode == 0 else ""
 
     # ----------------------------------------------------- client / attach
@@ -275,15 +316,23 @@ class BaseTmuxBackend(TerminalMultiplexer):
         return proc.stdout.strip() if proc.returncode == 0 else None
 
     def detach_client(self) -> None:
-        self._run(["detach-client"], check=False)
+        try:
+            self._run(["detach-client"], check=False)
+        except (subprocess.SubprocessError, OSError):
+            pass
 
     def switch_client(self, target: str, last_fallback: bool = False) -> bool:
-        proc = self._run(["switch-client", "-t", target], check=False)
-        if proc.returncode == 0:
-            return True
-        if last_fallback:
-            fb = self._run(["switch-client", "-l"], check=False)
-            return fb.returncode == 0
+        # Returns True iff a switch happened; a transport failure didn't switch, so
+        # the documented False sentinel is the honest answer.
+        try:
+            proc = self._run(["switch-client", "-t", target], check=False)
+            if proc.returncode == 0:
+                return True
+            if last_fallback:
+                fb = self._run(["switch-client", "-l"], check=False)
+                return fb.returncode == 0
+        except (subprocess.SubprocessError, OSError):
+            return False
         return False
 
     def available(self) -> bool:
