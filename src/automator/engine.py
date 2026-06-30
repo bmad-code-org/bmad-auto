@@ -1280,12 +1280,13 @@ class Engine:
 
         if not clean:
             # Budget exhausted. Before discarding work, distinguish two modes:
-            #   (a) the tree is finalized + clean (spec/sprint done, verify green)
-            #       and the loop only failed to converge because the pass keeps
-            #       recommending an independent follow-up. That work is
-            #       committable — commit it and re-file the lingering follow-up as
-            #       a fresh deferred-work entry instead of rolling everything back
-            #       (the failure mode that silently threw away review-passing work).
+            #   (a) the tree is finalized + verify-green (spec/sprint done, verify
+            #       commands pass) and the loop only failed to converge because the
+            #       pass keeps recommending an independent follow-up (`clean` stays
+            #       False). That work is committable — commit it and re-file the
+            #       lingering follow-up as a fresh deferred-work entry instead of
+            #       rolling everything back (the failure mode that silently threw
+            #       away review-passing work).
             #   (b) anything else (non-terminal status, verify failing): a genuine
             #       failure → defer + roll back as before.
             # _verify_review is the same authoritative gate the converged path uses
@@ -1720,7 +1721,10 @@ class Engine:
                 e.id: e for e in deferredwork.parse_ledger(ledger.read_text(encoding="utf-8"))
             }
             re_review = any(
-                i in entries and "origin: review-budget-followup" in entries[i].body
+                i in entries
+                and deferredwork.field_line_present(
+                    entries[i].body, "origin", "review-budget-followup"
+                )
                 for i in task.dw_ids
             )
         refiled: str | None = None

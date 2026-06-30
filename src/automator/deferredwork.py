@@ -128,6 +128,15 @@ def next_seq(text: str) -> int:
     return (max(nums) + 1) if nums else 1
 
 
+def field_line_present(body: str, field: str, value: str) -> bool:
+    """True when `body` has a `field:` line whose value is exactly `value`,
+    matching the shapes append_entry writes (plain, or backtick-wrapped as for
+    `source_spec:`). Anchored per-line so an incidental substring elsewhere in
+    the body (e.g. inside `reason:`) never counts as a match."""
+    v = re.escape(value)
+    return re.search(rf"(?m)^{re.escape(field)}:[ \t]*`?{v}`?[ \t]*$", body) is not None
+
+
 def append_entry(
     path: Path,
     *,
@@ -147,7 +156,11 @@ def append_entry(
     the ledger (and parent dir) if it does not yet exist."""
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
     for entry in parse_ledger(text):
-        if entry.open and f"origin: {origin}" in entry.body and source_spec in entry.body:
+        if (
+            entry.open
+            and field_line_present(entry.body, "origin", origin)
+            and field_line_present(entry.body, "source_spec", source_spec)
+        ):
             return None
     dw_id = f"DW-{next_seq(text)}"
     lines = [f"### {dw_id}: {title}", f"origin: {origin}", f"source_spec: `{source_spec}`"]

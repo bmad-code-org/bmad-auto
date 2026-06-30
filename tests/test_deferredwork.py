@@ -5,6 +5,7 @@ from pathlib import Path
 from automator.deferredwork import (
     append_decision,
     append_entry,
+    field_line_present,
     field_severity,
     has_legacy,
     mark_done,
@@ -453,3 +454,34 @@ def test_append_entry_creates_missing_ledger(tmp_path):
     p = tmp_path / "sub" / "deferred-work.md"
     new_id = append_entry(p, title="t", origin="o", source_spec="s.md", reason="r")
     assert new_id == "DW-1" and p.is_file()
+
+
+def test_append_entry_idempotency_ignores_incidental_substring(tmp_path):
+    """An unrelated open entry that merely *mentions* the origin marker and the
+    spec filename in its `reason:` prose must not suppress a legitimately new
+    entry — dedup matches the canonical field lines, not raw body substrings."""
+    p = tmp_path / "deferred-work.md"
+    p.write_text(
+        "### DW-1: unrelated\norigin: code review\n"
+        "reason: see the origin: review-budget-followup note re spec-foo.md for context\n"
+        "status: open\n"
+    )
+    new_id = append_entry(
+        p, title="t", origin="review-budget-followup", source_spec="spec-foo.md", reason="r"
+    )
+    assert new_id == "DW-2"  # not suppressed by the incidental mentions
+
+
+def test_field_line_present_matches_field_not_substring():
+    body = (
+        "### DW-1: x\norigin: review-budget-followup\n"
+        "source_spec: `spec-foo.md`\nreason: mentions spec-foobar.md and review-budget-followup-x\n"
+        "status: open\n"
+    )
+    # exact field-line matches (plain and backtick-wrapped)
+    assert field_line_present(body, "origin", "review-budget-followup")
+    assert field_line_present(body, "source_spec", "spec-foo.md")
+    # a superstring value must not match the shorter field line
+    assert not field_line_present(body, "origin", "review-budget")
+    # a value that only appears incidentally inside `reason:` is not a field line
+    assert not field_line_present(body, "source_spec", "spec-foobar.md")
