@@ -85,11 +85,18 @@ def set_sprint(paths: ProjectPaths, key: str, status: str) -> None:
     paths.sprint_status.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
-def write_spec(path: Path, status: str, baseline: str) -> None:
-    path.write_text(
+def write_spec(path: Path, status: str, baseline: str, *, prose_status: str | None = None) -> None:
+    body = (
         f"---\ntitle: 'test'\ntype: 'feature'\nstatus: '{status}'\n"
         f"baseline_commit: '{baseline}'\n---\n\n## Intent\n\ntest spec\n"
     )
+    if prose_status is not None:
+        # mirror bmad-dev-auto's terminal finalize: it appends a `## Auto Run
+        # Result` prose block (carrying a `Status:` line) but can leave the
+        # frontmatter `status` short of the success value — the exact draft-vs-done
+        # split that the orchestrator's reconcile repairs.
+        body += f"\n## Auto Run Result\n\n- Status: {prose_status}\n\nSummary: test.\n"
+    path.write_text(body)
 
 
 def spec_path(paths: ProjectPaths, story_key: str) -> Path:
@@ -102,6 +109,7 @@ def dev_effect(
     *,
     final_status: str = "done",
     followup_review: bool = True,
+    prose_status: str | None = None,
 ):
     """Simulate a successful bmad-dev-auto session: it self-finalizes the spec
     (no in-review handoff — always straight to ``done``) but never touches the
@@ -110,14 +118,17 @@ def dev_effect(
     status to exercise the dev-verify gating. ``followup_review`` mirrors the
     skill's `followup_review_recommended` signal (PR #2505) — defaults True so
     the review-flow tests still run the review under the default
-    ``review.trigger = "recommended"``; set False to exercise the skip path."""
+    ``review.trigger = "recommended"``; set False to exercise the skip path.
+    ``prose_status`` appends a terminal ``## Auto Run Result`` block with that
+    Status line — pair it with a non-terminal ``final_status`` to reproduce the
+    skill leaving frontmatter behind its prose (the reconcile path)."""
 
     def effect(spec: SessionSpec) -> SessionResult:
         baseline = rev_parse_head(paths.project)
         source = paths.project / "src.txt"
         source.write_text(source.read_text() + f"change for {story_key}\n")
         sp = spec_path(paths, story_key)
-        write_spec(sp, final_status, baseline)
+        write_spec(sp, final_status, baseline, prose_status=prose_status)
         # deliberately NO set_sprint: the dev skill does not write sprint-status
         return SessionResult(
             status="completed",
@@ -249,13 +260,17 @@ def bundle_dev_effect(
     dw_ids,
     mark_ledger: bool = False,
     followup_review: bool = True,
+    final_status: str = "done",
+    prose_status: str | None = None,
 ):
     """Simulate a bmad-dev-auto bundle dev session: edits code and self-finalizes
     the bundle spec to ``done`` (no in-review handoff). On the decoupled path the
     orchestrator owns the ledger, so by default the session does NOT touch it;
     ``mark_ledger=True`` is kept only for the legacy-marking path in older tests.
     ``followup_review`` mirrors `followup_review_recommended` — defaults True so
-    the bundle review runs under the default trigger = "recommended"."""
+    the bundle review runs under the default trigger = "recommended". ``final_status``
+    / ``prose_status`` mirror ``dev_effect``: pair a non-terminal ``final_status``
+    with ``prose_status="done"`` to reproduce the skill finalizing in prose only."""
 
     def effect(spec: SessionSpec) -> SessionResult:
         baseline = rev_parse_head(paths.project)
@@ -263,7 +278,7 @@ def bundle_dev_effect(
         source.write_text(source.read_text() + f"change for dw-{name}\n")
         sp = bundle_spec_path(paths, name)
         # mirror the skill: always self-finalize the bundle spec straight to done
-        write_spec(sp, "done", baseline)
+        write_spec(sp, final_status, baseline, prose_status=prose_status)
         if mark_ledger:
             mark_ledger_done(paths, dw_ids)
         return SessionResult(

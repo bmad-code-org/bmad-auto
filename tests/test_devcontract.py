@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from automator import devcontract
 
 
@@ -228,3 +230,87 @@ def test_reset_status_no_frontmatter(tmp_path):
     sp.write_text("# just a heading\n\nstatus: done\n", encoding="utf-8")
     assert devcontract.reset_spec_status(sp, "in-progress") is False
     assert "status: done\n" in sp.read_text()  # body status not touched
+
+
+# ----------------------------------------------------------- RECONCILABLE_FROM
+
+
+def test_reconcilable_from_excludes_terminal_and_deliberate_statuses():
+    """The allowlist must contain only non-terminal statuses a half-finalized spec
+    can be reconciled FROM — never a status the skill set on purpose."""
+    assert devcontract.RECONCILABLE_FROM == frozenset({"", "draft", "ready-for-dev", "in-progress"})
+    for deliberate in ("done", "in-review", "blocked"):
+        assert deliberate not in devcontract.RECONCILABLE_FROM
+
+
+@pytest.mark.parametrize("frm", ["draft", "ready-for-dev", "in-progress"])
+def test_reset_status_from_each_reconcilable_value_to_done(tmp_path, frm):
+    """reset_spec_status advances every line-valued reconcilable frontmatter status
+    to done, rewriting only the frontmatter line."""
+    sp = _spec(tmp_path / "spec.md", status=frm, auto_run="done")
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: 'done'\n" in text  # frontmatter advanced
+    assert "- Status: done\n" in text  # prose untouched
+
+
+def test_reset_status_fills_empty_value(tmp_path):
+    """The "" allowlist member: a present-but-empty `status:` is filled in place,
+    leaving the prose Status line untouched."""
+    sp = _spec(tmp_path / "spec.md", status="", auto_run="done")
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: 'done'\n" in text  # empty value filled
+    assert "- Status: done\n" in text  # prose untouched
+
+
+def test_reset_status_fills_bare_yaml_null(tmp_path):
+    """A bare `status:` (YAML null, no trailing space) is filled to a VALID
+    `status: done` line — never `status:done`, which would drop the key on
+    re-parse. Re-reading the frontmatter must yield the new status."""
+    from automator import verify
+
+    sp = tmp_path / "spec.md"
+    sp.write_text(
+        "---\ntitle: 'x'\nstatus:\n---\n\n## Auto Run Result\n\n- Status: done\n",
+        encoding="utf-8",
+    )
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: done\n" in text  # space preserved -> valid YAML
+    assert "status:done" not in text  # the corruption form is never written
+    assert verify.status_of(verify.read_frontmatter(sp)) == "done"  # re-parses cleanly
+    assert "- Status: done\n" in text  # prose untouched
+
+
+def test_reset_status_blank_value_keeps_inline_comment(tmp_path):
+    """A blank value with a trailing inline comment (`status: # tbd`, parsed as
+    YAML-null) is filled without merging the comment into the scalar: the result
+    must stay valid YAML re-parsing to the new status, comment preserved."""
+    from automator import verify
+
+    sp = tmp_path / "spec.md"
+    sp.write_text(
+        "---\ntitle: 'x'\nstatus: # intentionally blank\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: done # intentionally blank\n" in text  # space kept before `#`
+    assert "done#" not in text  # never abut the value to the comment
+    assert verify.status_of(verify.read_frontmatter(sp)) == "done"  # re-parses cleanly
+
+
+def test_reset_status_inserts_missing_line(tmp_path):
+    """A frontmatter block with NO `status:` line gets one inserted before the
+    closing fence; existing keys survive and the prose body is untouched."""
+    sp = tmp_path / "spec.md"
+    sp.write_text(
+        "---\ntitle: 'x'\nbaseline_revision: 'abc'\n---\n\n## Intent\n\nbody\n",
+        encoding="utf-8",
+    )
+    assert devcontract.reset_spec_status(sp, "done") is True
+    text = sp.read_text()
+    assert "status: done\n" in text  # inserted
+    assert "title: 'x'\n" in text and "baseline_revision: 'abc'\n" in text  # kept
+    assert "## Intent\n\nbody\n" in text  # body untouched

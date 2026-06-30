@@ -43,13 +43,23 @@ STATUS_LINE_RE = re.compile(
 DONE = "done"
 BLOCKED = "blocked"
 
+# Frontmatter statuses a half-finalized generic spec may be reconciled FROM when
+# its prose terminal `## Auto Run Result` Status is `done`. Deliberately an
+# allowlist: anything else (already-terminal done/in-review, blocked, or an
+# unknown custom token) is left untouched, so reconciliation can never override a
+# status the skill set on purpose. `""` covers a blank or missing frontmatter
+# `status:` — `reset_spec_status` fills/inserts the line in that case.
+RECONCILABLE_FROM = frozenset({"", "draft", "ready-for-dev", "in-progress"})
+
 # The leading `---\n …frontmatter… \n---` block, captured in three parts so the
 # body can be rewritten while the fences stay byte-identical.
 _FRONTMATTER_RE = re.compile(r"\A(---\r?\n)(.*?\r?\n)(---[ \t]*\r?\n)", re.DOTALL)
 # A frontmatter `status:` line, preserving indent, the `: ` gap, optional quotes,
-# and any trailing inline comment. Only the value token is rewritten.
+# and any trailing inline comment. Only the value token is rewritten. The value is
+# `*` (not `+`) so a present-but-empty status (`status:` / `status: ""`) is matched
+# and filled — a bmad-dev-auto template can leave it blank.
 _FM_STATUS_RE = re.compile(
-    r"^(?P<pre>[ \t]*status[ \t]*:[ \t]*)(?P<q>['\"]?)(?P<val>[A-Za-z-]+)(?P=q)(?P<rest>.*)$",
+    r"^(?P<pre>[ \t]*status[ \t]*:[ \t]*)(?P<q>['\"]?)(?P<val>[A-Za-z-]*)(?P=q)(?P<rest>.*)$",
     re.MULTILINE,
 )
 
@@ -206,9 +216,11 @@ def reset_spec_status(spec_path: Path, new_status: str) -> bool:
     the spec by flipping its status back to ``in-progress``. A minimal line edit
     (not a YAML round-trip): preserves quote style and any trailing inline comment,
     and touches ONLY the first frontmatter block — never a ``Status:`` line in the
-    prose body (e.g. the ``## Auto Run Result`` section). Returns True on a real
-    change, False when the spec has no frontmatter, no status line, or is already
-    at ``new_status``."""
+    prose body (e.g. the ``## Auto Run Result`` section). A present-but-empty status
+    is filled, and a frontmatter block with NO ``status:`` line at all gets one
+    inserted before the closing fence (the skill's template can leave it blank or
+    absent). Returns True on a real change, False when the spec has no frontmatter
+    block or is already at ``new_status``."""
     text = spec_path.read_text(encoding="utf-8")
     fm = _FRONTMATTER_RE.match(text)
     if not fm:
@@ -221,9 +233,28 @@ def reset_spec_status(spec_path: Path, new_status: str) -> bool:
         if m.group("val") == new_status:
             return m.group(0)
         changed = True
-        return f"{m.group('pre')}{m.group('q')}{new_status}{m.group('q')}{m.group('rest')}"
+        # Guarantee `key: value` spacing: a bare `status:` (no trailing space)
+        # would otherwise fill to `status:done` — invalid YAML, the key is lost.
+        pre = m.group("pre")
+        if not pre.endswith((" ", "\t")):
+            pre += " "
+        # When the value was blank with a trailing inline comment, `rest` begins at
+        # the `#`; abutting the value (`status: done# c`) makes the `#` part of the
+        # scalar instead of a comment. Re-insert a separating space.
+        rest = m.group("rest")
+        if rest.startswith("#"):
+            rest = " " + rest
+        return f"{pre}{m.group('q')}{new_status}{m.group('q')}{rest}"
 
-    new_body = _FM_STATUS_RE.sub(_repl, body, count=1)
+    if _FM_STATUS_RE.search(body):
+        new_body = _FM_STATUS_RE.sub(_repl, body, count=1)
+    else:
+        # No status: line at all — insert one before the closing fence, matching
+        # the block's line ending. `body` always ends with a newline (captured by
+        # _FRONTMATTER_RE), so this lands on its own line.
+        nl = "\r\n" if body.endswith("\r\n") else "\n"
+        new_body = f"{body}status: {new_status}{nl}"
+        changed = True
     if not changed:
         return False
     spec_path.write_text(head + new_body + tail + text[fm.end() :], encoding="utf-8")

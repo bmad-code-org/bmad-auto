@@ -650,9 +650,13 @@ class Engine:
             self.workspace.paths.planning_artifacts,
         ):
             try:
-                out.append(protected.relative_to(self.workspace.root).as_posix())
+                rel = protected.relative_to(self.workspace.root).as_posix()
             except ValueError:
-                pass  # configured outside the repo; nothing to protect here
+                continue  # configured outside the repo; nothing to protect here
+            # "." (folder == repo root) as an exclude/keep prefix would cover the
+            # whole tree — drop it so a misconfig can't disable the dirty check.
+            if rel and rel != ".":
+                out.append(rel)
         return tuple(out)
 
     def _rollback_or_pause(self, task: StoryTask, *, cause: str = "stopped") -> None:
@@ -1038,6 +1042,12 @@ class Engine:
             advance(task, Phase.DEV_VERIFY)
             outcome = None
             if result.status == "completed":
+                # bmad-dev-auto sometimes finalizes the spec in prose (## Auto Run
+                # Result: Status done) but leaves the frontmatter status at the
+                # template default. Repair it BEFORE any frontmatter reader runs —
+                # the sync below, verify_dev, and the review-verify gate all key
+                # off the on-disk frontmatter status.
+                self._reconcile_generic_terminal_status(task, result.result_json)
                 # generic-path single-writer for the bookkeeping the decoupled
                 # skill never touches (sprint-status for stories, the deferred-work
                 # ledger for sweep bundles), before verify reads that state.
@@ -1294,6 +1304,73 @@ class Engine:
         if self._generic_dev():
             return False
         return self.policy.review.enabled
+
+    def _reconcile_generic_terminal_status(self, task: StoryTask, result_json: dict | None) -> None:
+        """Repair a generic-skill spec the session finalized in prose but not in
+        frontmatter. ``bmad-dev-auto`` sometimes appends a terminal
+        ``## Auto Run Result`` (``Status: done``) yet leaves the frontmatter
+        ``status`` at the template default. The orchestrator reads ONLY
+        frontmatter, so without this the sprint/ledger sync no-ops and the verify
+        gate falsely defers completed, tested work.
+
+        When (and only when) the prose terminal Status is ``done`` AND the
+        frontmatter sits at a reconcilable non-terminal status, advance the
+        frontmatter to the success status the skill should have set. Never
+        reconciles ``blocked`` (it must still route to PAUSE) and never overrides
+        an already-terminal or unknown frontmatter status. Idempotent and
+        never-regress: every deterministic verify gate still runs afterward against
+        real on-disk/git state, so this repairs bookkeeping only — it cannot pass
+        uncompleted work. Runs ahead of ``_post_dev_state_sync`` so both the story
+        (sprint) and bundle (ledger) sync, then verify, read the reconciled spec."""
+        if not self._generic_dev():
+            return
+        spec_file = (result_json or {}).get("spec_file")
+        if not spec_file:
+            return
+        spec_path = verify.resolve_spec_path(str(spec_file), self.workspace.paths)
+        if not spec_path.is_file():
+            return
+        # Refuse to mutate a spec the session reported outside the orchestrator-owned
+        # roots — reconcile is the only write keyed off a session-supplied path.
+        if not verify.spec_within_roots(spec_path, self.workspace.paths):
+            self.journal.append(
+                "spec-reconcile-skipped-out-of-tree",
+                story_key=task.story_key,
+                spec=str(spec_path),
+            )
+            return
+        success_status = "in-review" if self._dev_review_enabled() else "done"
+        # A YAML-null status (bare `status:` / `status: null`) reads as the string
+        # "none" through verify.status_of (str(None)), which would dodge the
+        # RECONCILABLE_FROM allowlist; normalize it (and a missing key) to "" so the
+        # blank-status case reconciles. A literal `status: none` stays "none".
+        fm = verify.read_frontmatter(spec_path)
+        raw_status = fm.get("status")
+        fm_status = "" if raw_status is None else str(raw_status).strip().lower()
+        if fm_status == success_status:
+            return  # already finalized — idempotent
+        if fm_status not in devcontract.RECONCILABLE_FROM:
+            return  # blocked / in-review / unknown: never override a deliberate status
+        arr = devcontract.parse_auto_run_result(spec_path.read_text(encoding="utf-8"))
+        if not arr.present or arr.status != devcontract.DONE:
+            return  # no terminal prose, or a blocked outcome: leave for the escalation path
+        if not devcontract.reset_spec_status(spec_path, success_status):
+            return
+        # Keep the in-place result_json the rest of _dev_phase reads consistent with
+        # the now-reconciled spec (the followup flag is only carried on a done exit).
+        if isinstance(result_json, dict):
+            result_json["status"] = success_status
+            if success_status == "done":
+                result_json["followup_review_recommended"] = bool(
+                    verify.read_frontmatter(spec_path).get("followup_review_recommended", False)
+                )
+        self.journal.append(
+            "spec-status-reconciled",
+            story_key=task.story_key,
+            spec=str(spec_path),
+            frm=fm_status,
+            to=success_status,
+        )
 
     def _post_dev_state_sync(self, task: StoryTask, result_json: dict | None) -> None:
         """Single-writer for the on-disk bookkeeping the generic skill never touches.

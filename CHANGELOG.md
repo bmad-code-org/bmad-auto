@@ -5,6 +5,20 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.8] — 2026-06-29
+
+### Fixed
+
+- **Completed `bmad-dev-auto` work is no longer falsely deferred when the skill leaves the spec
+  frontmatter `status` stale.** The skill can finalize a run in its `## Auto Run Result` prose
+  (`Status: done`) yet leave the YAML frontmatter at the template default `draft`; since every gate
+  reads frontmatter, the sprint/ledger sync no-op'd and the story or sweep bundle deferred — losing
+  tested work on rollback. The orchestrator now reconciles the frontmatter to the success status
+  from the terminal prose before the gates run (journaled `spec-status-reconciled`). It reconciles
+  only a `done` outcome from a non-terminal status, and every deterministic gate (worktree diff,
+  dw-ids, verify commands, ledger) still runs — so the bookkeeping is repaired without trusting prose
+  to pass a gate.
+
 ## [0.7.7] — 2026-06-28
 
 ### Fixed
