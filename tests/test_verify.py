@@ -1,3 +1,4 @@
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -716,8 +717,6 @@ def test_artifact_relpaths_returns_in_repo_folders(project):
 def test_artifact_relpaths_drops_dot_when_folder_is_project_root(project):
     """A folder configured == project root yields "."; it must be dropped so it
     can't become a whole-tree exclude that disables the proof-of-work gate."""
-    import dataclasses
-
     paths = dataclasses.replace(project, output_folder=project.project)
     rels = verify.artifact_relpaths(paths)
     assert "." not in rels and "" not in rels
@@ -728,6 +727,9 @@ def test_artifact_relpaths_drops_dot_when_folder_is_project_root(project):
 def test_has_changes_since_excludes_artifact_only_edit(project):
     """A change confined to the artifact folders is not proof of dev work."""
     baseline = verify.rev_parse_head(project.project)
+    # root-level _bmad-output edit (bundle/ledger) + nested impl-artifact edit:
+    # both must be excluded, proving artifact_relpaths covers output_folder too.
+    (project.output_folder / "ledger.json").write_text("bookkeeping\n")
     (project.implementation_artifacts / "spec-x.md").write_text("bookkeeping\n")
     assert verify.has_changes_since(project.project, baseline) is True  # unscoped
     assert (
@@ -752,6 +754,11 @@ def test_spec_within_roots(project, tmp_path):
     assert verify.spec_within_roots(project.implementation_artifacts / "spec-x.md", project)
     assert verify.spec_within_roots(project.project / "anywhere.md", project)
     assert verify.spec_within_roots(project.output_folder, project)  # the root itself
+    # an artifact root configured OUTSIDE project is still a valid root
+    external_impl = tmp_path / "external-artifacts"
+    external_impl.mkdir()
+    external = dataclasses.replace(project, implementation_artifacts=external_impl)
+    assert verify.spec_within_roots(external_impl / "spec-x.md", external)
     outside = tmp_path / "outside" / "spec.md"
     assert verify.spec_within_roots(outside, project) is False
     assert verify.spec_within_roots(Path("/etc/passwd"), project) is False
