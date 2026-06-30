@@ -45,3 +45,27 @@ def test_clear_pause_also_clears_stopped():
     state.clear_pause()
     assert state.stopped is False
     assert state.paused is False
+
+
+def test_crashed_round_trips():
+    state = _state(crashed=True, crash_error="RuntimeError: boom")
+    loaded = RunState.from_dict(state.to_dict())
+    assert loaded.crashed is True
+    assert loaded.crash_error == "RuntimeError: boom"
+
+
+def test_crashed_defaults_for_legacy_state():
+    doc = _state().to_dict()
+    del doc["crashed"]  # a state.json written before the fields existed
+    del doc["crash_error"]
+    loaded = RunState.from_dict(doc)
+    assert loaded.crashed is False
+    assert loaded.crash_error is None
+
+
+def test_clear_pause_also_clears_crashed():
+    state = _state(crashed=True, crash_error="RuntimeError: boom", paused_reason="crash")
+    state.clear_pause()
+    assert state.crashed is False
+    assert state.crash_error is None
+    assert state.paused is False
