@@ -39,6 +39,10 @@ from .screens.settings_screen import SettingsScreen
 from .settings import PolicyDoc
 
 
+def _engine_possibly_live(run_dir: Path) -> bool:
+    return runs.read_pid(run_dir) is not None and data.liveness(run_dir) != "dead"
+
+
 class BmadAutoApp(App[None]):
     TITLE = "bmad-auto"
 
@@ -143,12 +147,14 @@ class BmadAutoApp(App[None]):
         except verify.GitError as e:
             self.notify(f"git check failed: {e}", severity="error")
             return
-        live = [r.run_id for r in data.discover_runs(self.project) if r.status == data.RUNNING]
+        live = [
+            r.run_id for r in data.discover_runs(self.project) if _engine_possibly_live(r.run_dir)
+        ]
         if live:
             self.push_screen(
                 ConfirmModal(
-                    "another run is live",
-                    f"running now: {', '.join(live)}\n"
+                    "another run may be live",
+                    f"live or unknown: {', '.join(live)}\n"
                     "launching another engine on the same project may conflict.",
                     confirm_label="launch anyway",
                 ),
@@ -283,7 +289,7 @@ class BmadAutoApp(App[None]):
         if state.finished:
             self.notify(f"run {run_id} already finished", severity="warning")
             return
-        engine_alive = data.liveness(run_dir) == "alive"
+        engine_alive = _engine_possibly_live(run_dir)
 
         def done(ok: bool | None) -> None:
             if not ok:
@@ -378,8 +384,8 @@ class BmadAutoApp(App[None]):
                 severity="warning",
             )
             return
-        if data.liveness(run_dir) == "alive":
-            self.notify(f"run {run_id} is live — stop it first", severity="warning")
+        if _engine_possibly_live(run_dir):
+            self.notify(f"run {run_id} may still be live — stop it first", severity="warning")
             return
         story = state.paused_story_key or "?"
 
