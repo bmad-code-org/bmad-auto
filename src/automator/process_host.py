@@ -69,6 +69,27 @@ class ProcessHost(ABC):
         the ``python3`` on PATH; a Windows host overrides it (no ``python3`` there)
         so hook registration never branches on ``sys.platform`` at the call site."""
 
+    def alive_and_ours(self, pid: int, identity: float | None) -> bool:
+        """Identity-aware liveness: True only when ``pid`` is alive **and** still the
+        same process whose ``identity`` we recorded. A reused pid (immediate on
+        Windows) fails the identity match and reads as gone — the reuse guard the
+        bare :meth:`is_alive` existence probe lacks.
+
+        ``identity is None`` (a legacy pid file with no persisted identity, or a
+        platform that can't provide one) degrades to :meth:`is_alive` — today's
+        bare-existence behavior, with the documented residual reuse risk. Kept
+        distinct from :meth:`is_alive` so existence and ownership are never
+        conflated again."""
+        if pid <= 0:
+            return False
+        if identity is None:
+            return self.is_alive(pid)
+        # identity(pid) != the recorded value whenever the pid is gone, reused, or
+        # merely unreadable (a permission glitch, or no psutil off-Linux) — every
+        # case reads False (not-ours). An unreadable identity on a live pid thus
+        # reads as dead: the documented residual, deliberately biased safe.
+        return self.identity(pid) == identity
+
     def shell_quote(self, arg: str) -> str:
         """Quote ``arg`` for the shell that runs this host's hook commands, so the
         argument-quoting axis sits behind the same seam as ``hook_interpreter``. Not

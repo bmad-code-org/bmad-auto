@@ -224,6 +224,17 @@ def test_watcher_status_interrupted(tmp_path):
     assert watcher.liveness() == "dead"
 
 
+def test_watcher_status_reused_pid_reads_interrupted(tmp_path):
+    # A live pid whose recorded identity no longer matches (pid reuse — immediate on
+    # Windows) must read as dead/INTERRUPTED, not a false RUNNING. Uses our own pid
+    # with a bogus identity token; identity() re-read never matches 0.5.
+    run_dir = make_run(tmp_path, "20260611-100000-aaaa")
+    (run_dir / "engine.pid").write_text(f"{os.getpid()} 0.5")
+    watcher = data.RunWatcher(run_dir)
+    assert watcher.liveness() == "dead"
+    assert watcher.status() == data.INTERRUPTED
+
+
 def test_classify_crashed(tmp_path):
     # a recorded crash classifies as CRASHED (distinct from a generic INTERRUPTED),
     # checked before liveness so the dead pid does not override it.

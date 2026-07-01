@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import secrets
 import shutil
@@ -18,6 +19,7 @@ from .process_host import get_process_host
 RUNS_DIR = Path(".automator") / "runs"
 ARCHIVE_DIR = Path(".automator") / "archive"
 PID_FILE = "engine.pid"
+_INVALID_PID_IDENTITY = -1.0  # impossible process start/create time; forces "not ours"
 
 
 class StopRunError(Exception):
@@ -51,9 +53,15 @@ def latest_run_dir(project: Path) -> Path | None:
 
 
 def write_pid(run_dir: Path) -> None:
-    """Record the engine process pid. Never deleted: a stale pid that
-    ``pid_alive`` reports as gone is the signal that a run was interrupted."""
-    (run_dir / PID_FILE).write_text(str(os.getpid()), encoding="utf-8")
+    """Record the engine pid plus its identity, so a later liveness read can tell
+    our engine from a stranger that inherited a reused pid (immediate on Windows).
+    One whitespace-delimited line: ``"<pid>"`` (legacy) or ``"<pid> <identity>"``;
+    the identity token is omitted when the platform can't provide one. Never
+    deleted: a stale pid that reads as gone is the signal a run was interrupted."""
+    pid = os.getpid()
+    identity = get_process_host().identity(pid)
+    line = f"{pid} {identity}" if identity is not None else str(pid)
+    (run_dir / PID_FILE).write_text(line, encoding="utf-8")
 
 
 def session_name(run_id: str) -> str:
@@ -113,21 +121,49 @@ def resolve_run_dir(project: Path, ref: str) -> Path:
 
 
 def read_pid(run_dir: Path) -> int | None:
-    """The recorded engine pid, or None when missing/unparseable."""
+    """The recorded engine pid, or None when missing/unparseable. Reads the first
+    whitespace token, tolerating both the legacy pid-only file and the
+    ``"<pid> <identity>"`` form (see :func:`read_pid_identity`)."""
+    return read_pid_identity(run_dir)[0]
+
+
+def read_pid_identity(run_dir: Path) -> tuple[int | None, float | None]:
+    """The recorded engine pid and its persisted identity. ``(None, None)`` when the
+    file is missing or the pid is unparseable; identity ``None`` for a legacy
+    pid-only file (callers then degrade to a bare existence check). A malformed
+    second token is not legacy: it returns an impossible identity so reuse guards
+    fail closed. First token is the pid, an optional second token the identity float."""
     try:
-        return int((run_dir / PID_FILE).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
+        tokens = (run_dir / PID_FILE).read_text(encoding="utf-8").split()
+    except OSError:
+        return None, None
+    if not tokens:
+        return None, None
+    try:
+        pid = int(tokens[0])
+    except ValueError:
+        return None, None
+    identity: float | None = None
+    if len(tokens) > 1:
+        try:
+            parsed = float(tokens[1])
+        except ValueError:
+            parsed = _INVALID_PID_IDENTITY
+        # Only a true one-token legacy file degrades to bare existence. If an
+        # identity token is present but corrupt/non-finite, fail closed as not-ours.
+        identity = parsed if math.isfinite(parsed) else _INVALID_PID_IDENTITY
+    return pid, identity
 
 
 def engine_alive(run_dir: Path) -> bool:
-    """True only when a local engine pid is provably alive (mirrors
-    tui.data.liveness, minus the tmux fallback — callers here want a definite
-    'is something running' answer, and 'unknown' must not block stop/delete)."""
-    pid = read_pid(run_dir)
+    """True only when a local engine pid is provably alive **and still our engine**
+    (identity-checked, so a reused pid reads as dead). Mirrors tui.data.liveness
+    minus the tmux fallback — callers here want a definite 'is something running'
+    answer, and 'unknown' must not block stop/delete."""
+    pid, identity = read_pid_identity(run_dir)
     if pid is None:
         return False
-    return get_process_host().is_alive(pid)
+    return get_process_host().alive_and_ours(pid, identity)
 
 
 # ----------------------------------------------------------- stop / delete / archive
@@ -230,10 +266,12 @@ def stop_run(run_dir: Path) -> bool:
         return False
 
     host = get_process_host()
-    pid = read_pid(run_dir)
-    identity = None
+    pid, identity = read_pid_identity(run_dir)  # identity recorded at run start, not sampled now
+    if pid is not None and identity is not None and not host.alive_and_ours(pid, identity):
+        # the pid we recorded is already gone, or was reused by an unrelated
+        # process before stop_run ran — never signal a stranger; mark stopped below.
+        pid = None
     if pid is not None:
-        identity = host.identity(pid)  # recorded before signalling, for the reuse guard
         try:
             host.terminate(pid)
         except (ProcessLookupError, PermissionError, OSError):
@@ -247,8 +285,12 @@ def stop_run(run_dir: Path) -> bool:
         if host.is_alive(pid):
             # still wedged past the grace window — escalate to a force-kill, but
             # only if this is provably the same process we signalled (never SIGKILL
-            # a pid the kernel may have recycled to an unrelated process).
-            if identity is not None and host.identity(pid) == identity:
+            # a pid the kernel may have recycled to an unrelated process). For a
+            # legacy pid file (no persisted identity) fall back to a stop-time
+            # sample so a pre-upgrade run can still be force-killed — today's
+            # behavior, carrying the same late-sample reuse window it always had.
+            guard = identity if identity is not None else host.identity(pid)
+            if guard is not None and host.identity(pid) == guard:
                 try:
                     host.force_kill(pid)
                 except (ProcessLookupError, PermissionError, OSError):

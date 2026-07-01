@@ -30,8 +30,22 @@ def host():
     return PosixProcessHost()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="PosixProcessHost.is_alive uses os.kill(pid, 0); on Windows signal 0 is "
+    "CTRL_C_EVENT, so the probe sends a real Ctrl+C to this process's console and "
+    "aborts the run. Windows self-liveness is covered by the WindowsProcessHost test below.",
+)
 def test_is_alive_true_for_self(host):
     assert host.is_alive(os.getpid()) is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="WindowsProcessHost is the win32 host")
+def test_is_alive_true_for_self_windows():
+    # The Windows host probes liveness via psutil (no os.kill), so checking self is
+    # safe here — unlike the POSIX host's os.kill(pid, 0), which is CTRL_C on Windows.
+    pytest.importorskip("psutil")
+    assert WindowsProcessHost().is_alive(os.getpid()) is True
 
 
 def test_is_alive_rejects_non_positive(host, monkeypatch):
@@ -74,6 +88,27 @@ def test_identity_stable_and_present_for_self(host):
 def test_identity_none_for_non_positive(host):
     assert host.identity(0) is None
     assert host.identity(-1) is None
+
+
+def test_alive_and_ours_rejects_non_positive(host):
+    assert host.alive_and_ours(0, 1.0) is False
+    assert host.alive_and_ours(-1, None) is False
+
+
+def test_alive_and_ours_none_identity_degrades_to_is_alive(host, monkeypatch):
+    # A legacy pid file (no persisted identity) can only fall back to bare existence.
+    monkeypatch.setattr(host, "is_alive", lambda pid: pid == 4242)
+    assert host.alive_and_ours(4242, None) is True
+    assert host.alive_and_ours(9999, None) is False
+
+
+def test_alive_and_ours_matches_only_same_identity(host, monkeypatch):
+    # Same identity → our process; a different value (reused pid) or None (gone) → not.
+    monkeypatch.setattr(host, "identity", lambda pid: 123.0)
+    assert host.alive_and_ours(4242, 123.0) is True
+    assert host.alive_and_ours(4242, 999.0) is False  # reused
+    monkeypatch.setattr(host, "identity", lambda pid: None)
+    assert host.alive_and_ours(4242, 123.0) is False  # gone
 
 
 def test_default_host_matches_platform(monkeypatch):

@@ -407,7 +407,9 @@ def test_run_honors_preassigned_run_id_and_writes_pid(project, monkeypatch):
     assert cli.main(["run", "--project", str(project.project), "--run-id", run_id]) == 0
     run_dir = project.project / ".automator" / "runs" / run_id
     assert json.loads((run_dir / "state.json").read_text())["run_id"] == run_id
-    assert (run_dir / "engine.pid").read_text() == str(os.getpid())
+    # engine.pid is "<pid>" or "<pid> <identity>" (identity persisted on platforms
+    # that provide one) — assert on the pid token, not the whole line.
+    assert (run_dir / "engine.pid").read_text().split()[0] == str(os.getpid())
 
 
 def test_run_aborts_when_base_skills_missing(project, monkeypatch, capsys):
