@@ -5,6 +5,25 @@ All notable changes to `bmad-auto` are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the project is pre-1.0,
 breaking changes may land in a minor release.
 
+## [0.7.12] — 2026-07-01
+
+### Fixed
+
+- **A story from a resolved escalation that still can't finish now re-escalates instead of being
+  silently deferred.** When a human-resolved CRITICAL `blocked` escalation was re-driven and the
+  re-drive couldn't reach `status: done` (e.g. the environment was still broken), the story used to
+  exhaust its dev/review budget and plateau-defer — filing an unresolved blocker as deferred work and
+  rolling back the implemented code. While `resolved_redrive` is latched, budget exhaustion now
+  re-escalates (pauses for the human) instead of deferring, and the attempt's tree is preserved.
+- **A resumed `--epic N` run stays scoped to its epic and no longer declares the epic "done" while
+  stories remain.** `resume` rebuilt the engine without the run's `--epic`/`--story`/`--max-stories`,
+  so a scoped run silently widened to every epic; with strict file-order story selection, deferring or
+  finishing a story in an epic placed out of numeric order in the sprint board (e.g. one appended last)
+  bounced selection to an earlier-in-file epic and fired a spurious "epic N complete" boundary,
+  stranding the epic's remaining stories. The selector and cap are now persisted and restored on
+  resume, and story selection exhausts the current epic before advancing — so an epic boundary fires
+  only when that epic has no actionable stories left. Document-order epic execution is unchanged.
+
 ## [0.7.11] — 2026-06-30
 
 ### Fixed
