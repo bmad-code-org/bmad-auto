@@ -698,15 +698,30 @@ class Engine:
         ss = load_sprint_status(self.paths.sprint_status)
         if ss.unknown_keys:
             self.journal.append("sprint-status-unknown-keys", keys=list(ss.unknown_keys))
-        skip = set(self.state.tasks)  # anything this run already touched
-        while True:
-            story = next_actionable(ss, skip)
-            if story is None:
-                return None
-            if not self._selector.matches(story):
-                skip.add(story.key)
-                continue
-            return story
+        base_skip = set(self.state.tasks)  # anything this run already touched
+
+        def _first(epic: int | None):
+            # local skip copy so selector-rejections in this pass don't leak into
+            # the next one (a story rejected here may still match the fallback).
+            skip = set(base_skip)
+            while True:
+                story = next_actionable(ss, skip, epic=epic)
+                if story is None:
+                    return None
+                if not self._selector.matches(story):
+                    skip.add(story.key)
+                    continue
+                return story
+
+        # Exhaust the current epic before advancing. Selection is otherwise
+        # strict file order, and epics need not be file-ordered by number (an
+        # epic can be appended out of place); without this, a still-open earlier-
+        # in-file epic would "steal" the pick and fire a spurious epic boundary.
+        if self.state.current_epic is not None:
+            story = _first(self.state.current_epic)
+            if story is not None:
+                return story
+        return _first(None)
 
     def _protected_relpaths(self) -> tuple[str, ...]:
         """Repo-relative posix paths of the BMAD artifact folders. These are

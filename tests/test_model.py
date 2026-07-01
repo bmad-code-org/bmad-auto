@@ -40,6 +40,20 @@ def test_stopped_defaults_false_for_legacy_state():
     assert RunState.from_dict(doc).stopped is False
 
 
+def test_run_filters_round_trip():
+    state = _state(epic_filter=9, story_filter="9-0", max_stories=3)
+    back = RunState.from_dict(state.to_dict())
+    assert (back.epic_filter, back.story_filter, back.max_stories) == (9, "9-0", 3)
+
+
+def test_run_filters_default_none_for_legacy_state():
+    doc = _state().to_dict()
+    for key in ("epic_filter", "story_filter", "max_stories"):
+        del doc[key]  # a state.json written before the fields existed
+    back = RunState.from_dict(doc)
+    assert back.epic_filter is None and back.story_filter is None and back.max_stories is None
+
+
 def test_clear_pause_also_clears_stopped():
     state = _state(stopped=True, paused_reason="escalation", paused_stage="x")
     state.clear_pause()

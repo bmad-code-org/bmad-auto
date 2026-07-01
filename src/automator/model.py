@@ -241,6 +241,13 @@ class RunState:
     started_at: str
     policy_snapshot: dict[str, Any] = field(default_factory=dict)
     current_epic: int | None = None
+    # the run's story scope + cap, as passed on the launching CLI (`--epic`,
+    # `--story`, `--max-stories`). Persisted so `resume` rebuilds the Engine with
+    # the SAME selector — otherwise a resumed `--epic N` run silently widens to
+    # every epic and can jump out of its scope at the next pick.
+    epic_filter: int | None = None
+    story_filter: str | None = None
+    max_stories: int | None = None
     paused_reason: str | None = None
     paused_stage: str | None = None
     paused_story_key: str | None = None
@@ -294,6 +301,9 @@ class RunState:
             "started_at": self.started_at,
             "policy_snapshot": self.policy_snapshot,
             "current_epic": self.current_epic,
+            "epic_filter": self.epic_filter,
+            "story_filter": self.story_filter,
+            "max_stories": self.max_stories,
             "paused_reason": self.paused_reason,
             "paused_stage": self.paused_stage,
             "paused_story_key": self.paused_story_key,
@@ -317,6 +327,9 @@ class RunState:
             started_at=d["started_at"],
             policy_snapshot=d.get("policy_snapshot", {}),
             current_epic=d.get("current_epic"),
+            epic_filter=d.get("epic_filter"),
+            story_filter=d.get("story_filter"),
+            max_stories=d.get("max_stories"),
             paused_reason=d.get("paused_reason"),
             paused_stage=d.get("paused_stage"),
             paused_story_key=d.get("paused_story_key"),

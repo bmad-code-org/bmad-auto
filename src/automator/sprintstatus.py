@@ -128,11 +128,17 @@ def load(path: Path) -> SprintStatus:
     )
 
 
-def next_actionable(ss: SprintStatus, skip: set[str] | None = None) -> Story | None:
-    """First story in file order whose status allows starting work."""
+def next_actionable(
+    ss: SprintStatus, skip: set[str] | None = None, *, epic: int | None = None
+) -> Story | None:
+    """First story in file order whose status allows starting work. When
+    ``epic`` is given, only stories of that epic are considered — the caller
+    uses this to exhaust the current epic before advancing to another."""
     skip = skip or set()
     for story in ss.stories:
         if story.key in skip:
+            continue
+        if epic is not None and story.epic != epic:
             continue
         if story.status in ACTIONABLE_STATUSES:
             return story

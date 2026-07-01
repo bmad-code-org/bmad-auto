@@ -82,6 +82,20 @@ def test_next_actionable_order_and_skip(project):
     assert sprintstatus.next_actionable(ss, skip={"1-2-b", "1-3-c"}) is None
 
 
+def test_next_actionable_epic_filter(project):
+    # document order (epic 5 before epic 9), not numeric; the epic filter returns
+    # epic 9's first actionable story even though 5-1 is earlier in the file.
+    write_sprint(
+        project,
+        {"5-1-e5": "backlog", "9-0-x": "ready-for-dev", "9-1-y": "backlog"},
+    )
+    ss = sprintstatus.load(project.sprint_status)
+    assert sprintstatus.next_actionable(ss).key == "5-1-e5"  # unfiltered = file order
+    assert sprintstatus.next_actionable(ss, epic=9).key == "9-0-x"
+    assert sprintstatus.next_actionable(ss, skip={"9-0-x"}, epic=9).key == "9-1-y"
+    assert sprintstatus.next_actionable(ss, skip={"9-0-x", "9-1-y"}, epic=9) is None
+
+
 def test_story_status_reread(project):
     write_sprint(project, {"1-1-a": "in-progress"})
     assert sprintstatus.story_status(project.sprint_status, "1-1-a") == "in-progress"

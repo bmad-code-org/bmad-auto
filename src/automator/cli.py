@@ -298,6 +298,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         project=str(project),
         started_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
         policy_snapshot=pol.to_dict(),
+        epic_filter=args.epic,
+        story_filter=args.story,
+        max_stories=args.max_stories,
     )
     save_state(run_dir, state)
     runs.write_pid(run_dir)
@@ -549,6 +552,11 @@ def _resume_paused_run(project: Path, run_dir: Path) -> int:
             run_dir=run_dir,
             journal=journal,
             state=state,
+            # restore the launching scope + cap so a resumed `--epic N` run keeps
+            # picking within N instead of silently widening to every epic.
+            epic_filter=state.epic_filter,
+            story_filter=state.story_filter,
+            max_stories=state.max_stories,
             sweep_factory=_sweep_factory(project, paths),
         )
     summary = engine.run()

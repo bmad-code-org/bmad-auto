@@ -81,6 +81,11 @@ def resume_engine(project, engine, script, policy=None) -> tuple[Engine, MockAda
         run_dir=engine.run_dir,
         journal=engine.journal,
         state=state,
+        # mirror cli._resume_paused_run: the run's scope + cap are restored from
+        # persisted state so a resumed `--epic N` run keeps its selector.
+        epic_filter=state.epic_filter,
+        story_filter=state.story_filter,
+        max_stories=state.max_stories,
     )
     return new_engine, adapter
 
@@ -2052,3 +2057,133 @@ def test_crash_message_fallback_when_str_raises(project, monkeypatch):
     state = load_state(engine.run_dir)
     assert state.crash_error == "BadStr: BadStr"
     assert "'" not in state.crash_error
+
+
+def _escalate_blocked(project, story_key):
+    """A dev session that HALTs `blocked` with a spec on disk (so rearm can flip
+    it) — the environmental-block shape from the live Epic-9 run."""
+
+    def effect(spec):
+        sp = spec_path(project, story_key)
+        write_spec(sp, "blocked", rev_parse_head(project.project))
+        return SessionResult(
+            status="completed",
+            result_json={
+                "workflow": "auto-dev",
+                "story_key": story_key,
+                "spec_file": str(sp),
+                "escalations": [
+                    {"type": "blocked", "severity": "CRITICAL", "detail": "unity bridge wedged"}
+                ],
+            },
+        )
+
+    return effect
+
+
+def test_resume_with_epic_filter_stays_in_scoped_epic(project):
+    """Regression for the Epic-9 jump: a `--epic 9` run whose first story (9-0,
+    story index 0) escalates, is resolved, and resumes must keep picking WITHIN
+    epic 9 — not widen to every epic and bounce to an earlier-in-file epic. The
+    fixture is document-ordered (epic 5 before epic 9), not numeric, exactly like
+    the real sprint board."""
+    write_sprint(
+        project,
+        {
+            "epic-5": "backlog",
+            "5-1-map": "ready-for-dev",
+            "epic-9": "backlog",
+            "9-0-test-infra": "ready-for-dev",  # story numbered 0, leads the epic
+            "9-1-keystone": "ready-for-dev",
+        },
+    )
+    engine, _ = make_engine(project, [_escalate_blocked(project, "9-0-test-infra")], epic_filter=9)
+    engine.state.epic_filter = 9  # cmd_run persists the launch scope; mirror it here
+    summary = engine.run()
+    assert summary.paused and summary.escalated == 1
+    assert engine.state.current_epic == 9
+
+    rearm_escalation(engine.run_dir)  # the resolve workflow's re-arm step
+    resumed, _ = resume_engine(
+        project,
+        engine,
+        [
+            dev_effect(project, "9-0-test-infra"),
+            review_effect(project, "9-0-test-infra", clean=True),
+            dev_effect(project, "9-1-keystone"),
+            review_effect(project, "9-1-keystone", clean=True),
+        ],
+    )
+    summary2 = resumed.run()
+
+    # both epic-9 stories completed; epic 5 never touched; no false boundary
+    assert summary2.done == 2 and not summary2.paused
+    assert resumed.state.tasks["9-0-test-infra"].phase == Phase.DONE
+    assert resumed.state.tasks["9-1-keystone"].phase == Phase.DONE
+    assert "5-1-map" not in resumed.state.tasks
+    kinds = [e["kind"] for e in resumed.journal.entries()]
+    assert "epic-boundary" not in kinds
+
+
+def test_pick_next_prefers_current_epic_over_earlier_file_position(project):
+    """Fix B (hardening): selection exhausts the current epic before advancing,
+    even when an actionable story of another epic sits earlier in file order.
+    Then, once the epic is exhausted, it falls back to file order — preserving
+    document-order epic execution."""
+    write_sprint(
+        project,
+        {
+            "5-1-e5": "backlog",  # earlier in file, actionable, but NOT current epic
+            "9-0-x": "ready-for-dev",
+            "9-1-y": "backlog",
+        },
+    )
+    engine, _ = make_engine(project, [])
+    engine.state.current_epic = 9
+    engine.state.tasks["9-0-x"] = StoryTask(story_key="9-0-x", epic=9, phase=Phase.DEFERRED)
+
+    assert engine._pick_next().key == "9-1-y"  # stays in epic 9, not 5-1-e5
+
+    # exhaust epic 9 → fallback returns the earlier-in-file epic (doc order kept)
+    engine.state.tasks["9-1-y"] = StoryTask(story_key="9-1-y", epic=9, phase=Phase.DONE)
+    assert engine._pick_next().key == "5-1-e5"
+
+
+def test_resolved_redrive_reescalates_instead_of_deferring(project):
+    """Fix C (Bug 1): a story from a human-resolved CRITICAL escalation whose
+    re-drive still can't converge must RE-ESCALATE (pause for the human), not
+    silently plateau-defer + roll back the work. The live run downgraded an
+    environmental block to a deferral this way."""
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    policy = Policy(
+        gates=GatesPolicy(mode="none"),
+        notify=QUIET,
+        limits=LimitsPolicy(max_dev_attempts=2),
+        scm=ScmPolicy(rollback_on_failure=True),
+    )
+    engine, _ = make_engine(project, [_escalate_blocked(project, "1-1-a")], policy=policy)
+    summary = engine.run()
+    assert summary.paused and summary.escalated == 1
+
+    rearm_escalation(engine.run_dir)  # human resolved; re-drive re-armed
+    # re-drive never reaches `done` (env still blocked): both attempts land at
+    # in-progress with no escalation — the exact non-convergence that used to defer
+    resumed, _ = resume_engine(
+        project,
+        engine,
+        [
+            dev_effect(project, "1-1-a", final_status="in-progress"),
+            dev_effect(project, "1-1-a", final_status="in-progress"),
+        ],
+        policy=policy,
+    )
+    summary2 = resumed.run()
+
+    assert summary2.paused and summary2.escalated == 1 and summary2.deferred == 0
+    task = load_state(resumed.run_dir).tasks["1-1-a"]
+    assert task.phase == Phase.ESCALATED
+    assert task.defer_reason is None
+    kinds = [e["kind"] for e in resumed.journal.entries()]
+    assert "story-deferred" not in kinds
+    saved = load_state(resumed.run_dir)
+    assert "re-escalating instead of deferring" in saved.paused_reason
