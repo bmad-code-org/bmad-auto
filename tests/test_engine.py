@@ -1,8 +1,8 @@
 """Engine scenario tests against the mock adapter — no tmux, no LLM."""
 
-import os
 import re
 import signal
+import sys
 from pathlib import Path
 
 import pytest
@@ -43,6 +43,16 @@ from automator.runs import rearm_escalation
 from automator.verify import read_frontmatter, rev_parse_head, worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
+
+
+def _file_exists_cmd(path) -> str:
+    """Shell verify command (run via shell=True) exiting 0 iff `path` exists, on the
+    host's shell — `test -f` (POSIX) / `if exist` (Windows cmd) — so the verify-gate
+    tests drive the real machinery on either OS, not a POSIX-only `test` that cmd
+    rejects with "'test' is not recognized"."""
+    if sys.platform == "win32":
+        return f'if exist "{path}\\NUL" (exit 1) else if exist "{path}" (exit 0) else (exit 1)'
+    return f'test -f "{path}"'
 
 
 def make_engine(project, script, policy=None, **kwargs) -> tuple[Engine, MockAdapter]:
@@ -749,7 +759,7 @@ def test_generic_repair_reopens_spec_before_reinvocation(project):
         notify=QUIET,
         review=ReviewPolicy(enabled=False),
         dev=DevPolicy(skill="bmad-dev-auto"),
-        verify=VerifyPolicy(commands=("test -f marker.txt",)),
+        verify=VerifyPolicy(commands=(_file_exists_cmd("marker.txt"),)),
         scm=ScmPolicy(rollback_on_failure=True),
     )
     engine, adapter = make_engine(project, [effect, effect], policy=pol)
@@ -1393,7 +1403,7 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
                 "baseline_commit": baseline,
                 "tasks_total": 3,
                 "tasks_done": 3,
-                "verification": [{"command": f"test -f {marker}", "ok": True}],
+                "verification": [{"command": _file_exists_cmd(marker), "ok": True}],
                 "escalations": [],
             },
         )
@@ -1401,7 +1411,7 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
     policy = Policy(
         gates=GatesPolicy(mode="none"),
         notify=QUIET,
-        verify=VerifyPolicy(commands=(f"test -f {marker}",)),
+        verify=VerifyPolicy(commands=(_file_exists_cmd(marker),)),
     )
     engine, adapter = make_engine(
         project,
@@ -1422,7 +1432,7 @@ def test_dev_verify_command_failure_routes_feedback_fix(project):
     # the feedback file is referenced as the last backtick-wrapped path.
     assert "Resume the autonomous" not in prompts[0] and "Resume the autonomous" in prompts[1]
     feedback = Path(re.findall(r"`([^`]*)`", prompts[1])[-1])
-    assert "test -f" in feedback.read_text()
+    assert _file_exists_cmd(marker) in feedback.read_text()
     # the first attempt's work survived: no reset between attempts
     assert "change for 1-1-a" in (project.project / "src.txt").read_text()
 
@@ -1450,7 +1460,7 @@ def test_review_verify_failure_routes_fix_session_then_rereview(project):
     policy = Policy(
         gates=GatesPolicy(mode="none"),
         notify=QUIET,
-        verify=VerifyPolicy(commands=(f"test -f {marker}",)),
+        verify=VerifyPolicy(commands=(_file_exists_cmd(marker),)),
     )
     engine, adapter = make_engine(
         project,
@@ -1486,7 +1496,7 @@ def test_review_verify_failure_without_fix_budget_defers(project):
     policy = Policy(
         gates=GatesPolicy(mode="none"),
         notify=QUIET,
-        verify=VerifyPolicy(commands=(f"test -f {marker}",)),
+        verify=VerifyPolicy(commands=(_file_exists_cmd(marker),)),
         limits=LimitsPolicy(max_dev_attempts=1),
     )
     engine, adapter = make_engine(project, [dev_with_marker, breaking_review], policy=policy)
@@ -1721,7 +1731,10 @@ def test_run_stopped_via_real_signal(project, monkeypatch):
     killed = []
     monkeypatch.setattr("automator.engine.kill_session", lambda rid: killed.append(rid))
     engine, _ = make_engine(project, [])
-    monkeypatch.setattr(engine, "_loop", lambda: os.kill(os.getpid(), signal.SIGTERM))
+    # raise_signal delivers an in-process, catchable SIGTERM via C raise() — the
+    # portable "signal myself" primitive. os.kill(getpid(), SIGTERM) is POSIX-only
+    # here: on Windows it maps to TerminateProcess (uncatchable, kills the runner).
+    monkeypatch.setattr(engine, "_loop", lambda: signal.raise_signal(signal.SIGTERM))
 
     prev_term = signal.getsignal(signal.SIGTERM)
     prev_int = signal.getsignal(signal.SIGINT)

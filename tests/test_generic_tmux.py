@@ -9,6 +9,7 @@ propagation / hook-signal waiting / kill end-to-end for any profile.
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from automator.model import TokenUsage
 from automator.policy import LimitsPolicy, Policy
 from automator.signals import HookEvent
 
-HAVE_TMUX = shutil.which("tmux") is not None
+HAVE_TMUX = sys.platform != "win32" and shutil.which("tmux") is not None
 
 FAKE_CLI = """#!/bin/bash
 # fake CLI: last positional arg is the prompt; env comes from tmux -e

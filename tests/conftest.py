@@ -4,6 +4,7 @@ that simulate the side effects skill sessions would have on disk."""
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,24 @@ import yaml
 from automator.adapters.base import SessionResult, SessionSpec
 from automator.bmadconfig import ProjectPaths
 from automator.verify import rev_parse_head
+
+
+def write_script_launcher(directory: Path, name: str, body: str) -> Path:
+    """Write a fake CLI launcher for the host OS."""
+    directory = Path(directory)
+    sidecar = directory / f"{name}.py"
+    sidecar.write_text(body, encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = directory / f"{name}.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{sidecar}" %*\r\n', encoding="utf-8")
+    else:
+        launcher = directory / name
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{sidecar}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    return launcher
+
 
 SPRINT_TEMPLATE = {
     "generated": "01-06-2026 10:00",

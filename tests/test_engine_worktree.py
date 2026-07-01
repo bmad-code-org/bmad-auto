@@ -8,6 +8,8 @@ adapter (no tmux, no LLM).
 
 from __future__ import annotations
 
+import sys
+
 from conftest import _spec_baseline, git, set_sprint, write_spec, write_sprint
 
 from automator.adapters.base import SessionResult
@@ -504,9 +506,36 @@ def test_commit_message_template_applied(project):
 # ------------------------------------------------ per_worktree engine plugin
 
 
-def _write_stub_plugin(
-    project, name, *, ready="true", setup="true", teardown="true", seed_globs=None
-):
+_OK = "exit 0"  # cross-platform always-success verb (both `cmd /c` and `sh -c` honor it)
+_RUN = "%BMAD_AUTO_RUN_DIR%" if sys.platform == "win32" else "$BMAD_AUTO_RUN_DIR"
+
+
+def _touch_run(marker: str) -> str:
+    if sys.platform == "win32":
+        return f'type nul > "{_RUN}\\{marker}"'
+    return f'touch "{_RUN}/{marker}"'
+
+
+def _exists_run(marker: str) -> str:
+    if sys.platform == "win32":
+        return (
+            f'if exist "{_RUN}\\{marker}\\NUL" (exit 1) '
+            f'else if exist "{_RUN}\\{marker}" (exit 0) else (exit 1)'
+        )
+    return f'test -f "{_RUN}/{marker}"'
+
+
+def _seeded_then_touch(rel: str, marker: str) -> str:
+    if sys.platform == "win32":
+        norm_rel = rel.replace("/", "\\")
+        return (
+            f'if exist "{norm_rel}\\NUL" (exit 1) '
+            f'else if exist "{norm_rel}" (type nul > "{_RUN}\\{marker}") else (exit 1)'
+        )
+    return f'test -f "{rel}" && touch "{_RUN}/{marker}"'
+
+
+def _write_stub_plugin(project, name, *, ready=_OK, setup=_OK, teardown=_OK, seed_globs=None):
     """A project-local *declarative* plugin whose lifecycle hooks are shell stubs
     (no real Unity) — proving a generic data-only plugin can gate the engine's
     per_worktree flow. A blocking hook's non-zero exit vetoes (defers) the unit.
@@ -558,10 +587,9 @@ def test_per_worktree_setup_then_gate_then_teardown_and_seed(project):
     _write_stub_plugin(
         project,
         "stub",
-        setup="test -f .claude/skills/gameobject-create/SKILL.md "
-        '&& touch "$BMAD_AUTO_RUN_DIR/setup-done"',
-        ready='test -f "$BMAD_AUTO_RUN_DIR/setup-done"',
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        setup=_seeded_then_touch(".claude/skills/gameobject-create/SKILL.md", "setup-done"),
+        ready=_exists_run("setup-done"),
+        teardown=_touch_run("teardown-done"),
         seed_globs=[".claude/skills/*"],
     )
     engine, adapter = make_engine(
@@ -591,7 +619,7 @@ def test_per_worktree_setup_failure_defers_and_skips_session(project):
         project,
         "stub",
         setup="exit 3",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, adapter = make_engine(
         project,
@@ -622,7 +650,7 @@ def test_per_worktree_ready_gate_failure_defers(project):
         project,
         "stub",
         ready="exit 1",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, adapter = make_engine(
         project,
@@ -648,7 +676,7 @@ def test_per_worktree_teardown_runs_on_pause(project):
     _write_stub_plugin(
         project,
         "stub",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, _ = make_engine(
         project,

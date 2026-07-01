@@ -20,9 +20,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 import time
 
 import pytest
+from conftest import write_script_launcher
 
 from automator.engine import Engine, _setup_mcp_agent_id
 from automator.plugins import HookContext, PluginError, get_plugin, load_plugins
@@ -447,18 +449,15 @@ def test_unity_ready_grace_explicit_override(monkeypatch):
 
 def _fake_cli(tmp_path, *, wait_rc=0, tool_rc=0):
     """A fake unity-mcp-cli that logs argv and returns per-subcommand exit codes."""
-    script = tmp_path / "fake-unity-mcp-cli"
     log = tmp_path / "calls.log"
-    script.write_text(
-        "#!/usr/bin/env python3\n"
+    body = (
         "import sys\n"
         f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n"
         "cmd = sys.argv[1] if len(sys.argv) > 1 else ''\n"
         f"sys.exit({wait_rc} if cmd == 'wait-for-ready' "
         f"else ({tool_rc} if cmd == 'run-tool' else 0))\n"
     )
-    script.chmod(0o755)
-    return script, log
+    return write_script_launcher(tmp_path, "fake-unity-mcp-cli", body), log
 
 
 def test_unity_ready_default_is_wait_for_ready_only(tmp_path, monkeypatch):
@@ -489,15 +488,14 @@ def test_unity_ready_tool_error_marker_means_not_ready(tmp_path, monkeypatch):
     connection-refused) is treated as not-ready, not a false pass."""
     mod = _load_unity_ready()
     # exit 0 but stdout carries an error marker
-    script = tmp_path / "fake-cli"
-    script.write_text(
-        "#!/usr/bin/env python3\n"
+    script = write_script_launcher(
+        tmp_path,
+        "fake-cli",
         "import sys\n"
         "cmd = sys.argv[1] if len(sys.argv) > 1 else ''\n"
         "print('ERROR: Tool with Name not found' if cmd == 'run-tool' else 'ok')\n"
-        "sys.exit(0)\n"
+        "sys.exit(0)\n",
     )
-    script.chmod(0o755)
     monkeypatch.setenv("UNITY_MCP_CLI", str(script))
     monkeypatch.setenv("BMAD_AUTO_WORKTREE", str(tmp_path))
     monkeypatch.setenv("BMAD_AUTO_UNITY_READY_TOOL", "ping")
@@ -672,6 +670,13 @@ def test_unity_setup_prime_scriptassemblies_only_is_cold(tmp_path, monkeypatch):
     assert (wt / "Library" / "ArtifactDB").read_text() == "db"  # primed over leftover
 
 
+_skip_win_symlink = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlink-based Unity Library priming is POSIX-only; native-Windows cache path is a tracked follow-up",
+)
+
+
+@_skip_win_symlink
 def test_unity_setup_prime_symlink_fallback_when_no_seed(tmp_path, monkeypatch):
     mod = _load_unity_setup()
     _clear_setup_knobs(monkeypatch)
@@ -683,6 +688,7 @@ def test_unity_setup_prime_symlink_fallback_when_no_seed(tmp_path, monkeypatch):
     assert (wt / "Library").is_symlink()  # fell back to the empty-cache symlink
 
 
+@_skip_win_symlink
 def test_unity_setup_prime_seed_mode_off_uses_symlink(tmp_path, monkeypatch):
     mod = _load_unity_setup()
     _clear_setup_knobs(monkeypatch)
@@ -696,6 +702,7 @@ def test_unity_setup_prime_seed_mode_off_uses_symlink(tmp_path, monkeypatch):
     assert (wt / "Library").is_symlink()  # priming disabled despite a warm seed
 
 
+@_skip_win_symlink
 def test_unity_setup_prime_drops_stale_symlink(tmp_path, monkeypatch):
     mod = _load_unity_setup()
     _clear_setup_knobs(monkeypatch)
@@ -748,10 +755,8 @@ def _fake_setup_cli(tmp_path):
     """Fake unity-mcp-cli for the setup hook: setup-mcp writes claude-code's
     .mcp.json (path-derived 23723) and codex's .codex/config.toml (honoring --url,
     or FAKE_CODEX_FORCE_URL to simulate a leaked port); other subcommands no-op 0."""
-    script = tmp_path / "fake-setup-cli"
     log = tmp_path / "setup-calls.log"
-    script.write_text(
-        "#!/usr/bin/env python3\n"
+    body = (
         "import sys, os, json\n"
         f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n"
         "a = sys.argv[1:]\n"
@@ -768,8 +773,7 @@ def _fake_setup_cli(tmp_path):
         "            '[mcp_servers.ai-game-developer]\\nurl = \"%s\"\\n' % u)\n"
         "sys.exit(0)\n"
     )
-    script.chmod(0o755)
-    return script, log
+    return write_script_launcher(tmp_path, "fake-setup-cli", body), log
 
 
 def test_unity_setup_configures_every_agent_at_worktree_port(tmp_path, monkeypatch):
