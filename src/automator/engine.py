@@ -8,6 +8,7 @@ verify. All creative work happens inside disposable adapter sessions.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import signal
 import sys
@@ -283,10 +284,9 @@ class Engine:
 
         def handler(signum, frame):  # noqa: ANN001 - stdlib signal signature
             if sys.platform == "win32" and signum in windows_ctrl_signals:
-                try:
+                # best-effort: a journal error must never escape a signal handler.
+                with contextlib.suppress(Exception):
                     self.journal.append("console-ctrl-ignored", signum=signum)
-                except Exception:  # noqa: BLE001  # best-effort signal-handler journal
-                    pass
                 return
             if self._stopping:
                 return  # already unwinding; don't re-raise during teardown
