@@ -785,13 +785,19 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
     async with app.run_test() as pilot:
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
-        await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        # push_screen sets app.screen before the modal's children mount, so wait
+        # for #ok itself — a bare screen-type check races the click on a slow runner.
+        await until(
+            pilot,
+            lambda: isinstance(app.screen, StartRunModal) and bool(app.screen.query("#ok")),
+        )
         await pilot.click("#ok")
         await until(
             pilot,
             lambda: (
                 isinstance(app.screen, ConfirmModal)
                 and not isinstance(app.screen, ConfirmResumeModal)
+                and bool(app.screen.query("#ok"))
             ),
         )
         await pilot.click("#ok")
