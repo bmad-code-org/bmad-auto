@@ -31,7 +31,7 @@ from ..gates import ATTENTION_FILE
 from ..journal import JOURNAL_FILE, LOGS_DIR, STATE_FILE, load_state
 from ..model import RunState
 from ..process_host import get_process_host
-from ..runs import PID_FILE, list_run_dirs, session_name
+from ..runs import list_run_dirs, read_pid_identity, session_name
 
 # Run statuses shown by the dashboard.
 RUNNING = "running"
@@ -70,12 +70,14 @@ def liveness(run_dir: Path) -> str:
     proves nothing: 'unknown', never falsely dead. Pid checks are local-only;
     runs on other hosts always come back 'unknown'.
     """
-    try:
-        pid = int((run_dir / PID_FILE).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+    pid, identity = read_pid_identity(run_dir)
+    if pid is None:
         return _session_liveness(run_dir.name)
     try:
-        return "alive" if get_process_host().is_alive(pid) else "dead"
+        # identity-aware: a reused pid (a stranger inheriting the number) reads as
+        # 'dead', not a false RUNNING. Legacy pid file (identity None) degrades to a
+        # bare existence probe.
+        return "alive" if get_process_host().alive_and_ours(pid, identity) else "dead"
     except Exception:
         # never falsely dead — an unexpected probe failure stays 'unknown'
         return "unknown"

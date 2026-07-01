@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -68,6 +69,15 @@ class _FakeHost:
     def identity(self, pid):
         return self._identity() if callable(self._identity) else self._identity
 
+    def alive_and_ours(self, pid, identity):
+        # Mirrors ProcessHost.alive_and_ours: pid<=0 short-circuits, identity None
+        # degrades to is_alive, else the recorded identity must still match.
+        if pid <= 0:
+            return False
+        if identity is None:
+            return self.is_alive(pid)
+        return self.identity(pid) == identity
+
 
 def test_list_run_dirs_sorted_and_filtered(tmp_path):
     _make_run(tmp_path, "20260611-120000-bbbb")
@@ -94,7 +104,14 @@ def test_new_run_id_format():
 
 def test_write_pid(tmp_path):
     runs.write_pid(tmp_path)
-    assert (tmp_path / "engine.pid").read_text() == str(os.getpid())
+    tokens = (tmp_path / "engine.pid").read_text().split()
+    assert tokens[0] == str(os.getpid())
+    # identity is persisted as an optional second token so a reused pid can later be
+    # told from our engine; Linux always provides one (via /proc starttime).
+    if sys.platform.startswith("linux"):
+        assert len(tokens) == 2 and float(tokens[1]) > 0
+    elif len(tokens) > 1:
+        assert float(tokens[1]) > 0
 
 
 def test_attach_argv_outside_tmux(monkeypatch):
@@ -173,6 +190,47 @@ def test_engine_alive(tmp_path):
     assert runs.engine_alive(run_dir) is False
 
 
+def test_read_pid_identity_forms(tmp_path):
+    run_dir = _make_run(tmp_path, "r1")
+    assert runs.read_pid_identity(run_dir) == (None, None)  # missing
+    (run_dir / "engine.pid").write_text("4242")  # legacy: pid only
+    assert runs.read_pid_identity(run_dir) == (4242, None)
+    (run_dir / "engine.pid").write_text("4242 678.5")  # pid + identity
+    assert runs.read_pid_identity(run_dir) == (4242, 678.5)
+    (run_dir / "engine.pid").write_text("not-a-pid 1.0")  # unparseable pid
+    assert runs.read_pid_identity(run_dir) == (None, None)
+
+
+@pytest.mark.parametrize("identity_token", ["garbage", "nan", "inf", "-inf"])
+def test_engine_alive_malformed_identity_fails_closed(tmp_path, monkeypatch, identity_token):
+    # Two tokens means "identity was intended"; if token 2 is corrupt, do not
+    # degrade to legacy bare-existence liveness and report a reused pid as alive.
+    run_dir = _make_run(tmp_path, "r1")
+    (run_dir / "engine.pid").write_text(f"4242 {identity_token}")
+    monkeypatch.setattr(runs, "get_process_host", lambda: _FakeHost(alive=True, identity=123.0))
+    assert runs.engine_alive(run_dir) is False
+
+
+def test_engine_alive_reused_pid_reads_dead(tmp_path, monkeypatch):
+    # A stranger inherited the recorded pid: identity no longer matches → dead.
+    run_dir = _make_run(tmp_path, "r1")
+    (run_dir / "engine.pid").write_text("4242 123.0")
+    monkeypatch.setattr(runs, "get_process_host", lambda: _FakeHost(alive=True, identity=999.0))
+    assert runs.engine_alive(run_dir) is False
+    monkeypatch.setattr(runs, "get_process_host", lambda: _FakeHost(alive=True, identity=123.0))
+    assert runs.engine_alive(run_dir) is True
+
+
+def test_engine_alive_legacy_pid_degrades_to_existence(tmp_path, monkeypatch):
+    # A legacy pid file (no identity token) can only fall back to bare existence.
+    run_dir = _make_run(tmp_path, "r1")
+    (run_dir / "engine.pid").write_text("4242")
+    monkeypatch.setattr(runs, "get_process_host", lambda: _FakeHost(alive=True))
+    assert runs.engine_alive(run_dir) is True
+    monkeypatch.setattr(runs, "get_process_host", lambda: _FakeHost(alive=False))
+    assert runs.engine_alive(run_dir) is False
+
+
 # ---------------------------------------------------------------- stop / delete
 
 
@@ -243,9 +301,27 @@ def test_stop_run_force_kills_wedged_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(runs, "_STOP_WAIT_S", 0.05)
     monkeypatch.setattr(runs, "_STOP_POLL_S", 0.01)
     run_dir = _make_state_run(tmp_path, "r1")
-    (run_dir / "engine.pid").write_text("4242")
+    (run_dir / "engine.pid").write_text("4242 123.0")  # persisted identity
 
     host = _FakeHost(alive=True, identity=123.0)  # never exits, identity stable
+    monkeypatch.setattr(runs, "get_process_host", lambda: host)
+    assert runs.stop_run(run_dir) is True
+    assert host.force_killed == [4242]
+    assert load_state(run_dir).stopped is True
+
+
+def test_stop_run_force_kills_wedged_legacy_engine(tmp_path, monkeypatch):
+    """A legacy pid file (no persisted identity) can still force-kill a wedged
+    engine: the forced path falls back to a stop-time identity sample (today's
+    behavior) rather than refusing outright — no capability regression for
+    pre-upgrade runs."""
+    monkeypatch.setattr(runs, "kill_session", lambda _rid: None)
+    monkeypatch.setattr(runs, "_STOP_WAIT_S", 0.05)
+    monkeypatch.setattr(runs, "_STOP_POLL_S", 0.01)
+    run_dir = _make_state_run(tmp_path, "r1")
+    (run_dir / "engine.pid").write_text("4242")  # legacy: pid only, no identity token
+
+    host = _FakeHost(alive=True, identity=555.0)  # never exits, identity stable
     monkeypatch.setattr(runs, "get_process_host", lambda: host)
     assert runs.stop_run(run_dir) is True
     assert host.force_killed == [4242]
@@ -259,9 +335,11 @@ def test_stop_run_refuses_force_kill_on_identity_mismatch(tmp_path, monkeypatch)
     monkeypatch.setattr(runs, "_STOP_WAIT_S", 0.05)
     monkeypatch.setattr(runs, "_STOP_POLL_S", 0.01)
     run_dir = _make_state_run(tmp_path, "r1")
-    (run_dir / "engine.pid").write_text("4242")
+    (run_dir / "engine.pid").write_text("4242 123.0")  # persisted identity at run start
 
-    identities = iter([123.0, 999.0])  # recorded at stop-time, then changed
+    # matches the persisted identity at stop entry, then changes before the
+    # post-grace force-kill check (pid reused mid-grace).
+    identities = iter([123.0, 999.0])
     host = _FakeHost(alive=True, identity=lambda: next(identities))
     monkeypatch.setattr(runs, "get_process_host", lambda: host)
     with pytest.raises(runs.StopRunError):
@@ -283,6 +361,24 @@ def test_stop_run_refuses_force_kill_without_identity(tmp_path, monkeypatch):
     with pytest.raises(runs.StopRunError):
         runs.stop_run(run_dir)
     assert host.force_killed == []
+
+
+def test_stop_run_clean_stop_on_pre_stop_pid_reuse(tmp_path, monkeypatch):
+    """If the recorded pid was reused by an unrelated process before stop_run
+    ran, don't signal the stranger — fall back to a clean mark-stopped, with no
+    StopRunError and no terminate/force-kill."""
+    killed = []
+    monkeypatch.setattr(runs, "kill_session", lambda rid: killed.append(rid))
+    run_dir = _make_state_run(tmp_path, "r1")
+    (run_dir / "engine.pid").write_text("4242 123.0")  # recorded identity 123.0
+
+    host = _FakeHost(alive=True, identity=999.0)  # alive, but identity differs → reused
+    monkeypatch.setattr(runs, "get_process_host", lambda: host)
+    assert runs.stop_run(run_dir) is True
+    assert host.terminated == [] and host.force_killed == []  # stranger never signalled
+    assert load_state(run_dir).stopped is True
+    assert killed == ["r1"]
+    assert '"fallback": true' in (run_dir / "journal.jsonl").read_text()
 
 
 # ---------------------------------------------------------------- prune sessions

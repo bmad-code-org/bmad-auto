@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import shutil
 import signal
+import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,14 +276,28 @@ class Engine:
         if Engine._stop_signals_owner is not None:
             return
 
+        windows_ctrl_signals = {signal.SIGINT}
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            windows_ctrl_signals.add(sigbreak)
+
         def handler(signum, frame):  # noqa: ANN001 - stdlib signal signature
+            if sys.platform == "win32" and signum in windows_ctrl_signals:
+                try:
+                    self.journal.append("console-ctrl-ignored", signum=signum)
+                except Exception:  # noqa: BLE001  # best-effort signal-handler journal
+                    pass
+                return
             if self._stopping:
                 return  # already unwinding; don't re-raise during teardown
             self._stopping = True
             raise RunStopped()
 
         try:
-            for sig in (signal.SIGTERM, signal.SIGINT):
+            signals = [signal.SIGTERM, signal.SIGINT]
+            if sys.platform == "win32" and sigbreak is not None:
+                signals.append(sigbreak)
+            for sig in dict.fromkeys(signals):
                 self._prev_handlers[sig] = signal.signal(sig, handler)
         except ValueError:
             # not on the main thread — cannot install; degrade to no handler

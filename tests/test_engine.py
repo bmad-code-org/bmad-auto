@@ -1715,6 +1715,75 @@ def test_journal_log_position_covers_post_session_entries(project):
 # ----------------------------------------------------------- stop / SIGTERM
 
 
+@pytest.mark.parametrize(
+    ("signal_name", "fallback_signum"),
+    [("SIGINT", signal.SIGINT), ("SIGBREAK", 21)],
+)
+def test_windows_console_ctrl_signal_is_ignored(project, monkeypatch, signal_name, fallback_signum):
+    import automator.engine as engine_mod
+
+    signum = getattr(signal, signal_name, fallback_signum)
+    if signal_name == "SIGBREAK":
+        monkeypatch.setattr(signal, "SIGBREAK", signum, raising=False)
+
+    installed = {}
+    restored = {}
+    previous = {}
+
+    def fake_signal(sig, handler):
+        previous.setdefault(sig, object())
+        if callable(handler):
+            installed[sig] = handler
+        else:
+            restored[sig] = handler
+        return previous[sig]
+
+    monkeypatch.setattr(engine_mod.sys, "platform", "win32")
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    monkeypatch.setattr(engine_mod, "kill_session", lambda rid: None)
+
+    engine, _ = make_engine(project, [])
+    monkeypatch.setattr(engine, "_loop", lambda: installed[signum](signum, None))
+
+    summary = engine.run()
+
+    assert summary is not None
+    assert load_state(engine.run_dir).stopped is False
+    assert "console-ctrl-ignored" in (engine.run_dir / "journal.jsonl").read_text()
+    assert restored[signal.SIGTERM] is previous[signal.SIGTERM]
+    assert restored[signal.SIGINT] is previous[signal.SIGINT]
+    assert restored[signum] is previous[signum]
+    assert Engine._stop_signals_owner is None
+
+
+def test_non_windows_sigint_still_stops_run(project, monkeypatch):
+    import automator.engine as engine_mod
+
+    installed = {}
+    previous = {}
+
+    def fake_signal(sig, handler):
+        previous.setdefault(sig, object())
+        if callable(handler):
+            installed[sig] = handler
+        return previous[sig]
+
+    killed = []
+    monkeypatch.setattr(engine_mod.sys, "platform", "linux")
+    monkeypatch.setattr(signal, "signal", fake_signal)
+    monkeypatch.setattr(engine_mod, "kill_session", lambda rid: killed.append(rid))
+
+    engine, _ = make_engine(project, [])
+    monkeypatch.setattr(engine, "_loop", lambda: installed[signal.SIGINT](signal.SIGINT, None))
+
+    engine.run()
+
+    assert load_state(engine.run_dir).stopped is True
+    assert killed == ["test-run"]
+    assert "run-stop" in (engine.run_dir / "journal.jsonl").read_text()
+    assert Engine._stop_signals_owner is None
+
+
 def test_run_stopped_via_real_signal(project, monkeypatch):
     """SIGTERM unwinds the loop as RunStopped: the run is marked stopped, the
     agent session is torn down, and the prior signal handlers are restored."""
