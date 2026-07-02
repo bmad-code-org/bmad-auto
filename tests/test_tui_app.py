@@ -678,8 +678,7 @@ async def test_missed_decision_count_and_answer_via_modal(project):
         await until(pilot, lambda: "1 to answer" in str(deferred.border_title))
         await pilot.press("d")
         await until(pilot, lambda: isinstance(app.screen, DecisionModal))
-        await ready(pilot, "#opt-1")
-        await pilot.click("#opt-1")  # choose build
+        await pilot.click(await ready(pilot, "#opt-1"))  # choose build
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
     assert decisions.load_pre_answers(project.project)["DW-1"]["effect"] == "build"
 
