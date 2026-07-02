@@ -8,9 +8,17 @@ adapter (no tmux, no LLM).
 
 from __future__ import annotations
 
-import sys
-
-from conftest import _spec_baseline, git, set_sprint, write_spec, write_sprint
+from conftest import (
+    _OK,
+    _exists_run,
+    _seeded_then_touch,
+    _spec_baseline,
+    _touch_run,
+    git,
+    set_sprint,
+    write_spec,
+    write_sprint,
+)
 
 from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
@@ -504,35 +512,6 @@ def test_commit_message_template_applied(project):
 
 
 # ------------------------------------------------ per_worktree engine plugin
-
-
-_OK = "exit 0"  # cross-platform always-success verb (both `cmd /c` and `sh -c` honor it)
-_RUN = "%BMAD_AUTO_RUN_DIR%" if sys.platform == "win32" else "$BMAD_AUTO_RUN_DIR"
-
-
-def _touch_run(marker: str) -> str:
-    if sys.platform == "win32":
-        return f'type nul > "{_RUN}\\{marker}"'
-    return f'touch "{_RUN}/{marker}"'
-
-
-def _exists_run(marker: str) -> str:
-    if sys.platform == "win32":
-        return (
-            f'if exist "{_RUN}\\{marker}\\NUL" (exit 1) '
-            f'else if exist "{_RUN}\\{marker}" (exit 0) else (exit 1)'
-        )
-    return f'test -f "{_RUN}/{marker}"'
-
-
-def _seeded_then_touch(rel: str, marker: str) -> str:
-    if sys.platform == "win32":
-        norm_rel = rel.replace("/", "\\")
-        return (
-            f'if exist "{norm_rel}\\NUL" (exit 1) '
-            f'else if exist "{norm_rel}" (type nul > "{_RUN}\\{marker}") else (exit 1)'
-        )
-    return f'test -f "{rel}" && touch "{_RUN}/{marker}"'
 
 
 def _write_stub_plugin(project, name, *, ready=_OK, setup=_OK, teardown=_OK, seed_globs=None):

@@ -2,11 +2,11 @@
 
 import re
 import signal
-import sys
 from pathlib import Path
 
 import pytest
 from conftest import (
+    _file_exists_cmd,
     dev_effect,
     generic_dev_effect,
     git,
@@ -44,16 +44,6 @@ from automator.runs import rearm_escalation
 from automator.verify import GitError, read_frontmatter, rev_parse_head, worktree_clean
 
 QUIET = NotifyPolicy(desktop=False, file=True)
-
-
-def _file_exists_cmd(path) -> str:
-    """Shell verify command (run via shell=True) exiting 0 iff `path` exists, on the
-    host's shell — `test -f` (POSIX) / `if exist` (Windows cmd) — so the verify-gate
-    tests drive the real machinery on either OS, not a POSIX-only `test` that cmd
-    rejects with "'test' is not recognized"."""
-    if sys.platform == "win32":
-        return f'if exist "{path}\\NUL" (exit 1) else if exist "{path}" (exit 0) else (exit 1)'
-    return f'test -f "{path}"'
 
 
 def make_engine(project, script, policy=None, **kwargs) -> tuple[Engine, MockAdapter]:
