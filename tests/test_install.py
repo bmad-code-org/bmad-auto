@@ -1,5 +1,7 @@
 import json
 
+from conftest import git
+
 from automator import verify
 from automator.adapters.profile import get_profile
 from automator.install import (
@@ -438,3 +440,4 @@ def test_provision_worktree_seed_globs_shielded_in_local_exclude(project, tmp_pa
     assert (wt / ".claude" / "skills" / "tests-run" / "SKILL.md").is_file()
     exclude = (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8").splitlines()
     assert "/.claude/skills/tests-run" in exclude
+    assert git(wt, "status", "--short", "--", ".claude/skills/tests-run") == ""

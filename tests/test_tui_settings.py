@@ -173,6 +173,10 @@ async def open_settings(app, pilot) -> SettingsScreen:
     await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
     await pilot.press("g")
     await until(pilot, lambda: isinstance(app.screen, SettingsScreen))
+    # push_screen swaps app.screen before the form's fields mount; a bare screen-type
+    # wait lets the first query_one NoMatches on a slow CI runner. The fields mount as
+    # one batch, so waiting for any Input gates every later query_one in the callers.
+    await until(pilot, lambda: bool(app.screen.query(Input)))
     return app.screen
 
 
@@ -275,8 +279,9 @@ async def test_settings_screen_unity_roster_reveals_settings_on_enable(project):
         cfg = screen.query_one("#plugin-cfg-unity", Collapsible)
         assert cfg.display is False  # settings hidden until enabled
         screen.query_one("#plugin-enabled-unity", Switch).value = True
-        await pilot.pause()
-        assert cfg.display is True  # revealed live on enable
+        # Switch.Changed reveals the sub-collapsible on a later tick; a single
+        # pause() can race that delivery on a slow CI runner, so wait it out.
+        await until(pilot, lambda: cfg.display is True)  # revealed live on enable
 
     write_policy_enabling_unity(project)
     app = BmadAutoApp(project.project)
@@ -380,9 +385,10 @@ async def test_settings_screen_stage_override_roundtrip(project):
         screen.query_one("#adapter-review-model", Input).value = "gpt-5-codex"
         override = screen.query_one("#adapter-extra_args-override", Switch)
         override.value = True
-        await pilot.pause()
         args_box = screen.query_one("#adapter-extra_args", Input)
-        assert not args_box.disabled  # override switch enables the input
+        # Switch.Changed enables the Input on a later tick; a single pause() can
+        # race that delivery on a slow CI runner, so wait for the derived state.
+        await until(pilot, lambda: not args_box.disabled)  # override enables input
         args_box.value = "--permission-mode bypassPermissions"
         await pilot.press("ctrl+s")
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))

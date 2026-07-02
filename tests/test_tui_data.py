@@ -6,6 +6,7 @@ import builtins
 import importlib
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from conftest import install_bmad_config, write_sprint
@@ -32,7 +33,7 @@ def make_run(root: Path, run_id: str, **state_kwargs) -> Path:
 
 def dead_pid() -> int:
     """Pid guaranteed (modulo astronomically unlikely reuse) to be dead."""
-    proc = subprocess.Popen(["true"])
+    proc = subprocess.Popen([sys.executable, "-c", ""])
     proc.wait()
     return proc.pid
 

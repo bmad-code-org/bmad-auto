@@ -95,6 +95,24 @@ async def until(pilot, condition, timeout: float = 10.0) -> None:
         waited += 0.05
 
 
+async def ready(pilot, selector: str):
+    """Wait until a modal widget is mounted *and* laid out on-screen, then return it.
+
+    A screen-type `until` returns the instant push_screen swaps app.screen — before
+    the modal's children mount (query NoMatches) or receive a layout region (click
+    OutOfBounds, region still 0). Gating on a real on-screen region makes the
+    following query_one / click / value-set safe on slow CI runners. A modal's
+    widgets mount and lay out together, so one gate covers every field in it."""
+
+    def _hit():
+        hits = pilot.app.screen.query(selector)
+        node = hits.first() if hits else None
+        return node if node is not None and node.region.area > 0 else None
+
+    await until(pilot, lambda: _hit() is not None)
+    return _hit()
+
+
 def dashboard(app: BmadAutoApp) -> DashboardScreen:
     assert isinstance(app.screen, DashboardScreen)
     return app.screen
@@ -543,6 +561,7 @@ async def test_deferred_pane_lists_and_opens_modal(project):
         deferred.highlighted = 0
         await pilot.press("enter")
         await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        await ready(pilot, "Static")  # body mounts a tick after the screen swaps
         statics = app.screen.query("Static")
         assert any("location: a.py:1" in str(s.content) for s in statics)
         await pilot.press("escape")
@@ -592,6 +611,7 @@ async def test_deferred_pane_shows_legacy_items(project):
         deferred.highlighted = 1
         await pilot.press("enter")
         await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        await ready(pilot, "Static")  # body mounts a tick after the screen swaps
         statics = app.screen.query("Static")
         assert any("legacy — converted to DW format" in str(s.content) for s in statics)
         await pilot.press("escape")
@@ -658,7 +678,7 @@ async def test_missed_decision_count_and_answer_via_modal(project):
         await until(pilot, lambda: "1 to answer" in str(deferred.border_title))
         await pilot.press("d")
         await until(pilot, lambda: isinstance(app.screen, DecisionModal))
-        await pilot.click("#opt-1")  # choose build
+        await pilot.click(await ready(pilot, "#opt-1"))  # choose build
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
     assert decisions.load_pre_answers(project.project)["DW-1"]["effect"] == "build"
 
@@ -743,6 +763,7 @@ async def test_start_run_modal_launches(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
         await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        await ready(pilot, "#ok")
         app.screen.query_one("#epic", Input).value = "2"
         app.screen.query_one("#max-stories", Input).value = "3"
         await pilot.click("#ok")
@@ -771,7 +792,7 @@ async def test_dirty_worktree_blocks_launch(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
         await until(pilot, lambda: isinstance(app.screen, StartRunModal))
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(pilot, lambda: any("not clean" in m for m in notifications(app)))
         assert not calls
 
@@ -786,7 +807,7 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
         await until(pilot, lambda: isinstance(app.screen, StartRunModal))
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(
             pilot,
             lambda: (
@@ -794,7 +815,7 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
                 and not isinstance(app.screen, ConfirmResumeModal)
             ),
         )
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(pilot, lambda: bool(calls))
 
 
@@ -816,6 +837,7 @@ async def test_start_sweep_modal_launches(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("s")
         await until(pilot, lambda: isinstance(app.screen, StartSweepModal))
+        await ready(pilot, "#ok")
         app.screen.query_one("#no-prompt", Checkbox).value = True
         await pilot.click("#ok")
         await until(pilot, lambda: bool(calls))
@@ -839,12 +861,13 @@ async def test_dry_run_shows_captured_output(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("r")
         await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        await ready(pilot, "#ok")
         app.screen.query_one("#dry-run", Checkbox).value = True
         await pilot.click("#ok")
         await until(pilot, lambda: isinstance(app.screen, TextOutputModal))
         assert seen["tail"][0] == "run"
         assert "--dry-run" in seen["tail"]
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
 
 
@@ -855,6 +878,7 @@ async def test_validate_shows_output_modal(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("v")
         await until(pilot, lambda: isinstance(app.screen, TextOutputModal))
+        await ready(pilot, "Label")  # body mounts a tick after the screen swaps
         labels = app.screen.query("Label")
         assert any("exit 1" in str(label.content) for label in labels)
 
@@ -876,7 +900,7 @@ async def test_resume_confirm_launches(project, monkeypatch):
         await until(pilot, lambda: dashboard(app).selected_run_id is not None)
         await pilot.press("e")
         await until(pilot, lambda: isinstance(app.screen, ConfirmResumeModal))
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(pilot, lambda: calls == ["20260611-100000-aaaa"])
 
 
@@ -1085,7 +1109,7 @@ async def test_resolve_escalation_launches_and_attaches(project, monkeypatch):
         await until(pilot, lambda: dashboard(app).selected_run_id is not None)
         await pilot.press("R")
         await until(pilot, lambda: isinstance(app.screen, ConfirmModal))
-        await pilot.click("#ok")
+        await pilot.click(await ready(pilot, "#ok"))
         await until(pilot, lambda: bool(calls))
     assert launched == ["20260611-100000-aaaa"]
     assert selected == ["@7"]

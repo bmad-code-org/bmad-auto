@@ -4,6 +4,7 @@ that simulate the side effects skill sessions would have on disk."""
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,82 @@ import yaml
 from automator.adapters.base import SessionResult, SessionSpec
 from automator.bmadconfig import ProjectPaths
 from automator.verify import rev_parse_head
+
+# The suite reads/writes UTF-8 files (specs, journals, JSON, reports). Windows'
+# default text encoding is cp1252, so a plain read_text()/open() throws
+# UnicodeDecodeError on any non-ASCII byte — a whole class of "passes on Linux,
+# dies on Windows" failures. Require UTF-8 mode on win32 so local runs match CI
+# (whose windows job sets PYTHONUTF8=1) instead of failing with cryptic charmap
+# errors deep in an unrelated test.
+if sys.platform == "win32" and not sys.flags.utf8_mode:
+    raise pytest.UsageError(
+        "Windows test runs must use UTF-8 mode: set PYTHONUTF8=1 or pass -X utf8 "
+        "(e.g. `set PYTHONUTF8=1 && uv run pytest`). The suite assumes UTF-8 to "
+        "match the files under test; CI's windows job sets this automatically."
+    )
+
+
+def write_script_launcher(directory: Path, name: str, body: str) -> Path:
+    """Write a fake CLI launcher for the host OS."""
+    directory = Path(directory)
+    sidecar = directory / f"{name}.py"
+    sidecar.write_text(body, encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = directory / f"{name}.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{sidecar}" %*\r\n', encoding="utf-8")
+    else:
+        launcher = directory / name
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{sidecar}" "$@"\n', encoding="utf-8"
+        )
+        launcher.chmod(0o755)
+    return launcher
+
+
+# ---- host-shell verify/lifecycle stub commands (single platform-detection spot) ----
+# The engine runs verify/plugin-lifecycle commands via the host shell (`sh -c` on
+# POSIX, `cmd /c` on Windows), so tests that assert on that machinery need commands
+# both shells honor. These build them per-OS in one place instead of each test file
+# re-deriving the win32 branch.
+
+_OK = "exit 0"  # cross-platform always-success verb (both `cmd /c` and `sh -c` honor it)
+_RUN = "%BMAD_AUTO_RUN_DIR%" if sys.platform == "win32" else "$BMAD_AUTO_RUN_DIR"
+
+
+def _file_exists_cmd(path) -> str:
+    """Shell verify command (run via shell=True) exiting 0 iff `path` exists, on the
+    host's shell — `test -f` (POSIX) / `if exist` (Windows cmd) — so the verify-gate
+    tests drive the real machinery on either OS, not a POSIX-only `test` that cmd
+    rejects with "'test' is not recognized"."""
+    if sys.platform == "win32":
+        return f'if exist "{path}\\NUL" (exit 1) else if exist "{path}" (exit 0) else (exit 1)'
+    return f'test -f "{path}"'
+
+
+def _touch_run(marker: str) -> str:
+    if sys.platform == "win32":
+        return f'type nul > "{_RUN}\\{marker}"'
+    return f'touch "{_RUN}/{marker}"'
+
+
+def _exists_run(marker: str) -> str:
+    if sys.platform == "win32":
+        return (
+            f'if exist "{_RUN}\\{marker}\\NUL" (exit 1) '
+            f'else if exist "{_RUN}\\{marker}" (exit 0) else (exit 1)'
+        )
+    return f'test -f "{_RUN}/{marker}"'
+
+
+def _seeded_then_touch(rel: str, marker: str) -> str:
+    if sys.platform == "win32":
+        norm_rel = rel.replace("/", "\\")
+        return (
+            f'if exist "{norm_rel}\\NUL" (exit 1) '
+            f'else if exist "{norm_rel}" (type nul > "{_RUN}\\{marker}") else (exit 1)'
+        )
+    return f'test -f "{rel}" && touch "{_RUN}/{marker}"'
+
 
 SPRINT_TEMPLATE = {
     "generated": "01-06-2026 10:00",

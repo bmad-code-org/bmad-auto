@@ -37,7 +37,9 @@ def _make_state_run(project, run_id, **state_kwargs):
 
 
 def _dead_pid() -> int:
-    proc = subprocess.Popen(["true"])
+    # A process that exits immediately, cross-platform (POSIX `true` isn't on
+    # Windows). The interpreter is always present and on every host.
+    proc = subprocess.Popen([sys.executable, "-c", ""])
     proc.wait()
     return proc.pid
 

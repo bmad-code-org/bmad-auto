@@ -180,6 +180,8 @@ def _worktree_local_exclude(worktree: Path, patterns: Sequence[str]) -> None:
     git's standard local-only exclude (never committed or pushed); it does not
     affect already-tracked files. Best-effort — skipped if git can't be queried.
     """
+    # Callers pass POSIX-slash patterns (glob rels via as_posix; config strings as
+    # authored); git's exclude is POSIX-slash on every platform, so nothing to fix here.
     try:
         common = subprocess.run(
             ["git", "-C", str(worktree), "rev-parse", "--git-common-dir"],
@@ -311,7 +313,8 @@ def provision_worktree(
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             _copy_traversable(src, dst)
-            seeded.append(str(rel))
+            # as_posix so the exclude pattern anchors on Windows too (os.sep would not)
+            seeded.append(rel.as_posix())
 
     # bundled skills into each CLI's skill tree (deduped: codex+gemini share one);
     # never clobber a skill the checkout already carries (tracked or pre-existing).

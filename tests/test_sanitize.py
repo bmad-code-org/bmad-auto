@@ -10,7 +10,10 @@ from automator import sanitize
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    # os.path.expanduser reads HOME on POSIX; force a clean cache-free lookup
+    # os.path.expanduser reads HOME on POSIX but USERPROFILE on Windows; set both so
+    # the fake home actually takes effect on either host (else expanduser returns the
+    # real profile, which is a *prefix* of tmp_path → spurious partial redaction).
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     return str(tmp_path)
 
 

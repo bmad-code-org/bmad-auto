@@ -8,7 +8,17 @@ adapter (no tmux, no LLM).
 
 from __future__ import annotations
 
-from conftest import _spec_baseline, git, set_sprint, write_spec, write_sprint
+from conftest import (
+    _OK,
+    _exists_run,
+    _seeded_then_touch,
+    _spec_baseline,
+    _touch_run,
+    git,
+    set_sprint,
+    write_spec,
+    write_sprint,
+)
 
 from automator.adapters.base import SessionResult
 from automator.adapters.mock import MockAdapter
@@ -504,9 +514,7 @@ def test_commit_message_template_applied(project):
 # ------------------------------------------------ per_worktree engine plugin
 
 
-def _write_stub_plugin(
-    project, name, *, ready="true", setup="true", teardown="true", seed_globs=None
-):
+def _write_stub_plugin(project, name, *, ready=_OK, setup=_OK, teardown=_OK, seed_globs=None):
     """A project-local *declarative* plugin whose lifecycle hooks are shell stubs
     (no real Unity) — proving a generic data-only plugin can gate the engine's
     per_worktree flow. A blocking hook's non-zero exit vetoes (defers) the unit.
@@ -558,10 +566,9 @@ def test_per_worktree_setup_then_gate_then_teardown_and_seed(project):
     _write_stub_plugin(
         project,
         "stub",
-        setup="test -f .claude/skills/gameobject-create/SKILL.md "
-        '&& touch "$BMAD_AUTO_RUN_DIR/setup-done"',
-        ready='test -f "$BMAD_AUTO_RUN_DIR/setup-done"',
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        setup=_seeded_then_touch(".claude/skills/gameobject-create/SKILL.md", "setup-done"),
+        ready=_exists_run("setup-done"),
+        teardown=_touch_run("teardown-done"),
         seed_globs=[".claude/skills/*"],
     )
     engine, adapter = make_engine(
@@ -591,7 +598,7 @@ def test_per_worktree_setup_failure_defers_and_skips_session(project):
         project,
         "stub",
         setup="exit 3",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, adapter = make_engine(
         project,
@@ -622,7 +629,7 @@ def test_per_worktree_ready_gate_failure_defers(project):
         project,
         "stub",
         ready="exit 1",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, adapter = make_engine(
         project,
@@ -648,7 +655,7 @@ def test_per_worktree_teardown_runs_on_pause(project):
     _write_stub_plugin(
         project,
         "stub",
-        teardown='touch "$BMAD_AUTO_RUN_DIR/teardown-done"',
+        teardown=_touch_run("teardown-done"),
     )
     engine, _ = make_engine(
         project,
