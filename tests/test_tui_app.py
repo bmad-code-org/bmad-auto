@@ -822,6 +822,31 @@ async def test_unknown_pid_run_asks_for_confirmation(project, monkeypatch):
         assert not calls
 
 
+async def test_legacy_pidless_but_live_run_asks_for_confirmation(project, monkeypatch):
+    # A legacy run has no engine.pid but is provably alive via its mux session
+    # (liveness == "alive"). The launch guard must still catch it — the pid gate
+    # alone would skip a running engine and allow a conflicting launch.
+    calls = []
+    monkeypatch.setattr(launch, "tmux_available", lambda: True)
+    monkeypatch.setattr(launch, "start_run_detached", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(data, "liveness", lambda run_dir: "alive")
+    make_run(project.project, "20260611-100000-aaaa")  # no engine.pid: legacy run
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        await pilot.press("r")
+        await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        await pilot.click("#ok")
+        await until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ConfirmModal)
+                and not isinstance(app.screen, ConfirmResumeModal)
+            ),
+        )
+        assert not calls
+
+
 async def test_start_sweep_modal_launches(project, monkeypatch):
     calls = {}
     monkeypatch.setattr(launch, "tmux_available", lambda: True)

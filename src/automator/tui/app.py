@@ -40,7 +40,13 @@ from .settings import PolicyDoc
 
 
 def _engine_possibly_live(run_dir: Path) -> bool:
-    return runs.read_pid(run_dir) is not None and data.liveness(run_dir) != "dead"
+    live = data.liveness(run_dir)
+    if live == "alive":  # provably live, pid-backed or via a legacy session
+        return True
+    # 'unknown' means possibly-live only for a pid-backed run (a win32 engine
+    # whose pid exists but is unreadable). A legacy pid-less run's 'unknown' just
+    # means no session was found — it must not flag every old finished run.
+    return live == "unknown" and runs.read_pid(run_dir) is not None
 
 
 class BmadAutoApp(App[None]):
