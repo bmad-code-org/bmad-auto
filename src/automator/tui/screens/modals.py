@@ -169,7 +169,7 @@ class ConfirmModal(BaseDialog):
 
 class ConfirmResumeModal(ConfirmModal):
     """Resume confirmation with pause details and a double-drive warning when
-    the recorded engine pid is still alive."""
+    the recorded engine pid may still be live."""
 
     def __init__(self, run_id: str, state: RunState, engine_alive: bool):
         body = Text()
@@ -183,7 +183,7 @@ class ConfirmResumeModal(ConfirmModal):
         else:
             body.append("run is not paused — it looks interrupted", style="dim")
         warning = (
-            "engine.pid is still alive — resuming would double-drive this run"
+            "engine.pid may still be live — resuming could double-drive this run"
             if engine_alive
             else None
         )

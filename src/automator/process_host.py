@@ -79,16 +79,31 @@ class ProcessHost(ABC):
         platform that can't provide one) degrades to :meth:`is_alive` — today's
         bare-existence behavior, with the documented residual reuse risk. Kept
         distinct from :meth:`is_alive` so existence and ownership are never
-        conflated again."""
+        conflated again.
+
+        Destructive paths use this strict check; non-destructive TUI reads use
+        :meth:`liveness_of` to preserve an ``'unknown'`` state."""
         if pid <= 0:
             return False
         if identity is None:
             return self.is_alive(pid)
-        # identity(pid) != the recorded value whenever the pid is gone, reused, or
-        # merely unreadable (a permission glitch, or no psutil off-Linux) — every
-        # case reads False (not-ours). An unreadable identity on a live pid thus
-        # reads as dead: the documented residual, deliberately biased safe.
+        # Gone, reused, or unreadable all read not-ours here.
         return self.identity(pid) == identity
+
+    def liveness_of(self, pid: int, identity: float | None) -> str:
+        """Non-destructive tri-state read of *our* engine: ``'alive'`` |
+        ``'dead'`` | ``'unknown'``. A pid that still exists but whose identity is
+        unreadable reads ``'unknown'``, never ``'dead'``."""
+        if pid <= 0:
+            return "dead"
+        if identity is None:
+            return "alive" if self.is_alive(pid) else "dead"
+        current = self.identity(pid)
+        if current == identity:
+            return "alive"
+        if current is None and self.is_alive(pid):
+            return "unknown"
+        return "dead"
 
     def shell_quote(self, arg: str) -> str:
         """Quote ``arg`` for the shell that runs this host's hook commands, so the

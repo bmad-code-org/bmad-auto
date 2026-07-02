@@ -128,6 +128,20 @@ def test_discover_runs_classification(tmp_path):
     assert [i.status for i in data.discover_runs(tmp_path)] == [i.status for i in infos]
 
 
+def test_live_pid_with_unreadable_identity_is_unknown_not_interrupted(tmp_path, monkeypatch):
+    run_dir = make_run(tmp_path, "20260611-100000-aaaa")
+    (run_dir / "engine.pid").write_text("4242 123.0")
+
+    class Host:
+        def liveness_of(self, pid, identity):
+            return "unknown"
+
+    host = Host()
+    monkeypatch.setattr(data, "get_process_host", lambda: host)
+    assert data.liveness(run_dir) == "unknown"
+    assert data.discover_runs(tmp_path)[0].status == data.UNKNOWN
+
+
 def test_stopped_run_classifies_as_stopped_not_interrupted(tmp_path):
     # a deliberate stop leaves a dead pid; it must read STOPPED, not INTERRUPTED
     run_dir = make_run(tmp_path, "20260611-100000-aaaa", stopped=True)

@@ -74,10 +74,8 @@ def liveness(run_dir: Path) -> str:
     if pid is None:
         return _session_liveness(run_dir.name)
     try:
-        # identity-aware: a reused pid (a stranger inheriting the number) reads as
-        # 'dead', not a false RUNNING. Legacy pid file (identity None) degrades to a
-        # bare existence probe.
-        return "alive" if get_process_host().alive_and_ours(pid, identity) else "dead"
+        # non-destructive identity-aware tri-state probe
+        return get_process_host().liveness_of(pid, identity)
     except Exception:
         # never falsely dead — an unexpected probe failure stays 'unknown'
         return "unknown"

@@ -70,8 +70,8 @@ class _FakeHost:
         return self._identity() if callable(self._identity) else self._identity
 
     def alive_and_ours(self, pid, identity):
-        # Mirrors ProcessHost.alive_and_ours: pid<=0 short-circuits, identity None
-        # degrades to is_alive, else the recorded identity must still match.
+        # Mirrors ProcessHost.alive_and_ours (strict): pid<=0 short-circuits, identity
+        # None degrades to is_alive, else the recorded identity must still match.
         if pid <= 0:
             return False
         if identity is None:

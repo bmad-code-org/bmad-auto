@@ -108,7 +108,27 @@ def test_alive_and_ours_matches_only_same_identity(host, monkeypatch):
     assert host.alive_and_ours(4242, 123.0) is True
     assert host.alive_and_ours(4242, 999.0) is False  # reused
     monkeypatch.setattr(host, "identity", lambda pid: None)
-    assert host.alive_and_ours(4242, 123.0) is False  # gone
+    assert host.alive_and_ours(4242, 123.0) is False  # gone or unreadable → not-ours
+
+
+def test_liveness_of_reads_alive_dead_and_unknown(host, monkeypatch):
+    monkeypatch.setattr(host, "identity", lambda pid: 123.0)
+    assert host.liveness_of(4242, 123.0) == "alive"  # identity matches → ours
+    assert host.liveness_of(4242, 999.0) == "dead"  # readable-but-different → reused
+
+    monkeypatch.setattr(host, "identity", lambda pid: None)
+    monkeypatch.setattr(host, "is_alive", lambda pid: True)
+    assert host.liveness_of(4242, 123.0) == "unknown"
+    monkeypatch.setattr(host, "is_alive", lambda pid: False)
+    assert host.liveness_of(4242, 123.0) == "dead"
+
+
+def test_liveness_of_legacy_identity_degrades_to_is_alive(host, monkeypatch):
+    # A legacy pid file (no persisted identity) can only fall back to bare existence.
+    monkeypatch.setattr(host, "is_alive", lambda pid: pid == 4242)
+    assert host.liveness_of(4242, None) == "alive"
+    assert host.liveness_of(9999, None) == "dead"
+    assert host.liveness_of(0, None) == "dead"
 
 
 def test_default_host_matches_platform(monkeypatch):

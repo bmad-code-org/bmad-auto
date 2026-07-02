@@ -798,6 +798,55 @@ async def test_live_run_asks_for_confirmation(project, monkeypatch):
         await until(pilot, lambda: bool(calls))
 
 
+async def test_unknown_pid_run_asks_for_confirmation(project, monkeypatch):
+    calls = []
+    monkeypatch.setattr(launch, "tmux_available", lambda: True)
+    monkeypatch.setattr(launch, "start_run_detached", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(data, "liveness", lambda run_dir: "unknown")
+    run_dir = make_run(project.project, "20260611-100000-aaaa")
+    (run_dir / "engine.pid").write_text("4242 123.0", encoding="utf-8")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        await pilot.press("r")
+        await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        await pilot.click("#ok")
+        await until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ConfirmModal)
+                and not isinstance(app.screen, ConfirmResumeModal)
+            ),
+        )
+        assert "unknown" in app.screen._body.plain
+        assert not calls
+
+
+async def test_legacy_pidless_but_live_run_asks_for_confirmation(project, monkeypatch):
+    # A legacy run has no engine.pid but is provably alive via its mux session
+    # (liveness == "alive"). The launch guard must still catch it — the pid gate
+    # alone would skip a running engine and allow a conflicting launch.
+    calls = []
+    monkeypatch.setattr(launch, "tmux_available", lambda: True)
+    monkeypatch.setattr(launch, "start_run_detached", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(data, "liveness", lambda run_dir: "alive")
+    make_run(project.project, "20260611-100000-aaaa")  # no engine.pid: legacy run
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        await pilot.press("r")
+        await until(pilot, lambda: isinstance(app.screen, StartRunModal))
+        await pilot.click("#ok")
+        await until(
+            pilot,
+            lambda: (
+                isinstance(app.screen, ConfirmModal)
+                and not isinstance(app.screen, ConfirmResumeModal)
+            ),
+        )
+        assert not calls
+
+
 async def test_start_sweep_modal_launches(project, monkeypatch):
     calls = {}
     monkeypatch.setattr(launch, "tmux_available", lambda: True)
@@ -878,6 +927,25 @@ async def test_resume_confirm_launches(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, ConfirmResumeModal))
         await pilot.click("#ok")
         await until(pilot, lambda: calls == ["20260611-100000-aaaa"])
+
+
+async def test_resume_unknown_pid_warns(project, monkeypatch):
+    monkeypatch.setattr(launch, "tmux_available", lambda: True)
+    monkeypatch.setattr(data, "liveness", lambda run_dir: "unknown")
+    run_dir = make_run(
+        project.project,
+        "20260611-100000-aaaa",
+        paused_stage="DEV_VERIFY",
+        paused_reason="verify failed",
+    )
+    (run_dir / "engine.pid").write_text("4242 123.0", encoding="utf-8")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        await until(pilot, lambda: dashboard(app).selected_run_id is not None)
+        await pilot.press("e")
+        await until(pilot, lambda: isinstance(app.screen, ConfirmResumeModal))
+        assert "may still be live" in app.screen._warning
 
 
 async def test_resume_finished_run_refused(project, monkeypatch):
@@ -1092,6 +1160,27 @@ async def test_resolve_escalation_launches_and_attaches(project, monkeypatch):
     assert calls == [["tmux", "switch-client", "-t", "=bmad-auto-ctl"]]
     # resolve runs in the freshly launched ctl window (@7) — stamp it to return
     assert stamps == [("@7", "%9")]
+
+
+async def test_resolve_unknown_pid_refused(project, monkeypatch):
+    launched: list[str] = []
+    monkeypatch.setattr(launch, "tmux_available", lambda: True)
+    monkeypatch.setattr(data, "liveness", lambda run_dir: "unknown")
+    monkeypatch.setattr(launch, "start_resolve_detached", lambda proj, rid: launched.append(rid))
+    run_dir = make_run(
+        project.project,
+        "20260611-100000-aaaa",
+        paused_stage="escalation",
+        paused_reason="CRITICAL escalation",
+    )
+    (run_dir / "engine.pid").write_text("4242 123.0", encoding="utf-8")
+    app = BmadAutoApp(project.project)
+    async with app.run_test() as pilot:
+        await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
+        await until(pilot, lambda: dashboard(app).selected_run_id is not None)
+        await pilot.press("R")
+        await until(pilot, lambda: any("may still be live" in m for m in notifications(app)))
+    assert launched == []
 
 
 async def test_resolve_refused_when_not_escalation(project, monkeypatch):
