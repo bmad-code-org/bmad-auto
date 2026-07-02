@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,20 @@ def _git_raw(repo: Path, *args: str) -> tuple[int, str]:
         timeout=GIT_TIMEOUT_S,
     )
     return proc.returncode, proc.stdout
+
+
+def _git_env(repo: Path, *args: str, env: dict[str, str]) -> tuple[int, str]:
+    """Like `_git` but runs with an explicit environment — used to point git at a
+    throwaway `GIT_INDEX_FILE` so a snapshot can stage the tree without touching
+    the real index."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT_S,
+        env=env,
+    )
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
 def rev_parse_head(repo: Path) -> str:
@@ -231,6 +246,54 @@ def preserve_commits(
     rc, out = _git(repo, "branch", "-f", ref_name, "HEAD")
     if rc != 0:
         raise GitError(f"git branch -f {ref_name} HEAD failed in {repo}: {out}")
+    return ref_name
+
+
+def snapshot_worktree(repo: Path, ref_name: str) -> str | None:
+    """Park the current *uncommitted* working-tree state — tracked edits AND
+    untracked, non-ignored files — under ``ref_name`` as a commit object, so a
+    following ``git reset --hard`` (whose post-reset cleanup in
+    :func:`safe_rollback` also deletes run-created untracked files) cannot
+    silently destroy an attempt's in-progress work. The snapshot survives
+    ``git gc`` and is recoverable by name (``git checkout <ref> -- .`` or
+    ``git diff HEAD <ref>``).
+
+    Captured through a throwaway temp index so the real index and working tree
+    are left untouched: seed the temp index from HEAD, ``add -A`` into it (which
+    honours ``.gitignore``, so ignored build output is never snapshotted), write a
+    tree, and ``commit-tree`` it parented at HEAD, then point ``ref_name`` at the
+    result. Compares only against HEAD — committed work above baseline is already
+    parked by :func:`preserve_commits`, so this captures exactly what is not yet
+    committed.
+
+    Returns ``ref_name`` on success, or ``None`` when the tree is clean relative
+    to HEAD (nothing to preserve — the intended non-destructive uncommitted-revert
+    case). Raises :class:`GitError` on any git failure so a caller can never
+    mistake a capture failure for a harmless no-op and reset past unpreserved
+    work."""
+    head = rev_parse_head(repo)
+    with tempfile.TemporaryDirectory() as td:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(td) / "index")}
+        for args in (("read-tree", head), ("add", "-A")):
+            rc, out = _git_env(repo, *args, env=env)
+            if rc != 0:
+                raise GitError(f"git {args[0]} (snapshot) failed in {repo}: {out}")
+        rc, tree = _git_env(repo, "write-tree", env=env)
+        if rc != 0:
+            raise GitError(f"git write-tree (snapshot) failed in {repo}: {tree}")
+    tree = tree.strip()
+    rc, head_tree = _git(repo, "rev-parse", f"{head}^{{tree}}")
+    if rc != 0:
+        raise GitError(f"git rev-parse {head}^{{tree}} failed in {repo}: {head_tree}")
+    if tree == head_tree.strip():
+        return None  # working tree identical to HEAD — nothing uncommitted to park
+    rc, snap = _git(repo, "commit-tree", tree, "-p", head, "-m", "attempt worktree snapshot")
+    if rc != 0:
+        raise GitError(f"git commit-tree (snapshot) failed in {repo}: {snap}")
+    snap = snap.strip()
+    rc, out = _git(repo, "update-ref", ref_name, snap)
+    if rc != 0:
+        raise GitError(f"git update-ref {ref_name} {snap[:12]} failed in {repo}: {out}")
     return ref_name
 
 

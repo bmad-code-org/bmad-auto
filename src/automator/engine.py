@@ -698,15 +698,30 @@ class Engine:
         ss = load_sprint_status(self.paths.sprint_status)
         if ss.unknown_keys:
             self.journal.append("sprint-status-unknown-keys", keys=list(ss.unknown_keys))
-        skip = set(self.state.tasks)  # anything this run already touched
-        while True:
-            story = next_actionable(ss, skip)
-            if story is None:
-                return None
-            if not self._selector.matches(story):
-                skip.add(story.key)
-                continue
-            return story
+        base_skip = set(self.state.tasks)  # anything this run already touched
+
+        def _first(epic: int | None):
+            # local skip copy so selector-rejections in this pass don't leak into
+            # the next one (a story rejected here may still match the fallback).
+            skip = set(base_skip)
+            while True:
+                story = next_actionable(ss, skip, epic=epic)
+                if story is None:
+                    return None
+                if not self._selector.matches(story):
+                    skip.add(story.key)
+                    continue
+                return story
+
+        # Exhaust the current epic before advancing. Selection is otherwise
+        # strict file order, and epics need not be file-ordered by number (an
+        # epic can be appended out of place); without this, a still-open earlier-
+        # in-file epic would "steal" the pick and fire a spurious epic boundary.
+        if self.state.current_epic is not None:
+            story = _first(self.state.current_epic)
+            if story is not None:
+                return story
+        return _first(None)
 
     def _protected_relpaths(self) -> tuple[str, ...]:
         """Repo-relative posix paths of the BMAD artifact folders. These are
@@ -775,6 +790,11 @@ class Engine:
             # preserves best-effort but never blocks; a plain rollback pauses rather
             # than reset past work it could not park.
             self._preserve_attempt_commits(task, allow_pause=not redrive)
+            # Park the attempt's uncommitted diff too, so the reset below (and its
+            # untracked cleanup) can't silently destroy in-progress work. Runs only
+            # if _preserve_attempt_commits did not pause (plain-rollback preserve
+            # failure); best-effort, never blocks.
+            self._preserve_attempt_worktree(task)
             self._safe_reset(task, preserve=protected)
             return
         self._pause_for_manual_recovery(task, task.baseline_commit or "")
@@ -841,6 +861,31 @@ class Engine:
         self.journal.append(
             "attempt-commits-preserved", story_key=task.story_key, ref=ref, count=len(commits)
         )
+
+    def _preserve_attempt_worktree(self, task: StoryTask) -> None:
+        """Before an auto-rollback's hard reset, park the attempt's *uncommitted*
+        working-tree changes (tracked edits + run-created untracked files) under a
+        named recovery ref, so `reset --hard baseline` and its untracked cleanup
+        can't silently destroy in-progress work. Complements
+        `_preserve_attempt_commits` (which parks *committed* work above baseline);
+        together they cover the whole attempt. No-op when the tree is clean vs HEAD
+        — the intended non-destructive uncommitted-revert case. Best-effort: a
+        capture failure is journaled but never blocks the (human-directed re-drive
+        or policy-gated) reset — the recovery ref is a safety net, not a gate."""
+        baseline = task.baseline_commit
+        if not baseline:
+            return
+        # Same git-safe, length-bounded slug as _preserve_attempt_commits so an
+        # exotic/overlong --run-id can't blow the ref-name limit and drop the ref.
+        slug = "".join(c if (c.isalnum() or c in "_-") else "-" for c in self.state.run_id)[:64]
+        ref = f"refs/attempt-preserve-dirty/{slug}-{baseline[:8]}"
+        try:
+            parked = verify.snapshot_worktree(self.workspace.root, ref)
+        except verify.GitError:
+            self.journal.append("attempt-worktree-preserve-failed", story_key=task.story_key)
+            return
+        if parked:
+            self.journal.append("attempt-worktree-preserved", story_key=task.story_key, ref=parked)
 
     def _pause_for_manual_recovery(
         self, task: StoryTask, baseline: str, *, preserve_failed: bool = False

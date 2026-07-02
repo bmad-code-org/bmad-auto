@@ -96,18 +96,20 @@ class RunHeader(Static):
             text.append(f"  epic {state.current_epic}", style="dim")
 
         counts = {Phase.DONE: 0, Phase.DEFERRED: 0, Phase.ESCALATED: 0}
-        tokens = 0
+        weight = state.cache_read_weight()
+        weighted = raw = 0
         for task in state.tasks.values():
             if task.phase in counts:
                 counts[task.phase] += 1
-            tokens += task.tokens.total
+            weighted += task.tokens.weighted_total(weight)
+            raw += task.tokens.total
         text.append("\n")
         text.append(f"tasks {len(state.tasks)}", style="dim")
         text.append(f"  done {counts[Phase.DONE]}", style="green")
         text.append(f"  deferred {counts[Phase.DEFERRED]}", style="yellow")
         style = "red" if counts[Phase.ESCALATED] else "dim"
         text.append(f"  escalated {counts[Phase.ESCALATED]}", style=style)
-        text.append(f"  {tokens:,} tokens", style="dim")
+        text.append(f"  {weighted:,} tokens ({raw:,} raw)", style="dim")
 
         if status == data.PAUSED:
             text.append("\n⏸ paused", style="bold yellow")

@@ -194,6 +194,7 @@ class DashboardScreen(Screen[None]):
         tasks.add_column("review", key="review", width=6)
         tasks.add_column("tokens", key="tokens", width=12)
         tasks.add_column("info", key="info")
+        tasks.add_column("raw", key="raw", width=13)
         self.query_one("#runheader", RunHeader).show_empty(self.project)
         self.set_interval(1.0, self._tick)
         self._tick()
@@ -541,8 +542,11 @@ class DashboardScreen(Screen[None]):
 
     def _apply_tasks(self, state: RunState) -> None:
         table = self.query_one("#tasks", DataTable)
+        weight = state.cache_read_weight()
         for key, task in state.tasks.items():
-            tokens = f"{task.tokens.total:,}" if task.tokens.total else "-"
+            weighted = task.tokens.weighted_total(weight)
+            tokens = f"{weighted:,}" if weighted else "-"
+            raw = f"{task.tokens.total:,}" if task.tokens.total else "-"
             info = task.defer_reason or (task.commit_sha or "")[:12]
             cells = {
                 "phase": str(task.phase),
@@ -550,6 +554,7 @@ class DashboardScreen(Screen[None]):
                 "review": f"×{task.review_cycle}",
                 "tokens": tokens,
                 "info": info,
+                "raw": raw,  # must be last — matches add_column order
             }
             if key in self._task_rows:
                 for column, value in cells.items():

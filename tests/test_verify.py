@@ -826,3 +826,56 @@ def test_preserve_commits_raises_on_branch_failure(project):
     git(repo, "commit", "-q", "-m", "attempt work")
     with pytest.raises(verify.GitError):
         verify.preserve_commits(repo, baseline, "bad..ref")  # ".." is an illegal git ref name
+
+
+def test_snapshot_worktree_survives_reset_and_gc(project):
+    """The parked ref keeps an attempt's *uncommitted* work — both a tracked edit
+    and a run-created untracked file — reachable through the exact destructive
+    sequence a rollback performs (reset --hard baseline, which does not delete
+    untracked files, followed by safe_rollback's untracked cleanup / a gc). This
+    is what `git stash create` alone cannot do: it never captures the untracked
+    add."""
+    repo = project.project
+    baseline = verify.rev_parse_head(repo)
+    (repo / "src.txt").write_text("tracked edit\n")  # modify a tracked file
+    (repo / "new_test.txt").write_text("untracked new file\n")  # run-created untracked
+
+    ref = verify.snapshot_worktree(repo, "refs/attempt-preserve-dirty/run-abc12345")
+    assert ref == "refs/attempt-preserve-dirty/run-abc12345"
+    # parked at a commit whose parent is HEAD (recoverable via `git diff HEAD <ref>`)
+    assert git(repo, "rev-parse", f"{ref}^").strip() == baseline
+
+    git(repo, "reset", "--hard", baseline)  # revert the tracked edit
+    (repo / "new_test.txt").unlink()  # simulate safe_rollback's untracked cleanup
+    git(repo, "gc", "--prune=now")
+
+    # both the tracked edit and the untracked add are recoverable by name
+    # (conftest `git` strips, so compare against the newline-free blob content)
+    assert git(repo, "show", f"{ref}:src.txt") == "tracked edit"
+    assert git(repo, "show", f"{ref}:new_test.txt") == "untracked new file"
+
+
+def test_snapshot_worktree_noop_clean_tree(project):
+    """A clean tree (identical to HEAD) has nothing uncommitted to park: returns
+    None and creates no ref, so a plain reset proceeds unchanged."""
+    repo = project.project
+    ref_name = "refs/attempt-preserve-dirty/run-clean"
+    assert verify.snapshot_worktree(repo, ref_name) is None
+    assert git(repo, "for-each-ref", ref_name).strip() == ""
+
+
+def test_snapshot_worktree_excludes_gitignored(project):
+    """`add -A` honours .gitignore, so ignored build output (e.g. a Unity Library/)
+    is never dragged into the recovery snapshot."""
+    repo = project.project
+    (repo / ".gitignore").write_text("ignored.txt\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "add gitignore")
+    (repo / "src.txt").write_text("tracked edit\n")  # a real change so the tree isn't clean
+    (repo / "ignored.txt").write_text("build artifact\n")  # ignored — must not be snapshotted
+
+    ref = verify.snapshot_worktree(repo, "refs/attempt-preserve-dirty/run-ignore")
+    assert ref is not None
+    tree = git(repo, "ls-tree", "-r", "--name-only", ref)
+    assert "src.txt" in tree
+    assert "ignored.txt" not in tree

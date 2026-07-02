@@ -784,6 +784,42 @@ def test_resume_kills_stale_session_before_running(project, monkeypatch):
     assert killed == ["20990101-000000-beef"]
 
 
+def test_resume_restores_persisted_run_scope(project, monkeypatch):
+    """Regression: resume must rebuild the Engine with the run's persisted
+    `--epic`/`--story`/`--max-stories`, else a scoped run silently widens and
+    can jump out of its epic (the Epic-9 boundary bug)."""
+    from conftest import install_base_skills
+
+    from automator import runs
+
+    install_bmad_config(project)
+    install_base_skills(project)
+    write_sprint(project, {"1-1-a": "ready-for-dev"})
+    run_dir = _make_run_with_state(
+        project.project,
+        "20990101-000000-beef",
+        paused_reason="escalation",
+        paused_stage="escalation",
+        epic_filter=9,
+        story_filter="9-0",
+        max_stories=4,
+    )
+    captured: dict = {}
+
+    class _CapturingEngine(_StubEngine):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(runs, "kill_session", lambda rid: None)
+    monkeypatch.setattr(cli, "Engine", _CapturingEngine)
+    monkeypatch.setattr(cli, "_make_adapters", lambda *a, **k: {r: None for r in cli.ROLES})
+
+    assert cli._resume_paused_run(project.project, run_dir) == 0
+    assert captured["epic_filter"] == 9
+    assert captured["story_filter"] == "9-0"
+    assert captured["max_stories"] == 4
+
+
 def test_diagnose_default_latest_and_out(project, tmp_path, capsys):
     """diagnose resolves the latest run, writes a clean dump, exits 0."""
     from test_diagnostics import CANARIES, _seed_run

@@ -66,17 +66,20 @@ def decide_dev(
         return Decision(Action.PAUSE, f"CRITICAL escalation from dev session: {details}")
 
     budget_left = task.attempt < policy.limits.max_dev_attempts
+    exhausted = _exhausted_action(task)
 
     if result.status != "completed":
         reason = f"dev session {result.status}"
-        return Decision(Action.RETRY if budget_left else Action.DEFER, reason)
+        return Decision(Action.RETRY if budget_left else exhausted, _exhaust_reason(task, reason))
 
     assert outcome is not None
     if outcome.ok:
         return Decision(Action.PROCEED)
     if outcome.severity == SEVERITY_CRITICAL:
         return Decision(Action.PAUSE, outcome.reason)
-    return Decision(Action.RETRY if budget_left else Action.DEFER, outcome.reason)
+    return Decision(
+        Action.RETRY if budget_left else exhausted, _exhaust_reason(task, outcome.reason)
+    )
 
 
 def decide_review_session(task: StoryTask, result: SessionResult, policy: Policy) -> Decision:
@@ -89,5 +92,27 @@ def decide_review_session(task: StoryTask, result: SessionResult, policy: Policy
     budget_left = task.review_cycle < policy.limits.max_review_cycles
     if result.status != "completed":
         reason = f"review session {result.status}"
-        return Decision(Action.RETRY if budget_left else Action.DEFER, reason)
+        return Decision(
+            Action.RETRY if budget_left else _exhausted_action(task),
+            _exhaust_reason(task, reason),
+        )
     return Decision(Action.PROCEED)
+
+
+def _exhausted_action(task: StoryTask) -> Action:
+    """What a budget-exhausted, non-CRITICAL failure resolves to. Normally a
+    plateau-defer (skip the story, keep the run alive). But a story mid re-drive
+    of a human-resolved CRITICAL escalation (``resolved_redrive`` latched, not
+    yet re-committed) must NOT silently downgrade to a defer — that would file an
+    unresolved escalation as deferred work and roll back the human's correction.
+    Re-escalate so the human sees it again; ``_escalate`` preserves the tree."""
+    return Action.PAUSE if task.resolved_redrive else Action.DEFER
+
+
+def _exhaust_reason(task: StoryTask, reason: str) -> str:
+    if task.resolved_redrive:
+        return (
+            "resolved-escalation re-drive did not converge — re-escalating "
+            f"instead of deferring: {reason}"
+        )
+    return reason
