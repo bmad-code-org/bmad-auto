@@ -561,6 +561,7 @@ async def test_deferred_pane_lists_and_opens_modal(project):
         deferred.highlighted = 0
         await pilot.press("enter")
         await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        await ready(pilot, "Static")  # body mounts a tick after the screen swaps
         statics = app.screen.query("Static")
         assert any("location: a.py:1" in str(s.content) for s in statics)
         await pilot.press("escape")
@@ -610,6 +611,7 @@ async def test_deferred_pane_shows_legacy_items(project):
         deferred.highlighted = 1
         await pilot.press("enter")
         await until(pilot, lambda: isinstance(app.screen, DeferredEntryModal))
+        await ready(pilot, "Static")  # body mounts a tick after the screen swaps
         statics = app.screen.query("Static")
         assert any("legacy — converted to DW format" in str(s.content) for s in statics)
         await pilot.press("escape")
@@ -877,6 +879,7 @@ async def test_validate_shows_output_modal(project, monkeypatch):
         await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
         await pilot.press("v")
         await until(pilot, lambda: isinstance(app.screen, TextOutputModal))
+        await ready(pilot, "Label")  # body mounts a tick after the screen swaps
         labels = app.screen.query("Label")
         assert any("exit 1" in str(label.content) for label in labels)
 

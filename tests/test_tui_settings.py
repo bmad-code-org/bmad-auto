@@ -173,6 +173,10 @@ async def open_settings(app, pilot) -> SettingsScreen:
     await until(pilot, lambda: isinstance(app.screen, DashboardScreen))
     await pilot.press("g")
     await until(pilot, lambda: isinstance(app.screen, SettingsScreen))
+    # push_screen swaps app.screen before the form's fields mount; a bare screen-type
+    # wait lets the first query_one NoMatches on a slow CI runner. The fields mount as
+    # one batch, so waiting for any Input gates every later query_one in the callers.
+    await until(pilot, lambda: bool(app.screen.query(Input)))
     return app.screen
 
 
